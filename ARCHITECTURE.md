@@ -360,6 +360,8 @@ cli.reindex
 - [ ] fields.db 的 SQL schema：结构化字段能否用 JSON column + 表达式索引
       解决，不需要正则化成多表
 - [ ] `read` 流程新增跨论文步骤后，端到端延迟能否控制在 90s 内
+- [ ] `Method.name` 跨论文对齐：是否需要 canonicalization 层（同义词合并、
+      小写归一），还是靠 embedding 相似度在查询时处理？
 
 ## 不会做的事（再次强调）
 
