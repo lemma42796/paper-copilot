@@ -162,8 +162,8 @@ M5 之前这个模块只有空目录 + README。
                 ▼
               shared
 
-eval ──► session, schemas, knowledge, shared
-         (不依赖 agents, retrieval, cli)
+eval ──► agents (仅公开 run 入口), session, schemas, knowledge, shared
+         (不碰 agents 内部；不依赖 retrieval, cli)
 ```
 
 **硬性规则**：
@@ -173,10 +173,31 @@ eval ──► session, schemas, knowledge, shared
 - `schemas/` **不能** import 任何其他模块（它只定义数据结构）
 - `retrieval/` 和 `knowledge/` 之间**不能**互相 import——它们是兄弟模块，
   共享的只有 `shared/` 里的 embedding util
-- `eval/` 只消费 `session/`、`schemas/`、`knowledge/` 的公开接口，不碰
-  `agents/` 内部——这样主功能和 eval 可以独立演进
+- `eval/` 可以调用 `agents/` 的**公开 run 入口**（这样 eval 强制 dogfood
+  主功能，见用例 4），但不能 import `agents/` 的内部模块；此外只消费
+  `session/`、`schemas/`、`knowledge/`、`shared/` 的公开接口，不依赖
+  `retrieval/` 和 `cli/`——这样 extractor 内部重构时 eval 不被拖累
 
 违反以上任何一条都是代码 review 的 blocker。
+
+## 模型分配
+
+所有 agent——MainAgent / SkimAgent / DeepAgent / RelatedAgent，以及
+query rewrite / chunk rerank 等子任务——统一使用 **qwen3.6-flash**，
+**不做模型分层**。具体 model id 在 `agents/llm_client.py` 里一处收敛。
+
+- **端点**：`https://dashscope.aliyuncs.com/apps/anthropic`
+  （阿里云百炼提供的 Anthropic API 兼容网关）
+- **SDK**：继续用 `anthropic` Python SDK，只替换 `base_url` 和 API key，
+  请求/响应格式、tool use、`cache_control` 语义复用原生 Anthropic 的约定
+- **cost 参考**：单篇一次 `read` 端到端约 **¥0.2**，数字会在 M7 跑真数据
+  后校准
+- **为什么不做分层**：Sonnet / Haiku 分层的意义在 Anthropic 原生生态
+  （价格差 ~5×）才成立；qwen3.6-flash 在 flash 档位价格已经足够便宜，
+  分层带来的实现复杂度不值
+
+`CLAUDE.md` 的 "Cost discipline" 只保留操作规则（所有 LLM 调用必须走
+`agents/llm_client.py` 等），不再重复默认——此节为单一真源。
 
 ## 关键数据流
 
