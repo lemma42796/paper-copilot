@@ -1,19 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "paper-copilot"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.0.0"
+description = "Personal paper reading copilot (local-first)."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
-    "anthropic>=0.96.0",
-    "pydantic>=2.13.2",
-    "rich>=15.0.0",
-]
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/paper_copilot"]
 
 [dependency-groups]
 dev = [
+    "ruff>=0.15.11",
     "mypy>=1.20.1",
     "pytest>=9.0.3",
-    "pytest-asyncio>=1.3.0",
-    "ruff>=0.15.11",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
