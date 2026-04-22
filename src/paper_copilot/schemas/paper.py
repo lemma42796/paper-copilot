@@ -42,8 +42,12 @@ class PaperMeta(BaseModel):
     arxiv_id: str | None = Field(
         default=None,
         description=(
-            "ArXiv identifier if present (e.g. '2307.09288'; no 'arXiv:' prefix, "
-            "no version suffix). Null for papers without an arXiv mirror."
+            "ArXiv identifier as printed on the first page. Copy the string EXACTLY "
+            "as it appears, including any 'arXiv:' prefix and any version suffix like "
+            "'v7'. Examples of acceptable values: 'arXiv:1706.03762v7', "
+            "'arXiv:2307.09288', '2307.09288', 'astro-ph/0601001'. Do not strip the "
+            "prefix, do not drop the version, do not canonicalize. Null only if no "
+            "arXiv identifier is printed anywhere on the front matter."
         ),
     )
     year: int = Field(
@@ -234,6 +238,59 @@ class CrossPaperLink(BaseModel):
         description=(
             "1-2 sentences describing how the two papers relate. "
             "Schema finalized in M12 — keep this free-text for now."
+        )
+    )
+
+
+class SectionMarker(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(
+        description=(
+            "Exact section title as printed in the paper body or its PDF outline, "
+            "including the paper's own numbering if present (e.g. '3.2 Attention', "
+            "'Abstract'). Preserve capitalization and wording. Do not add a number "
+            "to an unnumbered section (e.g. 'Why Self-Attention' stays as-is), do "
+            "not rewrite for brevity, do not normalize."
+        )
+    )
+    page_start: int = Field(
+        ge=1,
+        description=(
+            "1-based page number where the section begins, matching the page "
+            "numbering a human reader of the PDF sees (not a 0-based index)."
+        ),
+    )
+    page_end: int | None = Field(
+        default=None,
+        description=(
+            "1-based page number where the section ends, inclusive. "
+            "Null if the section continues beyond the pages you were given or the "
+            "end is genuinely uncertain. Do not guess — null is correct when "
+            "unknown."
+        ),
+    )
+    depth: int = Field(
+        ge=1,
+        description=(
+            "Nesting depth, starting at 1 for top-level sections. A '3. Methodology' "
+            "heading is depth 1; its '3.1' subsection is depth 2; a '3.1.1' leaf is "
+            "depth 3. Use the paper's own numbering as the authoritative signal when "
+            "available; for unnumbered sections, infer from visual hierarchy."
+        ),
+    )
+
+
+class PaperSkeleton(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sections: list[SectionMarker] = Field(
+        description=(
+            "Every named section of the paper, in reading order, including "
+            "sub-sections. Include 'Abstract' only if the paper renders it as a "
+            "titled section. Exclude figure and table captions, footnotes, "
+            "acknowledgements that are not titled sections, and the references "
+            "list — those are not sections."
         )
     )
 

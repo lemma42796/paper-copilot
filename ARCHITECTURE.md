@@ -47,7 +47,9 @@ src/paper_copilot/
   `end_turn` / `max_turns` / `max_budget_usd`。负责派发 subagent、
   聚合结果、生成最终结构化报告。
 - **SkimAgent**：快速扫读整篇论文，产出"结构路标"（章节、图表位置、
-  核心术语）。上下文小。
+  核心术语）。上下文小。SkimAgent 是叶子 agent，直接调 llm_client.generate，
+  不走 run_agent_loop——tool_use 仅作结构化输出通道，无真实 tool execution
+  需要循环。DeepAgent 才是 loop 的首个真实消费者。
 - **DeepAgent**：针对 MainAgent 指定的页/章节做深读，产出具体的
   Contribution / Method / Experiment / Limitation 字段。可并发多实例。
 - **RelatedAgent**（M11 引入）：在 `read` 流程中被 MainAgent 派发，
@@ -145,6 +147,11 @@ M5 之前这个模块只有空目录 + README。
 - `cost.py`：Cost tracker，按 session 累计 input/output/cached token
 - `cache.py`：Prompt cache 辅助（layer 打标、边界插入）
 - `errors.py`：统一异常基类
+- `jsonschema.py`：JSON Schema 工具。当前提供 `inline_refs`，把 Pydantic
+  生成的 `$defs` + `$ref` schema 展开成扁平形态后作为 LLM tool input_schema。
+  存在理由：qwen3.6-flash 在 Anthropic 兼容端点下对 `$ref` 处理不可靠（会
+  返回字符串化的嵌套对象而不是真 dict），见 M5 待验证假设。未来换 provider
+  或模型升级后重新评估是否可移除。
 
 ## 模块依赖方向
 
@@ -201,7 +208,7 @@ query rewrite / chunk rerank 等子任务——统一使用 **qwen3.6-flash**，
 
 ## 关键数据流
 
-### 用例 1：`paper-copilot read <arxiv_url>`
+### 用例 1：`paper-copilot read <pdf_path>`
 
 ```
 cli.read
@@ -345,13 +352,52 @@ cli.reindex
 
 ## 待验证的假设（M5 / M11 后重新审视）
 
-**M5 之后审视（单篇流程相关）**：
-- [ ] sqlite-vec 够用，不需要独立向量库
-- [ ] 单篇论文 chunk 50-200 个，top-k=5 够用
-- [ ] Claude Haiku 做 query rewriting 足够，不用 Opus
-- [ ] Prompt cache 命中率能到 60%+（否则分层策略要重调）
-- [ ] SkimAgent 不需要 retrieval，只靠 PDF 前几页 + 目录就够
-- [ ] DeepAgent 每个字段一个独立实例 vs 一个实例输出多字段——哪种准确率更高
+**M5 已验证**：
+- [x] SkimAgent 不需要 retrieval，只靠 PDF 前几页 + 目录就够
+      — 三篇 reality check（transformer / vit / vilbert）用 3 页 front-matter
+      + pymupdf 内嵌 outline 抽 PaperMeta + PaperSkeleton 全部通过，单篇
+      成本 ¥0.01–0.015。
+- [x] Pydantic Field description 作为 prompt 片段的有效性
+      — M4 的设计赌注"description 写得好模型就懂"，M5 三篇全程未使用任何
+      few-shot example，仅靠 description 措辞（尤其 arxiv_id 的
+      "Copy EXACTLY"、SectionMarker.title 的 "no normalization"、
+      page_end 的 "Do not guess"）就让模型行为稳定到 3/3 reality check
+      通过。未来 prompt iteration 的第一优先级是改 description，不是
+      加 system prompt 或 few-shot。
+
+**M5 推迟到后续 milestone 再验**（原 M5 那组里不属于 SkimAgent 单点能验的）：
+- [ ] sqlite-vec 够用，不需要独立向量库 — M7 单篇 retrieval 时验
+- [ ] 单篇论文 chunk 50-200 个，top-k=5 够用 — M7
+- [ ] Claude Haiku 做 query rewriting 足够，不用 Opus — M7/M8
+- [ ] Prompt cache 命中率能到 60%+（否则分层策略要重调） — M9
+- [ ] DeepAgent 每字段一个独立实例 vs 一个实例输出多字段——哪种准确率更高 — M7
+
+**M5 过程中新暴露的假设**（原列表没有，由 reality check 产出）：
+- [x] qwen3.6-flash 对 Pydantic 嵌套 schema 的 `$defs` + `$ref` 处理不可靠：
+      schema 会被 HTTP 层接受，但返回的 `tool_use.input` 中被 `$ref` 引用
+      的嵌套 object 字段会被字符串化成 JSON 字符串而不是真 dict。落地
+      `shared/jsonschema.inline_refs` 作为 workaround，SkimAgent 三篇嵌套
+      字段全部为真 dict。未来触发重新评估的条件:
+      (a) qwen 模型版本升级（qwen3.7 / qwen4）
+      (b) 切换到 Anthropic 原生或其他兼容层
+      (c) M7 DeepAgent 的嵌套 schema 更深（>2 层）时，先不假设 inline_refs
+          继续有效，用 scratch 重跑 Step 3 里那种 toy 验证
+      触发时重跑 `/tmp/step3_scratch.py` 的 Call 2 模式。
+- [x] qwen3.6-flash 对 `arxiv_id` 字段有"自动清洗"倾向（输入
+      `arXiv:1706.03762v7` 会自作主张返回 `1706.03762`）：通过 Field
+      description 中 "Copy the string EXACTLY" 措辞 + Python 侧
+      `_normalize_arxiv_id` regex 归一化压制，三篇 3/3 原样输出,归一化
+      在 Python 侧集中完成。
+- [ ] arxiv API metadata 能否可靠补齐 PaperMeta 的 canonical 字段
+      （title canonical capitalization、venue） — M8 验。
+      M5 暴露两处 PDF 纸面无法覆盖的场景:vit 封面印刷全大写
+      （"AN IMAGE IS WORTH..." vs canonical mixed-case），vilbert 作为
+      2019 年 arxiv 首版不印 venue（`venue=null` 而非 "NeurIPS 2019"）。
+      两处均**非 SkimAgent 抽取错误**——模型忠实于 PDF 原样 + 按 schema
+      description 对 preprint 填 null——而是 PDF-only 信息源的固有缺口，
+      需外部 enrichment。（与 M11 组 "Method.name 跨论文对齐" 是同类问题：
+      都是"PDF 原样 vs canonical 形态"的落差，解法可能共享一个
+      canonicalization 层。）
 
 **M11 之后审视（跨论文相关）**：
 - [ ] bge-m3 在论文语料上的召回率够用（否则考虑换 voyage-3-large 等 API）
