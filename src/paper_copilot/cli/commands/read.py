@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal, cast
 
 import typer
 from rich.console import Console
@@ -23,12 +23,18 @@ def read(
         bool,
         typer.Option("--force", help="Overwrite existing session for this paper"),
     ] = False,
+    lang: Annotated[
+        str,
+        typer.Option("--lang", "-l", help="Output language: en or zh"),
+    ] = "en",
 ) -> None:
     """Deep-read a paper and write a structured Markdown report."""
-    asyncio.run(_read_async(pdf_path, force))
+    if lang not in ("en", "zh"):
+        raise typer.BadParameter(f"unsupported language: {lang!r}; use 'en' or 'zh'")
+    asyncio.run(_read_async(pdf_path, force, cast("Literal['en', 'zh']", lang)))
 
 
-async def _read_async(pdf_path: Path, force: bool) -> None:
+async def _read_async(pdf_path: Path, force: bool, language: Literal["en", "zh"]) -> None:
     if not pdf_path.exists():
         raise typer.BadParameter(f"PDF not found: {pdf_path}")
 
@@ -43,9 +49,9 @@ async def _read_async(pdf_path: Path, force: bool) -> None:
         shutil.rmtree(pdir)
 
     agent = MainAgent(LLMClient())
-    run = await agent.run(pdf_path)
+    run = await agent.run(pdf_path, language=language)
 
-    md = to_markdown(run.paper)
+    md = to_markdown(run.paper, language=language)
     report_path = pdir / "report.md"
     report_path.write_text(md, encoding="utf-8")
 

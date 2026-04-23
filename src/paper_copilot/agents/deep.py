@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -38,6 +38,18 @@ __all__ = ["DeepAgent", "DeepResult", "DeepRun"]
 
 _TOOL_NAME = "emit_deep"
 _MAX_TOKENS = 3000
+
+_LANGUAGE_INSTRUCTION: dict[str, str] = {
+    "en": "",
+    "zh": (
+        "\n\nOutput language: write Contribution.claim, Method.description, "
+        "Method.novelty_vs_prior, and Limitation.description in Simplified "
+        "Chinese (简体中文). All other fields stay in English verbatim as "
+        "printed in the paper (Method.name, dataset, metric, raw, numeric "
+        "values, authors, enum values). Emit only fields the tool schema "
+        "defines."
+    ),
+}
 
 _SYSTEM_PROMPT = (
     "You are a research assistant performing a deep read of an academic paper.\n\n"
@@ -105,18 +117,25 @@ class DeepAgent:
         self._client = client
         self._store = store
 
-    async def run(self, pdf_path: Path, skeleton: PaperSkeleton) -> DeepRun:
+    async def run(
+        self,
+        pdf_path: Path,
+        skeleton: PaperSkeleton,
+        *,
+        language: Literal["en", "zh"] = "en",
+    ) -> DeepRun:
         sections = await asyncio.to_thread(split_by_sections, pdf_path, skeleton)
         messages = _build_messages(sections)
         tools = [_build_tool()]
+        system = _SYSTEM_PROMPT + _LANGUAGE_INSTRUCTION[language]
         if self._store is not None:
-            self._store.append_system_message(_SYSTEM_PROMPT)
+            self._store.append_system_message(system)
             self._store.append_message(role="user", text=messages[0]["content"])
         response = await self._client.generate(
             messages=messages,
             tools=tools,
             tool_choice={"type": "tool", "name": _TOOL_NAME},
-            system=_SYSTEM_PROMPT,
+            system=system,
             max_tokens=_MAX_TOKENS,
         )
 

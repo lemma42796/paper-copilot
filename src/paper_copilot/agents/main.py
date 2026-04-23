@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from paper_copilot.agents.deep import DeepAgent, DeepResult, DeepRun
 from paper_copilot.agents.llm_client import DEFAULT_MODEL, LLMClient
@@ -43,7 +44,12 @@ class MainAgent:
         self._client = client
         self._root = root
 
-    async def run(self, pdf_path: Path) -> MainRun:
+    async def run(
+        self,
+        pdf_path: Path,
+        *,
+        language: Literal["en", "zh"] = "en",
+    ) -> MainRun:
         paper_id = compute_paper_id(pdf_path)
         store = SessionStore.create(
             paper_id,
@@ -56,7 +62,7 @@ class MainAgent:
         skim_run = await skim.run(pdf_path)
 
         deep = DeepAgent(self._client, store)
-        deep_run = await deep.run(pdf_path, skim_run.result.skeleton)
+        deep_run = await deep.run(pdf_path, skim_run.result.skeleton, language=language)
 
         paper = _assemble_paper(skim_run.result.meta, deep_run.result)
         store.append_final_output(payload=paper.model_dump(mode="json"))

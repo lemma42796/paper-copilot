@@ -78,3 +78,19 @@ def test_to_markdown_elides_optional_fields() -> None:
     assert "arXiv" not in md
     assert "$$" not in md
     assert "(p." not in md
+
+
+def test_to_markdown_zh_headers() -> None:
+    md = to_markdown(_make_paper(pages=[7, 8]), language="zh")
+    assert "## 贡献" in md
+    assert "## 方法" in md
+    assert "## 实验" in md
+    assert "## 局限" in md
+    assert "**作者:**" in md
+    assert "**年份:**" in md
+    assert "**会议:**" in md
+    assert "*新意:*" in md
+    assert "置信度" in md
+    # English section titles should NOT appear
+    assert "## Contributions" not in md
+    assert "## Methods" not in md
