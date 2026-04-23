@@ -186,10 +186,13 @@ PDF 解析丢信息（shared/pdf.py 要改）。
 **依赖**：M5
 
 **DoD**：
-- [ ] 跑一篇论文后，`cat session.jsonl | head -5` 人类可读
-- [ ] 模拟崩溃测试：写了 50 条 entry 后进程被 kill，重启后能读到 50 条
+- [x] 跑一篇论文后，`cat session.jsonl | head -5` 人类可读
+- [x] 模拟崩溃测试：写了 50 条 entry 后进程被 kill，重启后能读到 50 条
       （不是 49，不是 51）
-- [ ] `paper_id` 格式定了（建议：arxiv id，否则 SHA1(title+year)[:12]）
+- [x] `paper_id` 格式定了（建议：arxiv id，否则 SHA1(title+year)[:12]）
+
+**实际遇到的问题**：qwen3.6-flash forced tool_choice 不产生 TextBlock，
+assistant message entry 常态缺位。
 
 **预估**：2 sessions。
 

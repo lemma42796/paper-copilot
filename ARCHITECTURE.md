@@ -399,6 +399,12 @@ cli.reindex
       都是"PDF 原样 vs canonical 形态"的落差，解法可能共享一个
       canonicalization 层。）
 
+**M6 过程中新暴露的假设**：
+- [x] qwen3.6-flash 在 forced `tool_choice={"type":"tool",...}` 下不返回
+      TextBlock，只返回 tool_use 块。影响：session.jsonl 的 message(assistant)
+      entry 在 SkimAgent 场景下常态缺位；M7 DeepAgent 若同样用 forced tool，
+      M9 prompt cache 分层需以 tool_use 为边界而非 assistant turn 边界。
+
 **M11 之后审视（跨论文相关）**：
 - [ ] bge-m3 在论文语料上的召回率够用（否则考虑换 voyage-3-large 等 API）
 - [ ] 50-100 篇规模下，sqlite-vec 的跨库检索 < 500ms
