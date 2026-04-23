@@ -6,6 +6,30 @@
 > 每个 milestone 包含：目标 / 产出 / 依赖 / DoD（Definition of Done）/
 > 预估 session 数。
 
+## Current Status
+
+> 更新于 2026-04-23。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
+> 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
+
+- **已完成**：M1–M7。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
+  `--lang en|zh`。三篇 reality check(transformer / vit / vilbert)产物
+  在 `~/.paper-copilot/papers/`。
+- **当前阶段**：Phase 2(真实使用 2 周,**非编码 milestone**)。用户用
+  `paper-copilot` 读 1-2 篇/天,积累 `issues.md`。Claude 在此阶段不主动
+  动代码,除非用户明确要求。
+- **下一个编码 milestone**：M8(prompt/schema 迭代)或 M9(cache 分层),
+  前置条件 = `issues.md` 攒到 5+ 条实际痛点。
+- **M7 已知偏离 ARCHITECTURE**：`retrieval/chunker.py` + `retrieval/search.py`
+  推迟,详见本文档 M7 节的"实际遇到的问题"和 ARCHITECTURE.md 的 `retrieval/`。
+- **M7 可观察质量问题(M8 候选输入)**：
+  - `Contribution.confidence` 几乎全是 1.0 / 0.9,刻度未被使用
+  - `output_tokens` 贴 3000 天花板的 76–80%;大论文或 result-heavy 论文
+    可能撞顶(已提到两次 `--lang zh` 开发中的 stringification 事故)
+  - qwen3.6-flash 对长 system prompt 敏感,堆砌 emphasis 会破坏嵌套 schema
+    的 structured-output 稳定性 → prompt 迭代时保持短而聚焦
+
+---
+
 ---
 
 ## Phase 0: 地基（M1-M3）
