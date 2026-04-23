@@ -109,6 +109,12 @@ DeepAgent 通过 query 拿到 top-k chunk + 页码。
 （"methodology section 的数学定义"），跨论文检索的 query 来自用户或
 结构化字段匹配，两者生命周期、更新频率、查询 pattern 都不同。
 
+**M7 实际状态**：仅实现了 `split_by_sections`（按 Skeleton 章节切出
+全文文本）。`chunker.py`（embedding 分块）和 `search.py`（sqlite-vec +
+bge-m3 检索）推迟到 Phase 2 信号驱动再加——M7 三篇 reality check 下
+DeepAgent 全文投喂成本 ¥0.05-0.11/篇，未触及 ¥0.30 预算，retrieval
+未证明必要。
+
 ### `knowledge/`
 跨论文索引与检索。三个职责：
 
@@ -366,11 +372,18 @@ cli.reindex
       加 system prompt 或 few-shot。
 
 **M5 推迟到后续 milestone 再验**（原 M5 那组里不属于 SkimAgent 单点能验的）：
-- [ ] sqlite-vec 够用，不需要独立向量库 — M7 单篇 retrieval 时验
-- [ ] 单篇论文 chunk 50-200 个，top-k=5 够用 — M7
+- [ ] sqlite-vec 够用，不需要独立向量库 — M7 推迟：retrieval chunker/search
+      实际推迟到 Phase 2 信号驱动再加，详见 `retrieval/` 节
+- [ ] 单篇论文 chunk 50-200 个，top-k=5 够用 — 同上，推迟
 - [ ] Claude Haiku 做 query rewriting 足够，不用 Opus — M7/M8
 - [ ] Prompt cache 命中率能到 60%+（否则分层策略要重调） — M9
-- [ ] DeepAgent 每字段一个独立实例 vs 一个实例输出多字段——哪种准确率更高 — M7
+      — ST1.5 spike 已确认 Dashscope 支持 `cache_control` ephemeral 5m/1h TTL，
+      M7 DeepAgent 单调用未启用；M9 层叠或 per-field fan-out 时可用
+- [x] DeepAgent 每字段一个独立实例 vs 一个实例输出多字段——哪种准确率更高 — M7
+      — 选了"一个实例输出四个 list"的聚合方案（D2 决策）。Transformer/ViT/
+      ViLBERT 三篇 reality check 下 schema validation 全通过，字段数量
+      合理（5-6/3-5/4-12/3-4），cost 线性、稳定。per-field fan-out 留
+      作 Phase 2 若质量下降的 fallback
 
 **M5 过程中新暴露的假设**（原列表没有，由 reality check 产出）：
 - [x] qwen3.6-flash 对 Pydantic 嵌套 schema 的 `$defs` + `$ref` 处理不可靠：

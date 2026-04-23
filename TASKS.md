@@ -217,11 +217,35 @@ assistant message entry 常态缺位。
 **依赖**：M6
 
 **DoD**：
-- [ ] 跑一篇 15-30 页的论文端到端不超过 2 分钟
-- [ ] 输出的 Paper 有至少 3 个 Contribution、2 个 Method、2 个 Experiment、
-      1 个 Limitation（不是硬性，但明显偏少说明 prompt/schema 有问题）
-- [ ] 整个流程的 cost < ¥0.30（qwen3.6-flash，数字在首次真跑后校准）
-- [ ] session.jsonl 可以完整 replay 出最终输出
+- [x] 跑一篇 15-30 页的论文端到端不超过 2 分钟
+      — ViT (22 页) ~40s, ViLBERT (11 页) ~15s via CLI。
+- [x] 输出的 Paper 有至少 3 个 Contribution、2 个 Method、2 个 Experiment、
+      1 个 Limitation
+      — Transformer 5/4/4/3, ViT 5/3/6/3, ViLBERT 4/5/12/4。
+- [x] 整个流程的 cost < ¥0.30（qwen3.6-flash，数字在首次真跑后校准）
+      — ViLBERT ¥0.058, ViT ¥0.106, Transformer ¥0.05。预算远未触及。
+- [x] session.jsonl 可以完整 replay 出最终输出
+      — D4 决策下：SkimAgent/DeepAgent 只写 tool_use + schema_validation trace，
+      MainAgent 写唯一一条 final_output 含完整 Paper。
+
+**实际遇到的问题 / 偏离 ARCHITECTURE**：
+
+- **retrieval/chunker.py + retrieval/search.py 推迟**（偏离 ARCHITECTURE M7 产出
+  清单）：ST1.5 spike 验证全文投喂（25-75k tok）在 qwen 窗口内、cost 可控，
+  retrieval 属 D1 决策下的"先不加"。真实需求由 Phase 2 使用数据驱动。
+- **DeepAgent 走聚合方案而非 per-field fan-out**（D2 决策）：一次 forced
+  tool_choice 调用吐 C/M/E/L 四个 list。三篇 reality check 下 schema
+  validation 全通过，成本线性、稳定。
+- **output_tokens 紧贴 3000 ceiling**（ViT 2398, ViLBERT 2279, Transformer
+  1498）：更大/更 result-heavy 论文可能 truncate。未 truncate 之前不调整。
+- **confidence 字段几乎全 1.0 / 0.9，LLM 不使用刻度**：M8 prompt tuning
+  的优先级。
+- **arxiv_id 在 PDF 首页不印时 LLM 正确返回 null**（ViT, ViLBERT 均无印刷的
+  arxiv id）：不是抽取 bug，是 PDF-only 信息源的固有缺口，需外部 enrichment。
+- **Dashscope 支持 `cache_control` ephemeral 5m TTL**（ST1.5 spike 验证）：
+  当前 DeepAgent 单调用未启用；M9 或 per-field fan-out 时可用。
+- **SessionStore 重跑语义**：paper 目录已存在时 raise，CLI 用 `--force`
+  覆盖。暴露给用户显式,不静默吞数据。
 
 **预估**：3-5 sessions。
 

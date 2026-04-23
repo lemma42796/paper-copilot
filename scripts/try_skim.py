@@ -59,9 +59,7 @@ def _render(console: Console, result: SkimResult, cost: CostTracker) -> None:
     for section in result.skeleton.sections:
         indent = "  " * (section.depth - 1)
         end = section.page_end if section.page_end is not None else "?"
-        tree.add(
-            f"{indent}[d={section.depth}] p{section.page_start}-{end} | {section.title}"
-        )
+        tree.add(f"{indent}[d={section.depth}] p{section.page_start}-{end} | {section.title}")
     console.print(tree)
 
     snap = cost.snapshot()

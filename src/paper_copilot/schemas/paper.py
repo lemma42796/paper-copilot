@@ -163,8 +163,7 @@ class Experiment(BaseModel):
     )
     metric: str = Field(
         description=(
-            "Metric reported (e.g. 'top-1 accuracy', 'BLEU', 'perplexity', "
-            "'wall-clock speedup')."
+            "Metric reported (e.g. 'top-1 accuracy', 'BLEU', 'perplexity', 'wall-clock speedup')."
         )
     )
     value: float | None = Field(
@@ -200,6 +199,16 @@ class Experiment(BaseModel):
             "Use 'none' if the paper reports no direct comparison."
         )
     )
+    pages: list[int] = Field(
+        default_factory=list,
+        description=(
+            "1-based page number(s) where this result is reported in the "
+            "paper. Use the page of the table or paragraph that states the "
+            "result. A list because a result may span pages (e.g. a table "
+            "header on page 5 with continuation on page 6). Empty list if "
+            "the result cannot be localized to specific pages."
+        ),
+    )
 
 
 class Limitation(BaseModel):
@@ -231,9 +240,7 @@ class CrossPaperLink(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    related_paper_id: str = Field(
-        description="paper_id of the related paper in the local library."
-    )
+    related_paper_id: str = Field(description="paper_id of the related paper in the local library.")
     explanation: str = Field(
         description=(
             "1-2 sentences describing how the two papers relate. "
@@ -315,8 +322,7 @@ class Paper(BaseModel):
     )
     experiments: list[Experiment] = Field(
         description=(
-            "All headline experimental results. One Experiment per (dataset, metric) "
-            "pair."
+            "All headline experimental results. One Experiment per (dataset, metric) pair."
         )
     )
     limitations: list[Limitation] = Field(

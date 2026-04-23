@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from paper_copilot.schemas import (
     Contribution,
+    Experiment,
     Paper,
     PaperMeta,
 )
@@ -75,10 +76,7 @@ def test_extra_field_rejected() -> None:
     with pytest.raises(ValidationError) as exc:
         Contribution.model_validate(bad)
     errors = exc.value.errors()
-    assert any(
-        e["type"] == "extra_forbidden" and e["loc"] == ("confidence_score",)
-        for e in errors
-    )
+    assert any(e["type"] == "extra_forbidden" and e["loc"] == ("confidence_score",) for e in errors)
 
 
 def test_missing_required_field_rejected() -> None:
@@ -105,10 +103,7 @@ def test_nested_validation_loc_points_to_index() -> None:
     with pytest.raises(ValidationError) as exc:
         Paper.model_validate(data)
     errors = exc.value.errors()
-    assert any(
-        e["loc"] == ("contributions", 1, "type") and e["type"] == "missing"
-        for e in errors
-    )
+    assert any(e["loc"] == ("contributions", 1, "type") and e["type"] == "missing" for e in errors)
 
 
 def test_empty_contributions_allowed() -> None:
@@ -120,13 +115,9 @@ def test_empty_contributions_allowed() -> None:
 
 def test_confidence_out_of_range_rejected() -> None:
     with pytest.raises(ValidationError):
-        Contribution.model_validate(
-            {"claim": "x", "type": "novel_method", "confidence": 1.5}
-        )
+        Contribution.model_validate({"claim": "x", "type": "novel_method", "confidence": 1.5})
     with pytest.raises(ValidationError):
-        Contribution.model_validate(
-            {"claim": "x", "type": "novel_method", "confidence": -0.1}
-        )
+        Contribution.model_validate({"claim": "x", "type": "novel_method", "confidence": -0.1})
 
 
 def test_year_out_of_range_rejected() -> None:
@@ -135,3 +126,33 @@ def test_year_out_of_range_rejected() -> None:
         PaperMeta.model_validate(dict(base) | {"year": 20230})
     with pytest.raises(ValidationError):
         PaperMeta.model_validate(dict(base) | {"year": 1800})
+
+
+def _valid_experiment_dict() -> dict[str, Any]:
+    return {
+        "dataset": "ImageNet-1k",
+        "metric": "top-1 accuracy",
+        "value": 83.4,
+        "unit": "%",
+        "raw": "83.4% top-1 on ImageNet-1k validation split",
+        "comparison_baseline": "ResNet-152",
+    }
+
+
+def test_experiment_default_pages_empty() -> None:
+    exp = Experiment.model_validate(_valid_experiment_dict())
+    assert exp.pages == []
+
+
+def test_experiment_pages_accepts_list() -> None:
+    data = _valid_experiment_dict() | {"pages": [3, 4]}
+    exp = Experiment.model_validate(data)
+    assert exp.pages == [3, 4]
+
+
+def test_experiment_pages_json_roundtrip() -> None:
+    data = _valid_experiment_dict() | {"pages": [5, 6]}
+    exp = Experiment.model_validate(data)
+    restored = Experiment.model_validate_json(exp.model_dump_json())
+    assert restored.pages == [5, 6]
+    assert restored == exp

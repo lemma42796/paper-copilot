@@ -106,12 +106,11 @@ class SkimAgent:
         self._store = store
 
     async def run(self, pdf_path: Path) -> SkimRun:
-        front_matter = await asyncio.to_thread(
-            load_front_matter, pdf_path, _FRONT_MATTER_PAGES
-        )
+        front_matter = await asyncio.to_thread(load_front_matter, pdf_path, _FRONT_MATTER_PAGES)
         messages = _build_messages(front_matter)
         tools = [_build_tool()]
         if self._store is not None:
+            self._store.append_system_message(_SYSTEM_PROMPT)
             self._store.append_message(role="user", text=messages[0]["content"])
         response = await self._client.generate(
             messages=messages,
@@ -136,9 +135,7 @@ class SkimAgent:
             )
         block = tool_use_blocks[0]
         if block.name != _TOOL_NAME:
-            raise AgentError(
-                f"expected tool_use name={_TOOL_NAME!r}, got {block.name!r}"
-            )
+            raise AgentError(f"expected tool_use name={_TOOL_NAME!r}, got {block.name!r}")
 
         parsed = _SkimToolInput.model_validate(block.input)
         if self._store is not None:
@@ -151,13 +148,6 @@ class SkimAgent:
                 meta = meta.model_copy(update={"arxiv_id": normalized})
 
         result = SkimResult(meta=meta, skeleton=parsed.skeleton)
-        if self._store is not None:
-            self._store.append_final_output(
-                payload={
-                    "meta": meta.model_dump(mode="json"),
-                    "skeleton": parsed.skeleton.model_dump(mode="json"),
-                }
-            )
         return SkimRun(
             result=result,
             response=response,
@@ -180,15 +170,10 @@ def _build_tool() -> dict[str, Any]:
 def _build_messages(front_matter: PdfFrontMatter) -> list[dict[str, Any]]:
     parts: list[str] = []
     if front_matter.outline is None:
-        parts.append(
-            "No embedded outline available; infer section structure from the text below."
-        )
+        parts.append("No embedded outline available; infer section structure from the text below.")
     else:
         outline_json = json.dumps(
-            [
-                {"title": e.title, "page": e.page, "depth": e.depth}
-                for e in front_matter.outline
-            ],
+            [{"title": e.title, "page": e.page, "depth": e.depth} for e in front_matter.outline],
             indent=2,
             ensure_ascii=False,
         )

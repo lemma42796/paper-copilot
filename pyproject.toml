@@ -15,7 +15,11 @@ dependencies = [
     "anthropic>=0.40.0",
     "rich>=15.0.0",
     "python-dotenv>=1.0.0",
+    "typer>=0.12.0",
 ]
+
+[project.scripts]
+paper-copilot = "paper_copilot.cli.main:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/paper_copilot"]

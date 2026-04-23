@@ -36,9 +36,7 @@ def inline_refs(schema: Mapping[str, Any]) -> dict[str, Any]:
 
 def _walk(node: Any, defs: Mapping[str, Any], depth: int) -> Any:
     if depth > _MAX_DEPTH:
-        raise SchemaValidationError(
-            f"inline_refs exceeded max depth {_MAX_DEPTH} — cyclic $ref?"
-        )
+        raise SchemaValidationError(f"inline_refs exceeded max depth {_MAX_DEPTH} — cyclic $ref?")
     if isinstance(node, Mapping):
         if "$ref" in node:
             ref = node["$ref"]
@@ -48,9 +46,7 @@ def _walk(node: Any, defs: Mapping[str, Any], depth: int) -> Any:
                 )
             name = ref.removeprefix(_LOCAL_PREFIX)
             if name not in defs:
-                raise SchemaValidationError(
-                    f"inline_refs: $ref '{ref}' not found in $defs"
-                )
+                raise SchemaValidationError(f"inline_refs: $ref '{ref}' not found in $defs")
             target = copy.deepcopy(defs[name])
             siblings = {k: v for k, v in node.items() if k != "$ref"}
             merged = {**target, **siblings}

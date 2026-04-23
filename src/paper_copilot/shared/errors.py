@@ -28,3 +28,7 @@ class KnowledgeError(PaperCopilotError):
 
 class SessionError(PaperCopilotError):
     pass
+
+
+class PdfError(PaperCopilotError):
+    pass

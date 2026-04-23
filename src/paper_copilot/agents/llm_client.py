@@ -31,9 +31,7 @@ def _require_env(name: str) -> str:
     load_env()
     value = os.environ.get(name)
     if not value:
-        raise AgentError(
-            f"environment variable {name} is not set — see README for configuration"
-        )
+        raise AgentError(f"environment variable {name} is not set — see README for configuration")
     return value
 
 
@@ -57,10 +55,11 @@ class LLMClient:
         tools: list[dict[str, Any]],
         tool_choice: dict[str, Any] | None = None,
         system: str | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         kwargs: dict[str, Any] = {
             "model": DEFAULT_MODEL,
-            "max_tokens": _DEFAULT_MAX_TOKENS,
+            "max_tokens": max_tokens if max_tokens is not None else _DEFAULT_MAX_TOKENS,
             "thinking": {"type": "disabled"},
             "messages": messages,
         }
@@ -100,8 +99,6 @@ def _convert_block(block: Any) -> ContentBlock:
     if block_type == "tool_use":
         tool_input = block.input
         if not isinstance(tool_input, dict):
-            raise AgentError(
-                f"tool_use input is not a dict: got {type(tool_input).__name__}"
-            )
+            raise AgentError(f"tool_use input is not a dict: got {type(tool_input).__name__}")
         return ToolUseBlock(id=block.id, name=block.name, input=tool_input)
     raise AgentError(f"unexpected content block type: {block_type!r}")
