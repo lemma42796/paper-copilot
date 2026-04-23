@@ -24,6 +24,7 @@ from rich.tree import Tree
 
 from paper_copilot.agents.llm_client import DEFAULT_MODEL, LLMClient
 from paper_copilot.agents.skim import SkimAgent, SkimResult, SkimRun
+from paper_copilot.session import SessionStore, compute_paper_id, session_file
 from paper_copilot.shared.cost import CostTracker
 
 
@@ -99,7 +100,9 @@ def _write_dump(run: SkimRun, pdf_stem: str) -> Path:
 async def _amain(pdf_path: Path) -> None:
     console = Console()
     client = LLMClient()
-    agent = SkimAgent(client)
+    paper_id = compute_paper_id(pdf_path)
+    store = SessionStore.create(paper_id, model=DEFAULT_MODEL, agent="skim")
+    agent = SkimAgent(client, store=store)
     cost = CostTracker()
 
     run = await agent.run(pdf_path)
@@ -109,6 +112,7 @@ async def _amain(pdf_path: Path) -> None:
     _render(console, run.result, cost)
     dump_path = _write_dump(run, pdf_path.stem)
     console.print(f"\n[dim]debug dump:[/dim] {dump_path}")
+    console.print(f"[dim]session log:[/dim] {session_file(paper_id)}")
 
 
 def main() -> None:

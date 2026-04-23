@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
+from paper_copilot.session import SessionStore
 from paper_copilot.shared.cost import CostSnapshot, CostTracker, UsageLike
 from paper_copilot.shared.errors import AgentError
 
@@ -148,6 +149,7 @@ async def run_agent_loop(
     llm: LLMClientProtocol,
     dispatch_tool: Callable[[ToolUseRequest], Awaitable[ToolResultData]],
     cost: CostTracker | None = None,
+    store: SessionStore | None = None,
 ) -> AsyncIterator[Event]:
     """Drive an LLM with tools until it stops or a limit fires.
 
@@ -180,6 +182,12 @@ async def run_agent_loop(
             if cost is not None and response.usage is not None:
                 cost.record(response.usage)
 
+            if store is not None:
+                for block in response.content:
+                    if isinstance(block, TextBlock):
+                        store.append_message(role="assistant", text=block.text)
+                    elif isinstance(block, ToolUseBlock):
+                        store.append_tool_use(block.id, block.name, block.input)
             yield AssistantMessage(content=response.content)
             history.append({"role": "assistant", "content": response.content})
             turns += 1
@@ -198,6 +206,8 @@ async def run_agent_loop(
                 result = await dispatch_tool(
                     ToolUseRequest(id=block.id, name=block.name, input=block.input)
                 )
+                if store is not None:
+                    store.append_tool_result(block.id, result.output, result.is_error)
                 yield ToolResult(id=block.id, output=result.output, is_error=result.is_error)
                 tool_results.append(
                     {

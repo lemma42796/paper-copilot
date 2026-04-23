@@ -17,6 +17,7 @@ from typing import Any, Final
 import anthropic
 
 from paper_copilot.agents.loop import ContentBlock, LLMResponse, TextBlock, ToolUseBlock
+from paper_copilot.shared.env import load_env
 from paper_copilot.shared.errors import AgentError
 
 __all__ = ["DEFAULT_MODEL", "LLMClient"]
@@ -27,6 +28,7 @@ _DEFAULT_TIMEOUT_S: Final[float] = 60.0
 
 
 def _require_env(name: str) -> str:
+    load_env()
     value = os.environ.get(name)
     if not value:
         raise AgentError(

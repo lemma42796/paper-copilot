@@ -22,8 +22,9 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from paper_copilot.agents.llm_client import LLMClient
-from paper_copilot.agents.loop import LLMResponse, ToolUseBlock
+from paper_copilot.agents.loop import LLMResponse, TextBlock, ToolUseBlock
 from paper_copilot.schemas.paper import PaperMeta, PaperSkeleton
+from paper_copilot.session import SessionStore
 from paper_copilot.shared.errors import AgentError
 from paper_copilot.shared.jsonschema import inline_refs
 from paper_copilot.shared.logging import get_logger
@@ -100,8 +101,9 @@ class _SkimToolInput(BaseModel):
 
 
 class SkimAgent:
-    def __init__(self, client: LLMClient) -> None:
+    def __init__(self, client: LLMClient, store: SessionStore | None = None) -> None:
         self._client = client
+        self._store = store
 
     async def run(self, pdf_path: Path) -> SkimRun:
         front_matter = await asyncio.to_thread(
@@ -109,12 +111,21 @@ class SkimAgent:
         )
         messages = _build_messages(front_matter)
         tools = [_build_tool()]
+        if self._store is not None:
+            self._store.append_message(role="user", text=messages[0]["content"])
         response = await self._client.generate(
             messages=messages,
             tools=tools,
             tool_choice={"type": "tool", "name": _TOOL_NAME},
             system=_SYSTEM_PROMPT,
         )
+
+        if self._store is not None:
+            for block in response.content:
+                if isinstance(block, TextBlock):
+                    self._store.append_message(role="assistant", text=block.text)
+                elif isinstance(block, ToolUseBlock):
+                    self._store.append_tool_use(block.id, block.name, block.input)
 
         tool_use_blocks = [b for b in response.content if isinstance(b, ToolUseBlock)]
         if len(tool_use_blocks) != 1:
@@ -130,6 +141,8 @@ class SkimAgent:
             )
 
         parsed = _SkimToolInput.model_validate(block.input)
+        if self._store is not None:
+            self._store.append_schema_validation(success=True)
 
         meta = parsed.meta
         if meta.arxiv_id is not None:
@@ -138,6 +151,13 @@ class SkimAgent:
                 meta = meta.model_copy(update={"arxiv_id": normalized})
 
         result = SkimResult(meta=meta, skeleton=parsed.skeleton)
+        if self._store is not None:
+            self._store.append_final_output(
+                payload={
+                    "meta": meta.model_dump(mode="json"),
+                    "skeleton": parsed.skeleton.model_dump(mode="json"),
+                }
+            )
         return SkimRun(
             result=result,
             response=response,
