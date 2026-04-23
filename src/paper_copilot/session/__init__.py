@@ -6,6 +6,7 @@ from .types import (
     SchemaValidation,
     SessionEntry,
     SessionHeader,
+    SystemMessage,
     ToolResult,
     ToolUse,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "SessionEntry",
     "SessionHeader",
     "SessionStore",
+    "SystemMessage",
     "ToolResult",
     "ToolUse",
     "compute_paper_id",

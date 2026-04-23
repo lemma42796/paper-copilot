@@ -8,6 +8,7 @@ from paper_copilot.session import (
     SchemaValidation,
     SessionHeader,
     SessionStore,
+    SystemMessage,
     ToolResult,
     ToolUse,
 )
@@ -51,6 +52,7 @@ def test_parent_id_chain(tmp_path: Path) -> None:
 
 def test_all_entry_types_roundtrip(tmp_path: Path) -> None:
     s = SessionStore.create("abc", model="m", agent="skim", root=tmp_path)
+    s.append_system_message("sys")
     s.append_message("user", "hello")
     s.append_tool_use("tu1", "read", {"path": "p"})
     s.append_tool_result("tu1", "ok", is_error=False)
@@ -59,12 +61,49 @@ def test_all_entry_types_roundtrip(tmp_path: Path) -> None:
     entries = s.read_all()
     assert [type(e) for e in entries] == [
         SessionHeader,
+        SystemMessage,
         Message,
         ToolUse,
         ToolResult,
         SchemaValidation,
         FinalOutput,
     ]
+
+
+def test_system_message_roundtrip(tmp_path: Path) -> None:
+    s = SessionStore.create("abc", model="m", agent="skim", root=tmp_path)
+    s.append_system_message("you are a helpful assistant")
+    s.append_message("user", "hi")
+    entries = s.read_all()
+    assert isinstance(entries[1], SystemMessage)
+    assert isinstance(entries[2], Message)
+    assert entries[1].text == "you are a helpful assistant"
+    assert entries[2].parent_id == entries[1].id
+
+
+def test_skim_style_sequence_roundtrip(tmp_path: Path) -> None:
+    s = SessionStore.create("abc", model="m", agent="skim", root=tmp_path)
+    s.append_system_message("mock system prompt")
+    s.append_message("user", "mock user prompt")
+    s.append_tool_use(
+        "tool_abc",
+        "emit_skim",
+        {"meta": {"title": "x"}, "skeleton": {"sections": []}},
+    )
+    s.append_schema_validation(success=True)
+    s.append_final_output({"meta": {"title": "x"}, "skeleton": {"sections": []}})
+    entries = s.read_all()
+    assert len(entries) == 6
+    assert [e.type for e in entries] == [
+        "session_header",
+        "system_message",
+        "message",
+        "tool_use",
+        "schema_validation",
+        "final_output",
+    ]
+    for i in range(1, len(entries)):
+        assert entries[i].parent_id == entries[i - 1].id
 
 
 def test_crash_recovery_50_messages(tmp_path: Path) -> None:

@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # The Union below does not include models for those variants yet.
 EntryType = Literal[
     "session_header",
+    "system_message",
     "message",
     "tool_use",
     "tool_result",
@@ -25,6 +26,15 @@ class SessionHeader(BaseModel):
     cwd: str
     model: str
     agent: str
+
+
+class SystemMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    ts: str
+    type: Literal["system_message"] = "system_message"
+    parent_id: str | None
+    text: str
 
 
 class Message(BaseModel):
@@ -80,6 +90,6 @@ class FinalOutput(BaseModel):
 
 
 SessionEntry = Annotated[
-    SessionHeader | Message | ToolUse | ToolResult | SchemaValidation | FinalOutput,
+    SessionHeader | SystemMessage | Message | ToolUse | ToolResult | SchemaValidation | FinalOutput,
     Field(discriminator="type"),
 ]

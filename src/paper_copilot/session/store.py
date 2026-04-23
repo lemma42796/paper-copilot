@@ -19,6 +19,7 @@ from .types import (
     SchemaValidation,
     SessionEntry,
     SessionHeader,
+    SystemMessage,
     ToolResult,
     ToolUse,
 )
@@ -88,6 +89,17 @@ class SessionStore:
             f.write(line + "\n")
         self._last_id = entry.id
 
+    def append_system_message(self, text: str) -> str:
+        """Record the system prompt passed to an LLM call."""
+        entry = SystemMessage(
+            id=_new_id(),
+            ts=_now_ts(),
+            parent_id=self._last_id,
+            text=text,
+        )
+        self._write(entry)
+        return entry.id
+
     def append_message(self, role: str, text: str) -> str:
         entry = Message(
             id=_new_id(),
@@ -99,9 +111,7 @@ class SessionStore:
         self._write(entry)
         return entry.id
 
-    def append_tool_use(
-        self, tool_use_id: str, name: str, input_: dict[str, Any]
-    ) -> str:
+    def append_tool_use(self, tool_use_id: str, name: str, input_: dict[str, Any]) -> str:
         entry = ToolUse(
             id=_new_id(),
             ts=_now_ts(),
@@ -113,9 +123,7 @@ class SessionStore:
         self._write(entry)
         return entry.id
 
-    def append_tool_result(
-        self, tool_use_id: str, output: str, is_error: bool
-    ) -> str:
+    def append_tool_result(self, tool_use_id: str, output: str, is_error: bool) -> str:
         entry = ToolResult(
             id=_new_id(),
             ts=_now_ts(),
