@@ -972,3 +972,68 @@ Inception v3 补了"中等嵌套"格:1 个嵌套父节 → ratio 3.17。ratio vs
 4. 最后再动 schema 层面的 confidence / `meta.id` / Method 闸门等
    (confidence 在 Inception 的正面样本提示"prompt 调优"可能比"删字段"
    更合理)
+
+---
+
+## M8 Closure(2026-04-24,1 session)
+
+### 关闭的 issue → commit 对照
+
+| # | Issue | Commit | 策略 |
+|---|---|---|---|
+| 1 | Outline fallback 截断 | `70aa5aa` | 无 outline 时 Skim 读 8 页而非 3 |
+| 2 | Section 嵌套重复膨胀 | `520f56d` | `split_by_sections` skip parent |
+| 3 | `meta.id` vs `arxiv_id` 混淆 | `8a8f92b` | 删 `meta.id`;`arxiv_id` prompt 禁推断 |
+| 4 | Method 无 novel 闸门 | `8a8f92b` | 加 `is_novel_to_this_paper: bool` |
+| 5 | Confidence 刻度废 + "Not stated but likely:" 自注入 | `8a8f92b` | `confidence: float` → `evidence_type: Literal[...]`;Limitation description 禁模板 |
+
+### 回归 6 篇,before / after
+
+| paper | 修什么 | 指标 | before | after |
+|---|---|---|---|---|
+| Zhou06 | outline | outline sections / 论文真有节数 | 4/10 | 10/10 |
+| Zhou06 | outline | experiments 真数据条数 | 0 (全占位符) | 4 |
+| Zhou06 | outline | "Not stated but likely:" 自造 limitations | 1 | 0 |
+| Bahdanau | dedup | Deep input 膨胀比 | 4.77x | 2.90x |
+| HGNN | dedup | Deep input 膨胀比 | 4.66x | 3.40x |
+| AlexNet | schema | `arxiv_id` | `"1706.03762"` (Transformer 幻觉) | `null`(正确) |
+| AlexNet | schema | methods 背景/baseline 标签 | 0 | 5/8 baseline,3/8 novel |
+| AlexNet | schema | "Not stated but likely:" 前缀 | 1/3 | 0/4 |
+| Inception | schema | evidence_type `author_hedge` 命中 | 0/7 | 1/7 |
+| ViLBERT | schema | "low-resource languages" 命中 | 1 | 0 |
+| ViLBERT | schema | "Not stated but likely:" 命中 | 1 | 0 |
+
+### 残留(M9+ 候选)
+
+- **AlexNet 的 "English-language visual object recognition tasks"** —
+  "low-resource languages" 的语义变体。prompt 反例杀不掉,需要
+  validator / output filter / retry 类硬机制。不是 prompt 层 bug。
+- **Inception 的 hedge 检测敏感度** — `author_hedge` 命中从 M7 float
+  confidence 的 2/7 小降到 1/7(其中"reduced input resolution 79x79"
+  这条 M7 打 0.7、M8 打 `explicit_claim`)。enum 结构更干净但 hedge
+  sensitivity 略降,可接受。
+
+### DEFERRED 给 M9(顺手做)
+
+- session.jsonl 缺 per-call usage / latency(13/13 命中)。Phase 2
+  纪律"找最贵一步"依赖这个,M9 cache + doctor 命令需要这份数据。
+- CLI rich 渲染吞 display-math `_xxx_` italic(1/13,LOW)。
+
+### M8 DoD 状态
+
+- [x] 至少 5 条 issues 被关闭 — **5 条**
+- [x] 对之前不满意的 3 篇论文重跑,确认改善 — **6 篇**
+- [x] ARCHITECTURE.md 待验证假设勾掉或修改至少 2 条 — **修改 2 条**
+  (SkimAgent 3 页;Pydantic description 万能)
+
+### 留给未来新 session 的入门提示
+
+新 session 若想理解 "paper-copilot M7 baseline 有哪些真实问题,M8 怎么
+改的":
+1. 先看本文档 `## 当前进度` 和 triage(上半段每条带 DONE 标记 + commit)
+2. 再读 `git log` 上 `70aa5aa / 520f56d / 8a8f92b / 0d42a72` 四个
+   commit 的 message
+3. 单篇 case study:读 Zhou06 (`9f53740cc80e`) / Bahdanau (`071b16f25117`)
+   / AlexNet (`2315fc6c2c0c`) 三篇的 report.md,感受 before/after。
+   M7 产出的 report 在 git reflog 能找到(或 session.jsonl 里 deep
+   entry 可 JSON replay)。

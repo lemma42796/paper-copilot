@@ -209,6 +209,23 @@ novelty_vs_prior: str = Field(
 )
 ```
 
+Two M8 lessons worth keeping in mind (2026-04-24):
+
+- Description wording kills **literal-match** hallucinations: adding
+  "don't prefix with 'Not stated but likely:'" made that exact phrase
+  disappear across the regression set. It does **not** kill semantic
+  variants: telling the model not to mention "low-resource languages"
+  in a vision paper just makes it rephrase to "English-language visual
+  data". For semantic variants, prompt-layer work is a dead end — use
+  validators, retries, or output filters instead.
+
+- For graded fields ("how confident are you", "how novel is this"),
+  prefer a small `Literal[...]` enum with sharp anchors over a float
+  with description-anchored scales. Float scales collapse to the top
+  of the range (M7 `Contribution.confidence`: 79% of values at 1.0
+  across 13 papers). Enums force a discrete bucket pick and keep
+  downstream code honest.
+
 ---
 
 ## Cost discipline
