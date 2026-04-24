@@ -35,7 +35,8 @@ __all__ = ["SkimAgent", "SkimResult", "SkimRun"]
 _log = get_logger(__name__)
 
 _TOOL_NAME = "emit_skim"
-_FRONT_MATTER_PAGES = 3
+_FRONT_MATTER_PAGES_WITH_OUTLINE = 3
+_FRONT_MATTER_PAGES_WITHOUT_OUTLINE = 8
 
 _SYSTEM_PROMPT = (
     "You are a research assistant performing a first-pass skim of an academic "
@@ -106,7 +107,12 @@ class SkimAgent:
         self._store = store
 
     async def run(self, pdf_path: Path) -> SkimRun:
-        front_matter = await asyncio.to_thread(load_front_matter, pdf_path, _FRONT_MATTER_PAGES)
+        front_matter = await asyncio.to_thread(
+            load_front_matter,
+            pdf_path,
+            _FRONT_MATTER_PAGES_WITH_OUTLINE,
+            _FRONT_MATTER_PAGES_WITHOUT_OUTLINE,
+        )
         messages = _build_messages(front_matter)
         tools = [_build_tool()]
         if self._store is not None:
@@ -184,7 +190,7 @@ def _build_messages(front_matter: PdfFrontMatter) -> list[dict[str, Any]]:
     parts.append("")
     parts.append(
         f"Total pages in PDF: {front_matter.page_count}. "
-        f"Text of the first {_FRONT_MATTER_PAGES} pages follows. "
+        f"Text of the first {front_matter.pages_loaded} pages follows. "
         f"Pages are delimited by '--- page K ---' markers."
     )
     parts.append("")

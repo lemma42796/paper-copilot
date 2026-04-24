@@ -35,20 +35,20 @@ class OutlineEntry:
 class PdfFrontMatter:
     text: str
     page_count: int
+    pages_loaded: int
     outline: list[OutlineEntry] | None
 
 
-def load_front_matter(pdf_path: Path, n_pages: int = 3) -> PdfFrontMatter:
+def load_front_matter(
+    pdf_path: Path,
+    pages_with_outline: int = 3,
+    pages_without_outline: int = 8,
+) -> PdfFrontMatter:
+    # When the PDF has no bookmarks, Skim must infer the outline from in-text
+    # headings; feeding only 3 pages drops the outline's tail and cascades into
+    # Deep missing the back half of the paper (see docs/issues.md, Zhou06).
     with pymupdf.open(pdf_path) as doc:  # type: ignore[no-untyped-call]
         page_count: int = doc.page_count
-        limit = min(n_pages, page_count)
-
-        chunks: list[str] = []
-        for i in range(limit):
-            chunks.append(f"--- page {i + 1} ---")
-            chunks.append(doc.load_page(i).get_text())
-        text = "\n\n".join(chunks)
-
         raw_toc = doc.get_toc()
         outline: list[OutlineEntry] | None = (
             [
@@ -58,8 +58,18 @@ def load_front_matter(pdf_path: Path, n_pages: int = 3) -> PdfFrontMatter:
             if raw_toc
             else None
         )
+        n_pages = pages_with_outline if outline is not None else pages_without_outline
+        limit = min(n_pages, page_count)
 
-    return PdfFrontMatter(text=text, page_count=page_count, outline=outline)
+        chunks: list[str] = []
+        for i in range(limit):
+            chunks.append(f"--- page {i + 1} ---")
+            chunks.append(doc.load_page(i).get_text())
+        text = "\n\n".join(chunks)
+
+    return PdfFrontMatter(
+        text=text, page_count=page_count, pages_loaded=limit, outline=outline
+    )
 
 
 def get_page_count(pdf_path: Path) -> int:
