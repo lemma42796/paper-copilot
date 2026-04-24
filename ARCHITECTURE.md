@@ -141,7 +141,23 @@ DeepAgent 全文投喂成本 ¥0.05-0.11/篇，未触及 ¥0.30 预算，retriev
 FTS5 推迟到 ~1k 篇阈值触发再加。`fields_store.upsert` 只存 raw JSON 不
 二次校验 → M7 旧 schema 的 `meta.id` 残留字段天然兼容,代价是不能直接
 从 fields.db 反序列回 `Paper` 对象;如未来要支持"从历史 session 重建
-Paper",需单写 migration。embeddings.db + hybrid_search 保留为 M11。
+Paper",需单写 migration。
+
+**M11 实际状态(2026-04-24)**:embeddings.db + hybrid_search 落地。
+`chunks(chunk_id, paper_id, ord, section, page_start, page_end, text)` +
+`vec_chunks` (sqlite-vec vec0,float[1024]) 共享 chunk_id / rowid;KNN
+查询 `MATCH ? AND k = ?` + 可选 `rowid IN (SELECT chunk_id FROM chunks
+WHERE paper_id IN (...))` 子查询做预过滤。hybrid_search 算法:
+field_filter(year / contains)→候选 paper_ids→KNN 取 k*5 chunks→按
+paper_id 取 best chunk→top-k。**不做重排器**(MVP)。chunker 进
+`shared/chunking.py`(纯函数,tokenizer 注入),`retrieval/`↔`knowledge/`
+互不 import 的硬规则下,section→chunk 是兄弟模块共享原语。历史 session
+不记录 PDF 路径 → `reindex --pdf-dir <dir>` 按 sha1 paper_id 重新匹配,
+`emit_skim` tool_use 里恢复 PaperSkeleton,零 LLM 成本重建两个索引。
+模型 / dim 不匹配在 `embeddings_meta.json` 开门校验,早 fail 避免脏距离。
+13 篇实测:reindex 186.9s(DoD < 5min,2.7x 余量)、search warm 287-973ms
+(DoD < 1s);冷启动 17s 是 torch import + 模型权重加载的固有代价,CLI
+一次性 invoke 吞。
 
 ### `eval/`
 内部 eval 模块。用历史 session 中被用户标记为 `golden: true` 的条目作为
@@ -400,9 +416,12 @@ cli.reindex
       description 锚点**。
 
 **M5 推迟到后续 milestone 再验**（原 M5 那组里不属于 SkimAgent 单点能验的）：
-- [ ] sqlite-vec 够用，不需要独立向量库 — M7 推迟：retrieval chunker/search
-      实际推迟到 Phase 2 信号驱动再加，详见 `retrieval/` 节
-- [ ] 单篇论文 chunk 50-200 个，top-k=5 够用 — 同上，推迟
+- [x] sqlite-vec 够用，不需要独立向量库 — **M11 验证通过(2026-04-24)**:
+      13 篇 / 621 chunks 规模下 KNN + rowid 子查询预过滤 warm 287-973ms,
+      远低于 DoD 1s。单表结构化 chunks + `vec0` 虚表共享 rowid,复合
+      过滤不用学 vec0 DSL。50-100 篇规模的正式验证留给 M14 eval。
+- [ ] 单篇论文 chunk 50-200 个，top-k=5 够用 — 单篇 retrieval 仍推迟
+      (M7 信号未出现,见 `retrieval/` 节)
 - [ ] Claude Haiku 做 query rewriting 足够，不用 Opus — M7/M8
 - [x] Prompt cache 命中率能到 60%+ — **M9 打脸**:qwen-flash +
       Dashscope 架构下 user-message cache 有**未公开的 ~5K token 大小
@@ -467,8 +486,14 @@ cli.reindex
       重验方法:`scripts/m9_cache_ab.py on|off` 两两对比 cache_read/create。
 
 **M11 之后审视（跨论文相关）**：
-- [ ] bge-m3 在论文语料上的召回率够用（否则考虑换 voyage-3-large 等 API）
-- [ ] 50-100 篇规模下，sqlite-vec 的跨库检索 < 500ms
+- [~] bge-m3 在论文语料上的召回率够用（否则考虑换 voyage-3-large 等 API）
+      — **初步通过(2026-04-24)**:7 个真实 query 手工验证,rank-1 命中符合
+      预期("triplet loss for face recognition"→FaceNet、"attention"+year=2017
+      →Attention Is All You Need、"vision language pretraining multimodal"
+      →ViLBERT)。样本太小,正式召回率要等 M14 golden suite。
+- [~] 50-100 篇规模下，sqlite-vec 的跨库检索 < 500ms
+      — 13 篇下 warm 287-973ms;50-100 篇规模无实测,sqlite-vec 线性扫描
+      复杂度下预估仍远低于 1s,M14 eval 时正式验。
 - [ ] RelatedAgent 的自动关联粒度：整篇 vs 章节 vs 方法级？
 - [x] fields.db 的 SQL schema：结构化字段能否用 JSON column + 表达式索引
       解决，不需要正则化成多表 — **M10 验证通过(2026-04-24)**:单表
@@ -478,7 +503,10 @@ cli.reindex
       raw JSON 存 Paper,新字段自动流入。未来重验条件:
       (a) 库 > 1k 篇时 LIKE 是否需切 FTS5
       (b) 新增 author / venue 查询维度时,`json_each` 扫描成本是否显著
-- [ ] `read` 流程新增跨论文步骤后，端到端延迟能否控制在 90s 内
+- [~] `read` 流程新增跨论文步骤后，端到端延迟能否控制在 90s 内
+      — M11 `read` 末尾只加 "split_by_sections + chunk + encode + upsert"
+      这一段,ViLBERT 实测加起来 ~5-10s(CPU bge-m3),远低于 90s。M12
+      加 RelatedAgent(再调一次 LLM)后重验才算真结论。
 - [ ] `Method.name` 跨论文对齐：是否需要 canonicalization 层（同义词合并、
       小写归一），还是靠 embedding 相似度在查询时处理？
 

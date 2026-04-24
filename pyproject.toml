@@ -16,6 +16,9 @@ dependencies = [
     "rich>=15.0.0",
     "python-dotenv>=1.0.0",
     "typer>=0.12.0",
+    "sqlite-vec>=0.1.9",
+    "flagembedding>=1.4.0",
+    "numpy>=2.0",
 ]
 
 [project.scripts]
@@ -45,6 +48,10 @@ python_version = "3.12"
 strict = true
 mypy_path = "src"
 files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["sqlite_vec", "FlagEmbedding"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

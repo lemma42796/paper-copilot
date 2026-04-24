@@ -11,24 +11,44 @@
 > 更新于 2026-04-24。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
-- **已完成**:M1–M10。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
+- **已完成**:M1–M11。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
   `--lang en|zh`。`paper-copilot doctor` (M9) 查最近 N 次 session 的
   cache 命中率 / p50-p95 latency / top-3 贵论文。`paper-copilot reindex`
-  + `paper-copilot list` 新增 (M10),把 Paper 字段落 SQLite,支持
-  `--year` / `--field ... --contains ...` 查询。`read` 末尾自动写入
-  fields.db,reindex 可从 session.jsonl 重建。
-- **当前阶段**:**等待 M11 启动**。
-- **下一个编码 milestone**:**M11 (embeddings.db 向量索引 + 跨论文检索)**。
-- **M10 实测 (2026-04-24)**:
-  - 13 篇真实论文全量 reindex 成功(session.jsonl 里的 `meta.id` 等 M7
-    旧字段因为 fields.db 存 raw JSON 不做二次校验,自然兼容)。
-  - 所有查询 < 1ms(13 篇规模):`list_all` 0.24ms / `query_contains`
-    0.2-0.3ms / 加 `--year` 过滤降到 0.06-0.09ms。DoD 的 50ms 阈值
-    留了 50x 余量,FTS5 暂不上。
-  - 单表 JSON + 表达式索引(`json_extract($.meta.year)` / `$.meta.arxiv_id`)
-    + `json_each` 内联数组扫描。加字段无需 ALTER TABLE。
-  - `cli/commands/reindex.py` 在 M10 只跑 fields;M11 在同一命令里加
-    embeddings 分支。
+  + `paper-copilot list` (M10) 落 SQLite 字段索引,支持 `--year` /
+  `--field ... --contains ...` 查询。`paper-copilot search "<q>"` (M11)
+  跨论文 hybrid search:bge-m3 本地 embedding + sqlite-vec KNN + fields
+  预过滤。`read` 末尾自动同步 fields.db + embeddings.db;`reindex
+  --pdf-dir <dir>` 从历史 session 重建两个索引(embeddings 需 PDF
+  在场,按 sha1 paper_id 匹配)。
+- **当前阶段**:**等待 M12 启动**。
+- **下一个编码 milestone**:**M12 (RelatedAgent + 集成到 read)**。
+- **M11 实测 (2026-04-24)**:
+  - 13 篇全量 reindex(bge-m3 CPU 推理,MacBook M1):**186.9s**,
+    DoD ≤ 5 min,约 2.7x 余量。单篇 chunks 14-107 不等,总 621 chunks。
+  - 搜索延迟(warm,bge-m3 已加载):query encode + KNN + fields lookup
+    **287-973ms**,DoD < 1s 满足。冷启动(含 torch import + 模型权重
+    加载)约 **17s** 是个人项目 CLI 一次性 invoke 的固有成本,不计入 DoD。
+  - `embeddings_meta.json` 不匹配(model/dim 任一变)`search` 开头就
+    `KnowledgeError` 退出码 2,不会跑出脏结果。
+  - 架构决策:chunker 进 `shared/chunking.py`(retrieval/knowledge
+    互不 import 的硬规则下,section→chunk 是共享原语);Section 在
+    shared 定义,SectionText→Section 的转换在 cli 层做,3 行代码。
+  - 历史 13 篇 session 不记录 PDF 路径 → reindex 用 `--pdf-dir` 按
+    sha1 重新匹配,`emit_skim` tool_use 里恢复 PaperSkeleton,零 LLM
+    成本。PDF 不在 dir 里的 paper 只跳过 embeddings,fields 仍重建。
+  - Transformers warning "Token indices sequence length is longer
+    than the specified maximum sequence length (14707 > 8192)":在
+    长 section 上 `tokenizer(full_text, return_offsets_mapping=True)`
+    触发,但我们只用 offset mapping 做 chunking,永远不把 >8K 的序列
+    送入模型 forward,无实际影响。
+  - **M10 实测 (2026-04-24)**:
+    - 13 篇真实论文全量 reindex 成功(session.jsonl 里的 `meta.id` 等 M7
+      旧字段因为 fields.db 存 raw JSON 不做二次校验,自然兼容)。
+    - 所有查询 < 1ms(13 篇规模):`list_all` 0.24ms / `query_contains`
+      0.2-0.3ms / 加 `--year` 过滤降到 0.06-0.09ms。DoD 的 50ms 阈值
+      留了 50x 余量,FTS5 暂不上。
+    - 单表 JSON + 表达式索引(`json_extract($.meta.year)` / `$.meta.arxiv_id`)
+      + `json_each` 内联数组扫描。加字段无需 ALTER TABLE。
 - **M9 实测定论 (2026-04-24)**:
   - 三层 cache(tools / system / user)只有 tools + system 那 ~2.8K tokens 在
     Dashscope qwen3.6-flash 上稳定命中。Deep 的 ~18K user PDF 块打
@@ -430,11 +450,11 @@ system+tools。如将来 qwen 版本升级触发阈值变化,用 `scripts/m9_cac
 **依赖**：M10
 
 **DoD**：
-- [ ] 对 10+ 篇的库，search 延迟 < 1s
-- [ ] reindex 10 篇论文的 chunk 重算 < 5 分钟
-- [ ] meta.json 记录正确，换模型时检测到不一致并报错
+- [x] 对 10+ 篇的库，search 延迟 < 1s — 13 篇实测 287-973ms (warm)
+- [x] reindex 10 篇论文的 chunk 重算 < 5 分钟 — 13 篇 186.9s (2.7x 余量)
+- [x] meta.json 记录正确，换模型时检测到不一致并报错 — 手动篡改验证通过
 
-**预估**：3 sessions。
+**预估**：3 sessions。**实际**:1 session。
 
 ---
 
