@@ -11,12 +11,24 @@
 > 更新于 2026-04-24。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
-- **已完成**:M1–M9。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
-  `--lang en|zh`。`paper-copilot doctor` 新增(M9),查最近 N 次 session 的
-  cache 命中率 / p50-p95 latency / top-3 贵论文。`session.jsonl` 新增
-  `llm_call` 事件(per-call usage + latency),覆盖掉 M8 的 DEFERRED (a)。
-- **当前阶段**:**等待 M10 启动**。
-- **下一个编码 milestone**:**M10 (fields.db 字段索引)**。
+- **已完成**:M1–M10。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
+  `--lang en|zh`。`paper-copilot doctor` (M9) 查最近 N 次 session 的
+  cache 命中率 / p50-p95 latency / top-3 贵论文。`paper-copilot reindex`
+  + `paper-copilot list` 新增 (M10),把 Paper 字段落 SQLite,支持
+  `--year` / `--field ... --contains ...` 查询。`read` 末尾自动写入
+  fields.db,reindex 可从 session.jsonl 重建。
+- **当前阶段**:**等待 M11 启动**。
+- **下一个编码 milestone**:**M11 (embeddings.db 向量索引 + 跨论文检索)**。
+- **M10 实测 (2026-04-24)**:
+  - 13 篇真实论文全量 reindex 成功(session.jsonl 里的 `meta.id` 等 M7
+    旧字段因为 fields.db 存 raw JSON 不做二次校验,自然兼容)。
+  - 所有查询 < 1ms(13 篇规模):`list_all` 0.24ms / `query_contains`
+    0.2-0.3ms / 加 `--year` 过滤降到 0.06-0.09ms。DoD 的 50ms 阈值
+    留了 50x 余量,FTS5 暂不上。
+  - 单表 JSON + 表达式索引(`json_extract($.meta.year)` / `$.meta.arxiv_id`)
+    + `json_each` 内联数组扫描。加字段无需 ALTER TABLE。
+  - `cli/commands/reindex.py` 在 M10 只跑 fields;M11 在同一命令里加
+    embeddings 分支。
 - **M9 实测定论 (2026-04-24)**:
   - 三层 cache(tools / system / user)只有 tools + system 那 ~2.8K tokens 在
     Dashscope qwen3.6-flash 上稳定命中。Deep 的 ~18K user PDF 块打
@@ -395,11 +407,12 @@ system+tools。如将来 qwen 版本升级触发阈值变化,用 `scripts/m9_cac
 **依赖**：M7（有 Paper 输出）
 
 **DoD**：
-- [ ] Phase 2 积累的 10+ 篇论文能批量 reindex
-- [ ] 常见查询（按 method 关键词、按年份）< 50ms
-- [ ] schema 向后兼容：加字段时不用 drop table
+- [x] Phase 2 积累的 10+ 篇论文能批量 reindex(13/13 成功)
+- [x] 常见查询（按 method 关键词、按年份）< 50ms(实测 < 1ms,50x 余量)
+- [x] schema 向后兼容：加字段时不用 drop table(单表 JSON 存 Paper,
+      旧 session 的 `meta.id` 残留字段自然兼容)
 
-**预估**：2 sessions。
+**预估**：2 sessions。**实际**:1 session。
 
 ---
 

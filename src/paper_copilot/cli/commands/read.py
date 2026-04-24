@@ -14,7 +14,9 @@ from rich.markdown import Markdown
 from paper_copilot.agents.llm_client import LLMClient
 from paper_copilot.agents.main import MainAgent
 from paper_copilot.cli.render import to_markdown
-from paper_copilot.session.paths import compute_paper_id, paper_dir
+from paper_copilot.knowledge.fields_store import FieldsStore
+from paper_copilot.knowledge.sync import index_paper
+from paper_copilot.session.paths import compute_paper_id, default_root, paper_dir
 
 
 def read(
@@ -54,6 +56,9 @@ async def _read_async(pdf_path: Path, force: bool, language: Literal["en", "zh"]
     md = to_markdown(run.paper, language=language)
     report_path = pdir / "report.md"
     report_path.write_text(md, encoding="utf-8")
+
+    with FieldsStore.open(default_root() / "fields.db") as store:
+        index_paper(run.paper, pid, store)
 
     console = Console()
     console.print(Markdown(md))

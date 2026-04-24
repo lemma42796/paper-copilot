@@ -1026,6 +1026,21 @@ Inception v3 补了"中等嵌套"格:1 个嵌套父节 → ratio 3.17。ratio vs
 - [x] ARCHITECTURE.md 待验证假设勾掉或修改至少 2 条 — **修改 2 条**
   (SkimAgent 3 页;Pydantic description 万能)
 
+### M10 收尾观察(2026-04-24)
+
+- **历史 session schema drift:8/13 篇 `meta.id` 残留**。M8 前的 Paper
+  schema 里 `PaperMeta.id` 存在,M8(commit 8a8f92b)删字段改 `arxiv_id`,
+  但旧 session.jsonl 的 FinalOutput.payload 依然带着 `meta.id`。13 篇里
+  8 篇(c2c0, 510d, d3f5, 268d, 071b, 9f53, b350, 2c03, 8533)
+  `Paper.model_validate(payload)` 会挂在 `extra_forbidden`。fields.db
+  因为存 raw JSON 不二次校验,reindex 天然兼容。**代价**:如未来要
+  `Paper.model_validate(row.data)` 反序列回对象(eval suite、跨论文
+  RelatedAgent 构造输入),需要写一个 migration:对旧 payload 剥掉
+  `meta.id` 或把它填入 `meta.arxiv_id`(当后者为 null 时)。当前未改,
+  留着这条作信号。
+- **FTS5 明确推迟**。13 篇规模 `json_each + LIKE` 全部查询 < 1ms(DoD
+  50ms,50x 余量)。阈值:库超 ~1k 篇 / 查询延迟 > 20ms 触发重评。
+
 ### 留给未来新 session 的入门提示
 
 新 session 若想理解 "paper-copilot M7 baseline 有哪些真实问题,M8 怎么

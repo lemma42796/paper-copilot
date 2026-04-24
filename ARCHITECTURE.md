@@ -134,6 +134,15 @@ DeepAgent 全文投喂成本 ¥0.05-0.11/篇，未触及 ¥0.30 预算，retriev
 
 **MVP 阶段只做 hybrid 检索**，不做重排器（重排器是进阶）。
 
+**M10 实际状态(2026-04-24)**:fields.db 已落地,走**单表 JSON + 表达式
+索引**(`papers(paper_id, indexed_at, data)` + `json_extract($.meta.year)` /
+`$.meta.arxiv_id` 两个表达式索引)。数组子串查询(method contains X)走
+`json_each` 内联扫描。13 篇规模下全部查询 < 1ms(DoD 阈 50ms,50x 余量),
+FTS5 推迟到 ~1k 篇阈值触发再加。`fields_store.upsert` 只存 raw JSON 不
+二次校验 → M7 旧 schema 的 `meta.id` 残留字段天然兼容,代价是不能直接
+从 fields.db 反序列回 `Paper` 对象;如未来要支持"从历史 session 重建
+Paper",需单写 migration。embeddings.db + hybrid_search 保留为 M11。
+
 ### `eval/`
 内部 eval 模块。用历史 session 中被用户标记为 `golden: true` 的条目作为
 ground truth，跑回归。核心功能：
@@ -461,8 +470,14 @@ cli.reindex
 - [ ] bge-m3 在论文语料上的召回率够用（否则考虑换 voyage-3-large 等 API）
 - [ ] 50-100 篇规模下，sqlite-vec 的跨库检索 < 500ms
 - [ ] RelatedAgent 的自动关联粒度：整篇 vs 章节 vs 方法级？
-- [ ] fields.db 的 SQL schema：结构化字段能否用 JSON column + 表达式索引
-      解决，不需要正则化成多表
+- [x] fields.db 的 SQL schema：结构化字段能否用 JSON column + 表达式索引
+      解决，不需要正则化成多表 — **M10 验证通过(2026-04-24)**:单表
+      `papers(paper_id, indexed_at, data TEXT)` + 两个 `json_extract`
+      表达式索引(year / arxiv_id),数组子串查询走 `json_each`。13 篇
+      实测所有查询 < 1ms(DoD 50ms)。schema 加字段无需 ALTER TABLE —
+      raw JSON 存 Paper,新字段自动流入。未来重验条件:
+      (a) 库 > 1k 篇时 LIKE 是否需切 FTS5
+      (b) 新增 author / venue 查询维度时,`json_each` 扫描成本是否显著
 - [ ] `read` 流程新增跨论文步骤后，端到端延迟能否控制在 90s 内
 - [ ] `Method.name` 跨论文对齐：是否需要 canonicalization 层（同义词合并、
       小写归一），还是靠 embedding 相似度在查询时处理？

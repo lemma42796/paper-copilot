@@ -5,7 +5,9 @@ from __future__ import annotations
 import typer
 
 from paper_copilot.cli.commands.doctor import doctor
+from paper_copilot.cli.commands.list import list_
 from paper_copilot.cli.commands.read import read
+from paper_copilot.cli.commands.reindex import reindex
 
 app = typer.Typer(
     name="paper-copilot",
@@ -15,6 +17,8 @@ app = typer.Typer(
 )
 app.command()(read)
 app.command()(doctor)
+app.command()(reindex)
+app.command(name="list")(list_)
 
 
 if __name__ == "__main__":
