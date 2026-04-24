@@ -8,22 +8,27 @@
 
 ## Current Status
 
-> 更新于 2026-04-23。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
+> 更新于 2026-04-24。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
-- **已完成**：M1–M7。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
-  `--lang en|zh`。三篇 reality check(transformer / vit / vilbert)产物
-  在 `~/.paper-copilot/papers/`。
-- **当前阶段**：Phase 2(真实使用 2 周,**非编码 milestone**)。用户用
-  `paper-copilot` 读 1-2 篇/天,积累 `issues.md`。Claude 在此阶段不主动
-  动代码,除非用户明确要求。
-- **下一个编码 milestone**：M8(prompt/schema 迭代)或 M9(cache 分层),
-  前置条件 = `issues.md` 攒到 5+ 条实际痛点。
-- **M7 已知偏离 ARCHITECTURE**：`retrieval/chunker.py` + `retrieval/search.py`
-  推迟,详见本文档 M7 节的"实际遇到的问题"和 ARCHITECTURE.md 的 `retrieval/`。
-- **M7 可观察质量问题(M8 候选输入)**：
-  - `Contribution.confidence` 几乎全是 1.0 / 0.9,刻度未被使用
-  - `output_tokens` 贴 3000 天花板的 76–80%;大论文或 result-heavy 论文
+- **已完成**:M1–M8。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
+  `--lang en|zh`。M8 (2026-04-24) 关了 5 条 issue:outline fallback /
+  section 嵌套重复 / `meta.id` 字段 / Method 无 novel 闸门 / Confidence
+  刻度。详见 `docs/issues.md` 文末 M8 closure 节。
+- **当前阶段**:**等待 M9 启动**。Phase 2 两周节奏没用满,M8 当天关完,
+  Phase 2 数据基线存在 `docs/issues.md` 里作为 M9 / M14 eval 回归参照。
+- **下一个编码 milestone**:**M9 (prompt cache 分层 + 成本观测)**。
+  M9 可顺手做两件 M8 DEFERRED 下来的事:(a) `session.jsonl` 补 per-call
+  usage/latency(Phase 2 纪律"找最贵一步"依赖这个);(b) AlexNet
+  "English-language visual" 那类模板语义变体,若仍在 eval 时出现,需要
+  validator/output filter 类硬机制——但这是可选,M9 主线是 cache。
+- **M7 已知偏离 ARCHITECTURE**:`retrieval/chunker.py` + `retrieval/search.py`
+  仍推迟,详见 ARCHITECTURE.md 的 `retrieval/`。
+- **M8 回归已执行(6 篇)**:Zhou06 (outline 修) / Bahdanau + HGNN
+  (section dedup 修) / AlexNet + Inception + ViLBERT (schema 三合一)。
+  全部生效,1 残留:AlexNet 的"English-language visual"模板变体。
+- **M8 未收的 output_tokens / system prompt 观察**:
+  - `output_tokens` 贴 3000 天花板的 66–80%;大论文或 result-heavy 论文
     可能撞顶(已提到两次 `--lang zh` 开发中的 stringification 事故)
   - qwen3.6-flash 对长 system prompt 敏感,堆砌 emphasis 会破坏嵌套 schema
     的 structured-output 稳定性 → prompt 迭代时保持短而聚焦
@@ -316,11 +321,17 @@ demo 视频（你自己看，不对外）。视频作为简历项目的最终 de
 **依赖**：Phase 2 实打实做完
 
 **DoD**：
-- [ ] 至少 5 条 issues 被关闭（不是所有 issue 都要做，做最痛的几条）
-- [ ] 对之前不满意的 3 篇论文重跑，确认改善
-- [ ] 在 ARCHITECTURE.md 的"待验证假设"中勾掉或修改至少 2 条
+- [x] 至少 5 条 issues 被关闭（不是所有 issue 都要做，做最痛的几条）
+  — 2026-04-24 关了 5 条:outline fallback / section 嵌套重复 / `meta.id`
+    删 / Method `is_novel_to_this_paper` / Confidence → evidence_type
+- [x] 对之前不满意的 3 篇论文重跑，确认改善
+  — 重跑 6 篇:Zhou06 (outline) / Bahdanau + HGNN (dedup) / AlexNet +
+    Inception + ViLBERT (schema)
+- [x] 在 ARCHITECTURE.md 的"待验证假设"中勾掉或修改至少 2 条
+  — 修改 2 条"M5 已验证":SkimAgent 3 页假设加无 outline 分支;
+    Pydantic Field description 万能假设加"模板语义变体" caveat
 
-**预估**：2-3 sessions。
+**预估**：2-3 sessions。 **实际:1 session(2026-04-24)**。
 
 ---
 

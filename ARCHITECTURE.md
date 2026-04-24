@@ -363,6 +363,13 @@ cli.reindex
       — 三篇 reality check（transformer / vit / vilbert）用 3 页 front-matter
       + pymupdf 内嵌 outline 抽 PaperMeta + PaperSkeleton 全部通过，单篇
       成本 ¥0.01–0.015。
+      **M8 修正（2026-04-24）**：前提是 PDF 有 embedded outline。
+      Phase 2 的 Zhou 2006 NIPS（无 bookmarks）暴露:3 页前缀对无 outline
+      的 PDF 远远不够——Skim 只能推断出前 3 页的 section,Deep 后续按
+      该残缺 outline 切片,导致后半论文从未进入模型。现在 `skim.py` 分
+      两个常量：`_FRONT_MATTER_PAGES_WITH_OUTLINE = 3` 和
+      `_FRONT_MATTER_PAGES_WITHOUT_OUTLINE = 8`。对真正无 outline 的长论文
+      仍可能不够，M14 eval 重新评估。
 - [x] Pydantic Field description 作为 prompt 片段的有效性
       — M4 的设计赌注"description 写得好模型就懂"，M5 三篇全程未使用任何
       few-shot example，仅靠 description 措辞（尤其 arxiv_id 的
@@ -370,6 +377,18 @@ cli.reindex
       page_end 的 "Do not guess"）就让模型行为稳定到 3/3 reality check
       通过。未来 prompt iteration 的第一优先级是改 description，不是
       加 system prompt 或 few-shot。
+      **M8 修正（2026-04-24）**：description 对**模板型幻觉**有硬上限。
+      Phase 2 的 "low-resource languages" 模板命中 4/13 (FaceNet/LeNet/
+      AlexNet/ViLBERT)，"Not stated but likely:" 4/13。M8 在
+      `Limitation.description` 加反例后:"Not stated but likely:" 前缀
+      完全消失 ✓,但 AlexNet 把"low-resource languages"变形为"English-
+      language visual object recognition tasks"(图片数据没语言这件事
+      LLM 依然套模板)。结论:description 能杀"字面匹配"的模板,杀不掉
+      "语义变体"。后者需要 retry / validator / output filter 类硬机制
+      (M9+ 候选,非 prompt 层)。类似地,`Contribution.confidence` 从
+      float(0-1) 换成 `evidence_type` enum 后,字段使用从 79% clumping
+      到 1.0 变成结构化 3 档,证明**对于刻度型字段,enum > 数值 +
+      description 锚点**。
 
 **M5 推迟到后续 milestone 再验**（原 M5 那组里不属于 SkimAgent 单点能验的）：
 - [ ] sqlite-vec 够用，不需要独立向量库 — M7 推迟：retrieval chunker/search
