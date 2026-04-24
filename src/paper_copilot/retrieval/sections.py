@@ -32,6 +32,12 @@ def split_by_sections(pdf_path: Path, skeleton: PaperSkeleton) -> list[SectionTe
                 f"section {sec.title!r} page_start={sec.page_start} "
                 f"exceeds total_pages={total_pages}"
             )
+        # A section whose immediately-following sibling is deeper in the tree is
+        # a parent; extract_page_range would sweep across its children's pages
+        # and duplicate their content — the child emits the same pages again.
+        # Skip parents; leaves carry the actual body text.
+        if i + 1 < len(sections) and sections[i + 1].depth > sec.depth:
+            continue
         if sec.page_end is not None:
             inferred_end = sec.page_end
         elif i + 1 < len(sections):

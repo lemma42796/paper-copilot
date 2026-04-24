@@ -65,7 +65,7 @@ def test_split_by_sections_last_page_end_none_uses_total_pages(
     assert "P4" in out[0].text
 
 
-def test_split_by_sections_nested_overlap(
+def test_split_by_sections_skips_parent_to_avoid_child_duplication(
     make_pdf: Callable[[list[str]], Path],
 ) -> None:
     pdf = make_pdf(["P1", "P2", "P3"])
@@ -76,11 +76,38 @@ def test_split_by_sections_nested_overlap(
         ]
     )
     out = split_by_sections(pdf, skeleton)
-    assert len(out) == 2
-    assert "P2" in out[0].text
-    assert "P2" in out[1].text
-    assert out[0].depth == 1
-    assert out[1].depth == 2
+    assert len(out) == 1
+    assert out[0].title == "Child"
+    assert out[0].depth == 2
+
+
+def test_split_by_sections_emits_sibling_at_same_depth(
+    make_pdf: Callable[[list[str]], Path],
+) -> None:
+    pdf = make_pdf(["P1", "P2", "P3", "P4"])
+    skeleton = PaperSkeleton(
+        sections=[
+            _sm("A", 1, 2, depth=1),
+            _sm("B", 3, 4, depth=1),
+        ]
+    )
+    out = split_by_sections(pdf, skeleton)
+    assert [s.title for s in out] == ["A", "B"]
+
+
+def test_split_by_sections_parent_skipped_even_without_page_end(
+    make_pdf: Callable[[list[str]], Path],
+) -> None:
+    pdf = make_pdf(["P1", "P2", "P3"])
+    skeleton = PaperSkeleton(
+        sections=[
+            _sm("Parent", 1, None, depth=1),
+            _sm("Child", 2, None, depth=2),
+            _sm("Next", 3, 3, depth=1),
+        ]
+    )
+    out = split_by_sections(pdf, skeleton)
+    assert [s.title for s in out] == ["Child", "Next"]
 
 
 def test_split_by_sections_empty_skeleton(
