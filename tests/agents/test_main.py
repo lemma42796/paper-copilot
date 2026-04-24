@@ -12,7 +12,6 @@ from paper_copilot.schemas.paper import (
 
 def _make_meta() -> PaperMeta:
     return PaperMeta(
-        id="test_id",
         title="Test Title",
         authors=["Alice", "Bob"],
         arxiv_id=None,
@@ -24,7 +23,11 @@ def _make_meta() -> PaperMeta:
 def _make_deep_result() -> DeepResult:
     return DeepResult(
         contributions=[
-            Contribution(claim="a novel method", type="novel_method", confidence=0.9),
+            Contribution(
+                claim="a novel method",
+                type="novel_method",
+                evidence_type="explicit_claim",
+            ),
         ],
         methods=[
             Method(
@@ -32,6 +35,7 @@ def _make_deep_result() -> DeepResult:
                 description="it does stuff",
                 key_formula=None,
                 novelty_vs_prior="replaces X with Y",
+                is_novel_to_this_paper=True,
             ),
         ],
         experiments=[
@@ -52,7 +56,7 @@ def _make_deep_result() -> DeepResult:
 
 def test_assemble_paper_produces_valid_paper() -> None:
     paper = _assemble_paper(_make_meta(), _make_deep_result())
-    assert paper.meta.id == "test_id"
+    assert paper.meta.title == "Test Title"
     assert len(paper.contributions) == 1
     assert len(paper.methods) == 1
     assert len(paper.experiments) == 1

@@ -14,18 +14,14 @@ ContributionType = Literal[
     "survey",
 ]
 
+EvidenceType = Literal["explicit_claim", "author_hedge", "our_inference"]
+
 LimitationType = Literal["scope", "method", "empirical"]
 
 
 class PaperMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(
-        description=(
-            "Canonical paper identifier. Prefer the arXiv id (e.g. '2307.09288'); "
-            "otherwise any stable unique string provided by the harness."
-        )
-    )
     title: str = Field(
         description=(
             "The exact paper title as printed on the first page. "
@@ -42,12 +38,13 @@ class PaperMeta(BaseModel):
     arxiv_id: str | None = Field(
         default=None,
         description=(
-            "ArXiv identifier as printed on the first page. Copy the string EXACTLY "
-            "as it appears, including any 'arXiv:' prefix and any version suffix like "
-            "'v7'. Examples of acceptable values: 'arXiv:1706.03762v7', "
-            "'arXiv:2307.09288', '2307.09288', 'astro-ph/0601001'. Do not strip the "
-            "prefix, do not drop the version, do not canonicalize. Null only if no "
-            "arXiv identifier is printed anywhere on the front matter."
+            "ArXiv identifier as printed on the paper. Copy EXACTLY as it appears, "
+            "including any 'arXiv:' prefix and any version suffix like 'v7'. "
+            "NEVER invent or infer an arXiv id from the title, authors, year, or your "
+            "own memory of the paper. If no arXiv id is visibly printed anywhere in "
+            "the extracted text, return null. Pre-2007 papers used formats like "
+            "'cs/0406013' — only return these when literally printed; do not "
+            "construct them from the publication date."
         ),
     )
     year: int = Field(
@@ -99,14 +96,24 @@ class Contribution(BaseModel):
             "If none fit cleanly, pick the closest and put the nuance in `claim`."
         )
     )
-    confidence: float = Field(
-        ge=0.0,
-        le=1.0,
+    evidence_type: EvidenceType = Field(
         description=(
-            "Your confidence (0.0-1.0) that the paper itself supports this claim with "
-            "evidence it presents. 1.0 = directly demonstrated in the paper's own "
-            "experiments. 0.5 = stated but weakly supported. "
-            "Below 0.3 = probably should not include this Contribution at all."
+            "How grounded this claim is in the paper's own language. Pick exactly one.\n"
+            "The decision is about the supporting sentence(s) the paper uses for the "
+            "claim, not about how citable the claim is in general.\n"
+            "'author_hedge' — FIRST CHECK. If the supporting sentence(s) contain any "
+            "hedge marker ('we postulate', 'we argue', 'we believe', 'we hypothesize', "
+            "'may', 'appears to', 'suggests', 'likely', 'conjecture') select this. "
+            "The authors are signaling they have a view but not a demonstration. This "
+            "is the correct answer for analysis/interpretation claims even when the "
+            "paragraph is long and detailed.\n"
+            "'explicit_claim' — otherwise, if the paper states it directly with "
+            "numbers (e.g. '21.2% top-1 error'), definitions (e.g. 'LSR is defined "
+            "as...'), or demonstrated experiments. Default to this ONLY when there "
+            "is no hedge language in the supporting prose.\n"
+            "'our_inference' — you are extrapolating from indirect evidence; the "
+            "paper does not say this. Avoid this category — prefer to drop the "
+            "contribution entirely rather than include one you had to invent."
         ),
     )
 
@@ -146,7 +153,20 @@ class Method(BaseModel):
             "How this method differs from prior work. 1-2 sentences, mechanism-focused, "
             "not metric-focused. "
             "Bad: 'achieves 2% higher F1'. "
-            "Good: 'replaces softmax attention with sparse top-k selection'."
+            "Good: 'replaces softmax attention with sparse top-k selection'. "
+            "When `is_novel_to_this_paper` is false, describe the method's actual "
+            "origin (e.g. 'Rumelhart et al. 1986, used here as a training primitive') "
+            "rather than inventing novelty it does not have."
+        )
+    )
+    is_novel_to_this_paper: bool = Field(
+        description=(
+            "True only if this paper proposes this method as one of its own "
+            "contributions. False when it is background (e.g. backpropagation in a "
+            "2025 deep-learning paper), a baseline the paper is compared against, or "
+            "an existing technique the paper merely uses as a building block. "
+            "Prior-work sections, literature reviews, and 'we build on X' mentions "
+            "should be false."
         )
     )
 
@@ -158,12 +178,20 @@ class Experiment(BaseModel):
         description=(
             "Name of the benchmark or dataset (e.g. 'GLUE', 'ImageNet-1k', "
             "'custom 1B-token arXiv crawl'). "
-            "For multi-dataset experiments, emit one Experiment per dataset."
+            "Emit one Experiment per (dataset, metric) pair — if a single table "
+            "reports top-1 and top-5 on ImageNet, that is two Experiments, not one "
+            "with a combined metric string. Same for multi-condition reports like "
+            "'All' vs 'No UNK' — split into separate Experiments with the condition "
+            "in the metric or raw field."
         )
     )
     metric: str = Field(
         description=(
-            "Metric reported (e.g. 'top-1 accuracy', 'BLEU', 'perplexity', 'wall-clock speedup')."
+            "A single metric reported (e.g. 'top-1 accuracy', 'BLEU', 'perplexity', "
+            "'wall-clock speedup'). Never combine two metrics with a slash like "
+            "'mAP / Rank-1' — that produces one Experiment covering two results, and "
+            "`value` loses one of them. If the paper reports both, emit two "
+            "Experiments."
         )
     )
     value: float | None = Field(
@@ -225,12 +253,17 @@ class Limitation(BaseModel):
     )
     description: str = Field(
         description=(
-            "One concrete sentence stating the limitation. "
-            "Prefer limitations the authors state themselves; if extrapolating, "
-            "prefix with 'Not stated but likely:'. "
-            "Bad: 'there are some limitations'. "
-            "Good: 'experiments are English-only; transfer to low-resource languages "
-            "is not evaluated'."
+            "One concrete sentence stating the limitation, as the authors themselves "
+            "describe it. Only include limitations the paper discusses — in its own "
+            "limitations / conclusion / discussion sections, or in hedged phrasing "
+            "within the main body. Do NOT speculate on limitations the authors do "
+            "not address, and do NOT apply template phrasings from unrelated domains "
+            "(e.g. do not add 'low-resource languages' to a vision paper, do not add "
+            "'scalability' to a method paper that never discusses scale). If the "
+            "paper genuinely discusses no limitation, the list around this field "
+            "should be empty — return zero Limitation entries rather than inventing "
+            "one. Do not prefix with 'Not stated but likely' or similar; if you feel "
+            "the need to do so, the limitation should not be in the list."
         )
     )
 
@@ -327,9 +360,9 @@ class Paper(BaseModel):
     )
     limitations: list[Limitation] = Field(
         description=(
-            "Limitations stated by the authors, or inferable from the experimental "
-            "setup. An empty list is acceptable when the paper genuinely has none "
-            "worth noting."
+            "Limitations the authors themselves state. An empty list is the correct "
+            "answer when the paper does not discuss its own limitations — it is "
+            "better to return zero entries than to invent template-shaped ones."
         )
     )
     cross_paper_links: list[CrossPaperLink] = Field(

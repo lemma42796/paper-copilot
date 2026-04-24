@@ -20,7 +20,7 @@ _HEADERS: dict[str, dict[str, str]] = {
         "limitations": "Limitations",
         "novelty": "Novelty",
         "related": "Related Papers",
-        "confidence": "confidence",
+        "baseline": "baseline",
     },
     "zh": {
         "authors": "作者",
@@ -33,7 +33,20 @@ _HEADERS: dict[str, dict[str, str]] = {
         "limitations": "局限",
         "novelty": "新意",
         "related": "相关论文",
-        "confidence": "置信度",
+        "baseline": "基线",
+    },
+}
+
+_EVIDENCE_LABELS: dict[str, dict[str, str]] = {
+    "en": {
+        "explicit_claim": "explicit",
+        "author_hedge": "authors hedge",
+        "our_inference": "inferred",
+    },
+    "zh": {
+        "explicit_claim": "明说",
+        "author_hedge": "作者缓和措辞",
+        "our_inference": "推断",
     },
 }
 
@@ -54,16 +67,18 @@ def to_markdown(paper: Paper, *, language: Literal["en", "zh"] = "en") -> str:
     lines.append("  \n".join(bib))
     lines.append("")
 
+    evidence = _EVIDENCE_LABELS[language]
     lines.append(f"## {h['contributions']}")
     lines.append("")
     for c in paper.contributions:
-        lines.append(f"- **[{c.type}]** ({h['confidence']} {c.confidence}) {c.claim}")
+        lines.append(f"- **[{c.type}]** ({evidence[c.evidence_type]}) {c.claim}")
     lines.append("")
 
     lines.append(f"## {h['methods']}")
     lines.append("")
     for method in paper.methods:
-        lines.append(f"### {method.name}")
+        tag = "" if method.is_novel_to_this_paper else f" *[{h['baseline']}]*"
+        lines.append(f"### {method.name}{tag}")
         lines.append("")
         lines.append(method.description)
         lines.append("")

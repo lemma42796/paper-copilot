@@ -2,28 +2,28 @@
   "contributions": [
     {
       "claim": "The Transformer is a model architecture that eschews recurrence and convolution, relying entirely on self-attention mechanisms to draw global dependencies between input and output positions.",
-      "confidence": 1.0,
-      "type": "novel_method"
+      "type": "novel_method",
+      "evidence_type": "explicit_claim"
     },
     {
       "claim": "The Transformer achieves a new state-of-the-art BLEU score of 28.4 on the WMT 2014 English-to-German translation task, outperforming all previously reported models including ensembles.",
-      "confidence": 1.0,
-      "type": "novel_result"
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
     },
     {
       "claim": "The Transformer big model achieves a BLEU score of 41.0 (reported as 41.8 in Table 2 for EN-FR) on the WMT 2014 English-to-French translation task, outperforming all previously published single models at less than 1/4 the training cost.",
-      "confidence": 1.0,
-      "type": "novel_result"
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
     },
     {
       "claim": "The Transformer generalizes well to other tasks, achieving an F1 score of 92.7 on English constituency parsing (WSJ Section 23) in a semi-supervised setting, surpassing previous non-generative and multi-task models.",
-      "confidence": 1.0,
-      "type": "novel_result"
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
     },
     {
       "claim": "Self-attention layers reduce the maximum path length between any two positions in the network to O(1), facilitating the learning of long-range dependencies compared to recurrent (O(n)) or convolutional (O(log_k(n))) layers.",
-      "confidence": 1.0,
-      "type": "novel_result"
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
     }
   ],
   "experiments": [
@@ -76,10 +76,6 @@
     {
       "description": "The self-attention mechanism has quadratic complexity O(n^2) with respect to sequence length n, which may limit scalability to very long sequences without restricted attention variants.",
       "type": "method"
-    },
-    {
-      "description": "Not stated but likely: The model's performance on tasks requiring precise spatial or hierarchical structural reasoning beyond what attention captures may be limited compared to specialized architectures like Recursive Neural Networks or PCFGs.",
-      "type": "empirical"
     }
   ],
   "methods": [
@@ -87,24 +83,28 @@
       "description": "An attention function computing weighted sums of values based on compatibility between queries and keys. Specifically uses scaled dot-product attention where dot products are divided by sqrt(d_k) before softmax to prevent gradient vanishing for large dimensions.",
       "key_formula": "\\mathrm{Attention}(Q, K, V) = \\mathrm{softmax}\\left(\\frac{QK^\\top}{\\sqrt{d_k}}\\right)V",
       "name": "Scaled Dot-Product Attention",
-      "novelty_vs_prior": "Introduces a scaling factor of 1/sqrt(d_k) to dot-product attention to stabilize gradients when key dimensions are large, differing from standard additive or unscaled dot-product attention."
+      "novelty_vs_prior": "Introduces a scaling factor of 1/sqrt(d_k) to dot-product attention to stabilize gradients when key dimensions are large, differing from standard additive or unscaled dot-product attention.",
+      "is_novel_to_this_paper": true
     },
     {
       "description": "Projects queries, keys, and values h times into different subspaces using learned linear projections, performs self-attention in parallel on each projected set, concatenates the results, and applies a final linear projection. This allows the model to attend to information from different representation subspaces simultaneously.",
       "key_formula": "\\mathrm{MultiHead}(Q, K, V) = \\mathrm{Concat}(\\mathrm{head}_1, ..., \\mathrm{head}_h)W^O \\text{ where } \\mathrm{head}_i = \\mathrm{Attention}(QW_i^Q, KW_i^K, VW_i^V)",
       "name": "Multi-Head Attention",
-      "novelty_vs_prior": "Extends single-head attention by running multiple attention heads in parallel with distinct linear projections, allowing the model to jointly attend to different positional and semantic patterns."
+      "novelty_vs_prior": "Extends single-head attention by running multiple attention heads in parallel with distinct linear projections, allowing the model to jointly attend to different positional and semantic patterns.",
+      "is_novel_to_this_paper": true
     },
     {
       "description": "An encoder-decoder architecture composed of stacked layers. The encoder has N=6 identical layers, each with a multi-head self-attention sub-layer and a position-wise feed-forward network, both wrapped in residual connections and layer normalization. The decoder adds a third sub-layer performing multi-head attention over the encoder's output and uses masked self-attention to preserve auto-regressivity.",
       "name": "Transformer Architecture",
-      "novelty_vs_prior": "Replaces all recurrent and convolutional layers in sequence-to-sequence models with stacked self-attention and point-wise feed-forward networks, removing sequential computation constraints entirely."
+      "novelty_vs_prior": "Replaces all recurrent and convolutional layers in sequence-to-sequence models with stacked self-attention and point-wise feed-forward networks, removing sequential computation constraints entirely.",
+      "is_novel_to_this_paper": true
     },
     {
       "description": "Injects information about the relative or absolute position of tokens into the model since it lacks recurrence or convolution. Uses fixed sine and cosine functions of different frequencies for each dimension of the position vector.",
       "key_formula": "PE_{(pos,2i)} = \\sin(pos / 10000^{2i/d_{model}}), \\quad PE_{(pos,2i+1)} = \\cos(pos / 10000^{2i/d_{model}})",
       "name": "Sinusoidal Positional Encoding",
-      "novelty_vs_prior": "Uses fixed sinusoidal embeddings rather than learned ones, hypothesized to allow the model to extrapolate to sequence lengths longer than those seen during training due to the linear relationship between relative positions."
+      "novelty_vs_prior": "Uses fixed sinusoidal embeddings rather than learned ones, hypothesized to allow the model to extrapolate to sequence lengths longer than those seen during training due to the linear relationship between relative positions.",
+      "is_novel_to_this_paper": true
     }
   ]
 }

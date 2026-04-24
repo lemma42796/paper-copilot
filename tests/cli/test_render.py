@@ -18,7 +18,6 @@ def _make_paper(
 ) -> Paper:
     return Paper(
         meta=PaperMeta(
-            id="test_id",
             title="Test Title",
             authors=["Alice", "Bob"],
             arxiv_id=arxiv_id,
@@ -26,7 +25,11 @@ def _make_paper(
             venue=venue,
         ),
         contributions=[
-            Contribution(claim="a brilliant insight", type="novel_method", confidence=0.9),
+            Contribution(
+                claim="a brilliant insight",
+                type="novel_method",
+                evidence_type="explicit_claim",
+            ),
         ],
         methods=[
             Method(
@@ -34,6 +37,7 @@ def _make_paper(
                 description="it foos",
                 key_formula=key_formula,
                 novelty_vs_prior="introduces sigma",
+                is_novel_to_this_paper=True,
             ),
         ],
         experiments=[
@@ -90,7 +94,7 @@ def test_to_markdown_zh_headers() -> None:
     assert "**年份:**" in md
     assert "**会议:**" in md
     assert "*新意:*" in md
-    assert "置信度" in md
+    assert "明说" in md
     # English section titles should NOT appear
     assert "## Contributions" not in md
     assert "## Methods" not in md

@@ -15,14 +15,13 @@ def _valid_contribution() -> dict[str, Any]:
     return {
         "claim": "introduces tiled attention with softmax recomputation",
         "type": "novel_method",
-        "confidence": 0.9,
+        "evidence_type": "explicit_claim",
     }
 
 
 def _valid_paper_dict() -> dict[str, Any]:
     return {
         "meta": {
-            "id": "2205.14135",
             "title": "FlashAttention: Fast and Memory-Efficient Exact Attention",
             "authors": ["Tri Dao", "Daniel Y. Fu"],
             "arxiv_id": "2205.14135",
@@ -43,6 +42,7 @@ def _valid_paper_dict() -> dict[str, Any]:
                     "replaces the dense attention read/write pattern with an "
                     "IO-aware tiled schedule"
                 ),
+                "is_novel_to_this_paper": True,
             }
         ],
         "experiments": [
@@ -72,15 +72,15 @@ def test_paper_json_roundtrip() -> None:
 
 
 def test_extra_field_rejected() -> None:
-    bad = _valid_contribution() | {"confidence_score": 0.9}
+    bad = _valid_contribution() | {"confidence": 0.9}
     with pytest.raises(ValidationError) as exc:
         Contribution.model_validate(bad)
     errors = exc.value.errors()
-    assert any(e["type"] == "extra_forbidden" and e["loc"] == ("confidence_score",) for e in errors)
+    assert any(e["type"] == "extra_forbidden" and e["loc"] == ("confidence",) for e in errors)
 
 
 def test_missing_required_field_rejected() -> None:
-    bad = {"claim": "some claim", "confidence": 0.5}
+    bad = {"claim": "some claim", "evidence_type": "explicit_claim"}
     with pytest.raises(ValidationError) as exc:
         Contribution.model_validate(bad)
     errors = exc.value.errors()
@@ -98,7 +98,7 @@ def test_nested_validation_loc_points_to_index() -> None:
     data = _valid_paper_dict()
     data["contributions"] = [
         _valid_contribution(),
-        {"claim": "second claim", "confidence": 0.4},  # missing `type`
+        {"claim": "second claim", "evidence_type": "explicit_claim"},  # missing `type`
     ]
     with pytest.raises(ValidationError) as exc:
         Paper.model_validate(data)
@@ -113,11 +113,11 @@ def test_empty_contributions_allowed() -> None:
     assert paper.contributions == []
 
 
-def test_confidence_out_of_range_rejected() -> None:
+def test_evidence_type_unknown_value_rejected() -> None:
     with pytest.raises(ValidationError):
-        Contribution.model_validate({"claim": "x", "type": "novel_method", "confidence": 1.5})
-    with pytest.raises(ValidationError):
-        Contribution.model_validate({"claim": "x", "type": "novel_method", "confidence": -0.1})
+        Contribution.model_validate(
+            {"claim": "x", "type": "novel_method", "evidence_type": "gut_feeling"}
+        )
 
 
 def test_year_out_of_range_rejected() -> None:
