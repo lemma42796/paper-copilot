@@ -9,12 +9,14 @@ from uuid import uuid4
 
 from pydantic import TypeAdapter, ValidationError
 
+from paper_copilot.shared.cost import UsageLike, read_usage_field
 from paper_copilot.shared.errors import SessionError
 from paper_copilot.shared.logging import get_logger
 
 from .paths import paper_dir, session_file
 from .types import (
     FinalOutput,
+    LLMCall,
     Message,
     SchemaValidation,
     SessionEntry,
@@ -145,6 +147,31 @@ class SessionStore:
             success=success,
             error=error,
             retry_count=retry_count,
+        )
+        self._write(entry)
+        return entry.id
+
+    def append_llm_call(
+        self,
+        *,
+        agent: str,
+        model: str,
+        usage: UsageLike,
+        latency_ms: int,
+        stop_reason: str,
+    ) -> str:
+        entry = LLMCall(
+            id=_new_id(),
+            ts=_now_ts(),
+            parent_id=self._last_id,
+            agent=agent,
+            model=model,
+            input_tokens=read_usage_field(usage, "input_tokens"),
+            output_tokens=read_usage_field(usage, "output_tokens"),
+            cache_creation_input_tokens=read_usage_field(usage, "cache_creation_input_tokens"),
+            cache_read_input_tokens=read_usage_field(usage, "cache_read_input_tokens"),
+            latency_ms=latency_ms,
+            stop_reason=stop_reason,
         )
         self._write(entry)
         return entry.id

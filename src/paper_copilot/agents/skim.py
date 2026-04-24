@@ -21,10 +21,11 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from paper_copilot.agents.llm_client import LLMClient
+from paper_copilot.agents.llm_client import DEFAULT_MODEL, LLMClient
 from paper_copilot.agents.loop import LLMResponse, TextBlock, ToolUseBlock
 from paper_copilot.schemas.paper import PaperMeta, PaperSkeleton
 from paper_copilot.session import SessionStore
+from paper_copilot.shared.cache import cached_system, cached_user_text, mark_tools_cached
 from paper_copilot.shared.errors import AgentError
 from paper_copilot.shared.jsonschema import inline_refs
 from paper_copilot.shared.logging import get_logger
@@ -113,19 +114,27 @@ class SkimAgent:
             _FRONT_MATTER_PAGES_WITH_OUTLINE,
             _FRONT_MATTER_PAGES_WITHOUT_OUTLINE,
         )
-        messages = _build_messages(front_matter)
-        tools = [_build_tool()]
+        user_text = _build_user_text(front_matter)
+        messages = [{"role": "user", "content": cached_user_text(user_text)}]
+        tools = mark_tools_cached([_build_tool()])
         if self._store is not None:
             self._store.append_system_message(_SYSTEM_PROMPT)
-            self._store.append_message(role="user", text=messages[0]["content"])
+            self._store.append_message(role="user", text=user_text)
         response = await self._client.generate(
             messages=messages,
             tools=tools,
             tool_choice={"type": "tool", "name": _TOOL_NAME},
-            system=_SYSTEM_PROMPT,
+            system=cached_system(_SYSTEM_PROMPT),
         )
 
         if self._store is not None:
+            self._store.append_llm_call(
+                agent="SkimAgent",
+                model=DEFAULT_MODEL,
+                usage=response.usage if response.usage is not None else {},
+                latency_ms=response.latency_ms,
+                stop_reason=response.stop_reason,
+            )
             for block in response.content:
                 if isinstance(block, TextBlock):
                     self._store.append_message(role="assistant", text=block.text)
@@ -173,7 +182,7 @@ def _build_tool() -> dict[str, Any]:
     }
 
 
-def _build_messages(front_matter: PdfFrontMatter) -> list[dict[str, Any]]:
+def _build_user_text(front_matter: PdfFrontMatter) -> str:
     parts: list[str] = []
     if front_matter.outline is None:
         parts.append("No embedded outline available; infer section structure from the text below.")
@@ -195,7 +204,7 @@ def _build_messages(front_matter: PdfFrontMatter) -> list[dict[str, Any]]:
     )
     parts.append("")
     parts.append(front_matter.text)
-    return [{"role": "user", "content": "\n".join(parts)}]
+    return "\n".join(parts)
 
 
 def _normalize_arxiv_id(raw: str) -> str | None:

@@ -395,9 +395,15 @@ cli.reindex
       实际推迟到 Phase 2 信号驱动再加，详见 `retrieval/` 节
 - [ ] 单篇论文 chunk 50-200 个，top-k=5 够用 — 同上，推迟
 - [ ] Claude Haiku 做 query rewriting 足够，不用 Opus — M7/M8
-- [ ] Prompt cache 命中率能到 60%+（否则分层策略要重调） — M9
-      — ST1.5 spike 已确认 Dashscope 支持 `cache_control` ephemeral 5m/1h TTL，
-      M7 DeepAgent 单调用未启用；M9 层叠或 per-field fan-out 时可用
+- [x] Prompt cache 命中率能到 60%+ — **M9 打脸**:qwen-flash +
+      Dashscope 架构下 user-message cache 有**未公开的 ~5K token 大小
+      上限**,Skim 的 4K user 块能全命中,Deep 的 18K user 块打 marker 反而
+      被按 125% 创建费扣钱却永远读不出来。现状:Skim 三层 marker 全打,
+      Deep 只打 system+tools(~2809 tokens)。同 paper rerun 成本下降上限
+      ~19%,跨 paper 命中率上限 ~14-19%。原 60% 目标在当前模型+供应商组合
+      下**架构性够不到**,已把 TASKS.md M9 DoD 改成 ≥15%。触发重验条件:
+      qwen 版本升级 / 切到其他兼容层 / DeepAgent 改 per-field fan-out
+      让单调用 user 块缩到 5K 以内。回归脚本:`scripts/m9_cache_ab.py`
 - [x] DeepAgent 每字段一个独立实例 vs 一个实例输出多字段——哪种准确率更高 — M7
       — 选了"一个实例输出四个 list"的聚合方案（D2 决策）。Transformer/ViT/
       ViLBERT 三篇 reality check 下 schema validation 全通过，字段数量
@@ -436,6 +442,20 @@ cli.reindex
       TextBlock，只返回 tool_use 块。影响：session.jsonl 的 message(assistant)
       entry 在 SkimAgent 场景下常态缺位；M7 DeepAgent 若同样用 forced tool，
       M9 prompt cache 分层需以 tool_use 为边界而非 assistant turn 边界。
+
+**M9 过程中新暴露的假设**（2026-04-24 实测产出）：
+- [x] Dashscope 百炼 Anthropic-compat 对 `cache_control: ephemeral` 的
+      **user-message 块存在未公开的大小阈值**（实测约 ~5K tokens)。
+      超过阈值的 user 块,SDK/HTTP 层接受 marker 并按 125% 的"创建费"
+      计账（`cache_creation_input_tokens` 被报回去）,但下次请求命中不到
+      (连续 4 次 rerun 内 `cache_read_input_tokens` 恒为 system+tools 那
+      2809 不动)。**净亏**,且官方文档未提（"无最大 cache block"）。
+      落地 workaround:Skim (user ~4K,在阈值内) 三层 marker 全打,
+      Deep (user ~18K) 只打 system+tools,user 不打。触发重验条件:
+      (a) qwen 模型版本升级 — 阈值可能变
+      (b) 切换到 Anthropic 原生端点 — 那边应当无此限制
+      (c) DeepAgent 改 per-field fan-out 让单调用 user 块 < 5K
+      重验方法:`scripts/m9_cache_ab.py on|off` 两两对比 cache_read/create。
 
 **M11 之后审视（跨论文相关）**：
 - [ ] bge-m3 在论文语料上的召回率够用（否则考虑换 voyage-3-large 等 API）

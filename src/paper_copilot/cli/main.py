@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import typer
 
+from paper_copilot.cli.commands.doctor import doctor
 from paper_copilot.cli.commands.read import read
 
 app = typer.Typer(
@@ -13,6 +14,7 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 app.command()(read)
+app.command()(doctor)
 
 
 if __name__ == "__main__":

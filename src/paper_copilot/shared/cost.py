@@ -52,7 +52,13 @@ class _UsageObject(Protocol):
 type UsageLike = _UsageObject | Mapping[str, int | None]
 
 
-def _read(usage: UsageLike, name: str) -> int:
+def read_usage_field(usage: UsageLike, name: str) -> int:
+    """Read a usage counter from either a dict or an anthropic ``Usage`` object.
+
+    Dashscope's Anthropic-compat endpoint may omit ``cache_creation_input_tokens``
+    and ``cache_read_input_tokens`` entirely; ``getattr``/``.get`` with a 0
+    default handles both shapes identically.
+    """
     value = usage.get(name, 0) if isinstance(usage, Mapping) else getattr(usage, name, 0)
     return value or 0
 
@@ -69,10 +75,10 @@ class CostTracker:
     def record(self, usage: UsageLike) -> None:
         # TODO(M5): 首次调 Dashscope 时验证 usage 是否仍是 disjoint 语义,
         # 若为 OTel 风格的 overlapping 语义需调整计费公式。
-        input_tok = _read(usage, "input_tokens")
-        output_tok = _read(usage, "output_tokens")
-        cache_create_tok = _read(usage, "cache_creation_input_tokens")
-        cache_read_tok = _read(usage, "cache_read_input_tokens")
+        input_tok = read_usage_field(usage, "input_tokens")
+        output_tok = read_usage_field(usage, "output_tokens")
+        cache_create_tok = read_usage_field(usage, "cache_creation_input_tokens")
+        cache_read_tok = read_usage_field(usage, "cache_read_input_tokens")
 
         self._input_tokens += input_tok
         self._output_tokens += output_tok

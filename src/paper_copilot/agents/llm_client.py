@@ -12,6 +12,7 @@ NOT touch `CostTracker` — the caller records `response.usage` itself.
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Final
 
 import anthropic
@@ -54,7 +55,7 @@ class LLMClient:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         tool_choice: dict[str, Any] | None = None,
-        system: str | None = None,
+        system: str | list[dict[str, Any]] | None = None,
         max_tokens: int | None = None,
     ) -> LLMResponse:
         kwargs: dict[str, Any] = {
@@ -70,6 +71,7 @@ class LLMClient:
         if tool_choice is not None:
             kwargs["tool_choice"] = tool_choice
 
+        t0 = time.perf_counter()
         try:
             resp = await self._client.messages.create(**kwargs)
         except anthropic.APIConnectionError as e:
@@ -80,6 +82,7 @@ class LLMClient:
             raise AgentError(f"upstream rate limited: {e}") from e
         except anthropic.APIStatusError as e:
             raise AgentError(f"upstream {e.status_code}: {e.message}") from e
+        latency_ms = int((time.perf_counter() - t0) * 1000)
 
         stop_reason = resp.stop_reason
         if stop_reason not in ("end_turn", "tool_use"):
@@ -89,7 +92,12 @@ class LLMClient:
                 f"content had {len(resp.content)} block(s)"
             )
         content: list[ContentBlock] = [_convert_block(b) for b in resp.content]
-        return LLMResponse(content=content, stop_reason=stop_reason, usage=resp.usage)
+        return LLMResponse(
+            content=content,
+            stop_reason=stop_reason,
+            usage=resp.usage,
+            latency_ms=latency_ms,
+        )
 
 
 def _convert_block(block: Any) -> ContentBlock:

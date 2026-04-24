@@ -12,6 +12,7 @@ EntryType = Literal[
     "tool_result",
     "schema_validation",
     "final_output",
+    "llm_call",
     "compaction",
     "branch_summary",
 ]
@@ -89,7 +90,30 @@ class FinalOutput(BaseModel):
     payload: dict[str, Any]
 
 
+class LLMCall(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    ts: str
+    type: Literal["llm_call"] = "llm_call"
+    parent_id: str | None
+    agent: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    cache_creation_input_tokens: int
+    cache_read_input_tokens: int
+    latency_ms: int
+    stop_reason: str
+
+
 SessionEntry = Annotated[
-    SessionHeader | SystemMessage | Message | ToolUse | ToolResult | SchemaValidation | FinalOutput,
+    SessionHeader
+    | SystemMessage
+    | Message
+    | ToolUse
+    | ToolResult
+    | SchemaValidation
+    | FinalOutput
+    | LLMCall,
     Field(discriminator="type"),
 ]

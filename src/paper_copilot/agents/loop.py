@@ -65,6 +65,7 @@ class LLMResponse:
     content: list[ContentBlock]
     stop_reason: StopReason
     usage: UsageLike | None = None
+    latency_ms: int = 0
 
 
 class LLMClientProtocol(Protocol):

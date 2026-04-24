@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from paper_copilot.agents.llm_client import LLMClient
+from paper_copilot.agents.llm_client import DEFAULT_MODEL, LLMClient
 from paper_copilot.agents.loop import LLMResponse, TextBlock, ToolUseBlock
 from paper_copilot.retrieval import SectionText, split_by_sections
 from paper_copilot.schemas.paper import (
@@ -31,6 +31,7 @@ from paper_copilot.schemas.paper import (
     PaperSkeleton,
 )
 from paper_copilot.session import SessionStore
+from paper_copilot.shared.cache import cached_system, mark_tools_cached
 from paper_copilot.shared.errors import AgentError
 from paper_copilot.shared.jsonschema import inline_refs
 
@@ -125,21 +126,33 @@ class DeepAgent:
         language: Literal["en", "zh"] = "en",
     ) -> DeepRun:
         sections = await asyncio.to_thread(split_by_sections, pdf_path, skeleton)
-        messages = _build_messages(sections)
-        tools = [_build_tool()]
+        user_text = _build_user_text(sections)
+        # No cache_control on the user message: Dashscope qwen-flash silently
+        # drops cache entries above ~5K tokens, so the 125% creation markup
+        # would be charged without any read-back benefit. See ARCHITECTURE.md
+        # "待验证的假设" (Dashscope user-cache size threshold).
+        messages = [{"role": "user", "content": user_text}]
+        tools = mark_tools_cached([_build_tool()])
         system = _SYSTEM_PROMPT + _LANGUAGE_INSTRUCTION[language]
         if self._store is not None:
             self._store.append_system_message(system)
-            self._store.append_message(role="user", text=messages[0]["content"])
+            self._store.append_message(role="user", text=user_text)
         response = await self._client.generate(
             messages=messages,
             tools=tools,
             tool_choice={"type": "tool", "name": _TOOL_NAME},
-            system=system,
+            system=cached_system(system),
             max_tokens=_MAX_TOKENS,
         )
 
         if self._store is not None:
+            self._store.append_llm_call(
+                agent="DeepAgent",
+                model=DEFAULT_MODEL,
+                usage=response.usage if response.usage is not None else {},
+                latency_ms=response.latency_ms,
+                stop_reason=response.stop_reason,
+            )
             for block in response.content:
                 if isinstance(block, TextBlock):
                     self._store.append_message(role="assistant", text=block.text)
@@ -186,6 +199,6 @@ def _build_tool() -> dict[str, Any]:
     }
 
 
-def _build_messages(sections: list[SectionText]) -> list[dict[str, Any]]:
+def _build_user_text(sections: list[SectionText]) -> str:
     parts = [f"## {s.title}\n\n{s.text}" for s in sections]
-    return [{"role": "user", "content": "\n\n".join(parts)}]
+    return "\n\n".join(parts)

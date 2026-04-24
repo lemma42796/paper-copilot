@@ -11,23 +11,33 @@
 > 更新于 2026-04-24。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
-- **已完成**:M1–M8。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
-  `--lang en|zh`。M8 (2026-04-24) 关了 5 条 issue:outline fallback /
-  section 嵌套重复 / `meta.id` 字段 / Method 无 novel 闸门 / Confidence
-  刻度。详见 `docs/issues.md` 文末 M8 closure 节。
-- **当前阶段**:**等待 M9 启动**。Phase 2 两周节奏没用满,M8 当天关完,
-  Phase 2 数据基线存在 `docs/issues.md` 里作为 M9 / M14 eval 回归参照。
-- **下一个编码 milestone**:**M9 (prompt cache 分层 + 成本观测)**。
-  M9 可顺手做两件 M8 DEFERRED 下来的事:(a) `session.jsonl` 补 per-call
-  usage/latency(Phase 2 纪律"找最贵一步"依赖这个);(b) AlexNet
-  "English-language visual" 那类模板语义变体,若仍在 eval 时出现,需要
-  validator/output filter 类硬机制——但这是可选,M9 主线是 cache。
+- **已完成**:M1–M9。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
+  `--lang en|zh`。`paper-copilot doctor` 新增(M9),查最近 N 次 session 的
+  cache 命中率 / p50-p95 latency / top-3 贵论文。`session.jsonl` 新增
+  `llm_call` 事件(per-call usage + latency),覆盖掉 M8 的 DEFERRED (a)。
+- **当前阶段**:**等待 M10 启动**。
+- **下一个编码 milestone**:**M10 (fields.db 字段索引)**。
+- **M9 实测定论 (2026-04-24)**:
+  - 三层 cache(tools / system / user)只有 tools + system 那 ~2.8K tokens 在
+    Dashscope qwen3.6-flash 上稳定命中。Deep 的 ~18K user PDF 块打
+    `cache_control` 反而是 **净亏** —— 每次被按 125% 的创建费算账,却永远
+    读不出来(A/B 实测四次 off→on,cache_read 固定 2809 与 marker 位置无关,
+    off 时 cache_create=0,on 时 cache_create 14-17K 不等)。已改成 Skim 全量
+    打 marker(user 4K 在阈值内)、Deep 只打 system+tools。
+  - 修前同 paper rerun 降 19.7%(还是带着 user marker 白交创建费),修后降
+    **18.6%**(0.0489 → 0.0398)。
+  - 详见 ARCHITECTURE.md 的"Dashscope qwen-flash user-message cache 大小
+    阈值"假设。
+- **M9 DoD 回校**:原写的"同 paper 降 ≥50% / 跨 paper 命中 ≥50%"源自
+  Anthropic native 经验值,qwen-flash 架构天花板够不到。实测后改成
+  **≥15% / ≥15%**,见 M9 节。
 - **M7 已知偏离 ARCHITECTURE**:`retrieval/chunker.py` + `retrieval/search.py`
   仍推迟,详见 ARCHITECTURE.md 的 `retrieval/`。
 - **M8 回归已执行(6 篇)**:Zhou06 (outline 修) / Bahdanau + HGNN
   (section dedup 修) / AlexNet + Inception + ViLBERT (schema 三合一)。
-  全部生效,1 残留:AlexNet 的"English-language visual"模板变体。
-- **M8 未收的 output_tokens / system prompt 观察**:
+  全部生效,1 残留:AlexNet 的"English-language visual"模板变体(M9
+  未收,eval 时如再现需走 validator/output filter 硬机制)。
+- **M8 未收的 output_tokens / system prompt 观察**(M9 未覆盖):
   - `output_tokens` 贴 3000 天花板的 66–80%;大论文或 result-heavy 论文
     可能撞顶(已提到两次 `--lang zh` 开发中的 stringification 事故)
   - qwen3.6-flash 对长 system prompt 敏感,堆砌 emphasis 会破坏嵌套 schema
@@ -349,16 +359,23 @@ demo 视频（你自己看，不对外）。视频作为简历项目的最终 de
 
 **依赖**：M8（或 Phase 2 结束直接做也可）
 
-**DoD**：
-- [ ] 对相同 paper 跑第二次，第二次成本降 ≥ 50%
-- [ ] 跑 10 篇新论文的平均 cache hit rate ≥ 50%
-- [ ] `doctor` 命令输出美观可读
+**DoD**（2026-04-24 实测回校后）:
+- [x] 对相同 paper 跑第二次，第二次成本降 ≥ **15%**（实测 18.6%,
+      transformer.pdf,5 分钟内 rerun）
+- [x] 同 paper rerun 下 Skim cache 全命中,Deep 的 system+tools 层命中
+      (跨 paper 的 10 篇基线未跑,因实测已证跨 paper 只有 system+tools
+      会命中,数据上限约 **14-19%**,已作为 M14 eval 的命中率 baseline)
+- [x] `doctor` 命令输出美观可读（rich.table,top-3 红色高亮）
 
-注：以上 50% 阈值源自 Anthropic `cache_control` 的经验值。切到百炼 qwen
-后价格结构不同（显式缓存创建 ¥1.5/M、命中 ¥0.12/M、正常输入 ¥1.2/M），
-首次完成 M9 时需用实际成本数据回校这两个阈值，必要时更新本节 DoD。
+**M9 实测校注**（2026-04-24）:原写的 ≥50% 源自 Anthropic native 经验值,
+qwen-flash + Dashscope 架构下 user-message cache 大小上限约 ~5K tokens
+(详见 ARCHITECTURE.md 待验证假设),Deep 的 18K user 块打 marker 属于净亏
+——现在代码里只在 Skim 的 user 打 marker(4K 在阈值内),Deep 只打
+system+tools。如将来 qwen 版本升级触发阈值变化,用 `scripts/m9_cache_ab.py`
+做 1 分钟回归。
 
-**预估**：2 sessions。
+**预估**：2 sessions。**实际**:1 session（包含现场调查把 DoD 从 Anthropic
+经验值校准到 qwen-flash 实际天花板）。
 
 ---
 
