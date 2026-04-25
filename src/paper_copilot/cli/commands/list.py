@@ -66,9 +66,7 @@ def list_(
     home = root if root is not None else default_root()
     db_path = home / "fields.db"
     if not db_path.exists():
-        typer.echo(
-            f"no index at {db_path}. Run `paper-copilot reindex` first.", err=True
-        )
+        typer.echo(f"no index at {db_path}. Run `paper-copilot reindex` first.", err=True)
         raise typer.Exit(code=1)
 
     with FieldsStore.open(db_path) as store:

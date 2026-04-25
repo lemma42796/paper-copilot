@@ -69,9 +69,7 @@ def reindex(
     if pdf_dir is not None:
         with console.status("[dim]loading bge-m3 (first run downloads ~2.3 GB)…[/dim]"):
             embedder = Embedder()
-        embeddings_store = EmbeddingsStore.open(
-            home / "embeddings.db", dim=EMBEDDING_DIM
-        )
+        embeddings_store = EmbeddingsStore.open(home / "embeddings.db", dim=EMBEDDING_DIM)
 
     indexed_fields = 0
     indexed_embeds = 0
@@ -120,9 +118,7 @@ def reindex(
                 n = index_paper_embeddings(
                     paper_id, sections, store=embeddings_store, embedder=embedder
                 )
-                console.print(
-                    f"  [dim]{paper_id}[/dim]  {n} chunks  ({pdf_path.name})"
-                )
+                console.print(f"  [dim]{paper_id}[/dim]  {n} chunks  ({pdf_path.name})")
                 indexed_embeds += 1
 
         if embeddings_store is not None:
@@ -141,8 +137,7 @@ def reindex(
 
     elapsed = time.perf_counter() - t0
     console.print(
-        f"[green]fields.db[/green] indexed {indexed_fields} paper(s) "
-        f"into {home / 'fields.db'}"
+        f"[green]fields.db[/green] indexed {indexed_fields} paper(s) into {home / 'fields.db'}"
     )
     if skipped_fields:
         console.print(f"[yellow]fields skipped[/yellow] {len(skipped_fields)}:")

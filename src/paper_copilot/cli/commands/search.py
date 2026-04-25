@@ -130,10 +130,7 @@ def _render(
             f"[bold]{rank}. {r.title}[/bold]  "
             f"[dim]({r.year})  {r.paper_id}  d={c.distance:.3f}[/dim]"
         )
-        body = (
-            f"[dim]{c.section}  {page_range}[/dim]\n"
-            f"{_truncate(c.text, 400)}"
-        )
+        body = f"[dim]{c.section}  {page_range}[/dim]\n{_truncate(c.text, 400)}"
         console.print(Panel.fit(body, title=header, border_style="dim"))
     console.print(f"[dim]{len(results)} match(es) in {elapsed_ms:.0f}ms[/dim]")
 
