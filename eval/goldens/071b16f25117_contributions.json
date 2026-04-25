@@ -1,0 +1,28 @@
+{
+  "paper_id": "071b16f25117",
+  "field": "contributions",
+  "marked_at": "2026-04-25T11:04:03.271762+00:00",
+  "source_session": "/Users/a123/.paper-copilot/papers/071b16f25117/session.jsonl",
+  "value": [
+    {
+      "claim": "A neural machine translation architecture that jointly learns to align and translate by using an attention mechanism to compute context vectors for each target word, avoiding the bottleneck of a fixed-length source sentence vector.",
+      "type": "novel_method",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "The proposed model (RNNsearch) achieves BLEU scores comparable to the conventional phrase-based system (Moses) on English-to-French translation when evaluating sentences without unknown words.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "The attention mechanism allows the model to cope significantly better with long sentences than the basic encoder-decoder approach, which deteriorates rapidly as sentence length increases.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "The soft alignments learned by the model are linguistically plausible and agree with human intuition regarding word alignment between English and French.",
+      "type": "analysis",
+      "evidence_type": "explicit_claim"
+    }
+  ]
+}

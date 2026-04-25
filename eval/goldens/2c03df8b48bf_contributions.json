@@ -1,0 +1,33 @@
+{
+  "paper_id": "2c03df8b48bf",
+  "field": "contributions",
+  "marked_at": "2026-04-25T11:04:01.893034+00:00",
+  "source_session": "/Users/a123/.paper-copilot/papers/2c03df8b48bf/session.jsonl",
+  "value": [
+    {
+      "claim": "A deep residual learning framework is proposed that reformulates layers to learn residual functions with reference to layer inputs, easing the training of substantially deeper networks.",
+      "type": "novel_method",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "Residual networks are easier to optimize than plain networks, as evidenced by lower training errors in deep configurations where plain networks exhibit degradation.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "An ensemble of 152-layer residual nets achieves 3.57% top-5 error on the ImageNet test set, winning 1st place on the ILSVRC 2015 classification task.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "Deep residual nets achieve a 28% relative improvement on the COCO object detection dataset solely due to their extremely deep representations.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "The residual learning principle is generic and applicable beyond image classification, as demonstrated by winning 1st places on ImageNet detection, localization, COCO detection, and COCO segmentation.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    }
+  ]
+}

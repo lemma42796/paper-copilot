@@ -1,0 +1,50 @@
+{
+  "paper_id": "445d06b2ac99",
+  "field": "methods",
+  "marked_at": "2026-04-25T11:04:03.729767+00:00",
+  "source_session": "/Users/a123/.paper-copilot/papers/445d06b2ac99/session.jsonl",
+  "value": [
+    {
+      "name": "Inception Module",
+      "description": "A building block consisting of parallel convolutional paths (1x1, 3x3, 5x5) and pooling operations, concatenated along the channel dimension, designed to extract features at multiple scales efficiently.",
+      "key_formula": null,
+      "novelty_vs_prior": "Introduced in GoogLeNet (Szegedy et al. 2014/2015), this paper refines it with factorized filters.",
+      "is_novel_to_this_paper": false
+    },
+    {
+      "name": "Factorized 5x5 Convolution",
+      "description": "Replaces a single 5x5 convolution with two consecutive 3x3 convolutions. This reduces the parameter count and computational cost by exploiting translation invariance and weight sharing across the sliding window.",
+      "key_formula": null,
+      "novelty_vs_prior": "Novel application of decomposition to replace large square filters specifically within the Inception context to save compute.",
+      "is_novel_to_this_paper": true
+    },
+    {
+      "name": "Asymmetric Factorization",
+      "description": "Factorizes n x n convolutions into a sequence of 1 x n and n x 1 convolutions. For example, a 3x3 convolution is replaced by a 1x7 followed by a 7x1 convolution on specific grid sizes to reduce computation by 33% relative to 3x3 or more for larger n.",
+      "key_formula": null,
+      "novelty_vs_prior": "Novel factorization strategy targeting rectangular receptive fields to optimize computational efficiency on intermediate feature maps.",
+      "is_novel_to_this_paper": true
+    },
+    {
+      "name": "Efficient Grid Size Reduction",
+      "description": "A downsampling module that uses two parallel stride-2 branches: one pooling branch and one convolutional branch, whose outputs are concatenated. This avoids the representational bottleneck associated with standard pooling-only downsampling.",
+      "key_formula": null,
+      "novelty_vs_prior": "New module design to address the trade-off between computational cost and representational capacity during spatial reduction.",
+      "is_novel_to_this_paper": true
+    },
+    {
+      "name": "Label Smoothing Regularization (LSR)",
+      "description": "A regularization technique that modifies the ground-truth label distribution from a one-hot vector to a mixture of the one-hot vector and a uniform distribution (or class prior), controlled by a smoothing parameter epsilon.",
+      "key_formula": "q'(k|x) = (1 - \\epsilon)\\delta_{k,y} + \\epsilon u(k)",
+      "novelty_vs_prior": "Proposed here as a mechanism to prevent over-confidence and improve generalization, interpreted as penalizing deviation from the label prior.",
+      "is_novel_to_this_paper": true
+    },
+    {
+      "name": "Batch Normalization",
+      "description": "Normalizes the activations of each layer across the batch dimension to stabilize and accelerate training, reducing internal covariate shift.",
+      "key_formula": null,
+      "novelty_vs_prior": "Ioffe and Szegedy 2015. Used extensively here as a core component of the Inception modules and auxiliary classifiers.",
+      "is_novel_to_this_paper": false
+    }
+  ]
+}

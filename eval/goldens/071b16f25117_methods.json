@@ -1,0 +1,36 @@
+{
+  "paper_id": "071b16f25117",
+  "field": "methods",
+  "marked_at": "2026-04-25T11:04:03.271762+00:00",
+  "source_session": "/Users/a123/.paper-copilot/papers/071b16f25117/session.jsonl",
+  "value": [
+    {
+      "name": "RNNsearch (Attention-based NMT)",
+      "description": "An encoder-decoder architecture where the encoder uses a bidirectional RNN to produce a sequence of annotation vectors for the source sentence. The decoder generates target words one by one, computing a context vector at each step as a weighted sum of all annotations, where weights are determined by an alignment model scoring the compatibility between the current decoder hidden state and each annotation.",
+      "key_formula": "\\alpha_{ij} = \\frac{\\exp(e_{ij})}{\\sum_{k} \\exp(e_{ik})}, \\quad e_{ij} = a(s_{i-1}, h_j), \\quad c_i = \\sum_{j} \\alpha_{ij} h_j",
+      "novelty_vs_prior": "Replaces the single fixed-length context vector of standard RNN encoder-decoders with a dynamic, per-target-word context vector derived from a soft alignment over all source positions, enabling direct gradient flow through the alignment process.",
+      "is_novel_to_this_paper": true
+    },
+    {
+      "name": "Bidirectional RNN Encoder",
+      "description": "Uses a bidirectional RNN to encode the source sentence. The forward RNN processes the input from start to end, and the backward RNN processes it from end to start. The annotation for each word is formed by concatenating the corresponding forward and backward hidden states, allowing each annotation to capture context from both preceding and following words.",
+      "key_formula": "h_j = [\\overrightarrow{h}_j; \\overleftarrow{h}_j]",
+      "novelty_vs_prior": "Based on Schuster and Paliwal (1997), previously used in speech recognition, applied here to provide richer contextual annotations for the attention mechanism.",
+      "is_novel_to_this_paper": false
+    },
+    {
+      "name": "Alignment Model (Attention Mechanism)",
+      "description": "An alignment model implemented as a single-layer feedforward neural network (MLP) that computes an energy score $e_{ij}$ based on the previous decoder hidden state $s_{i-1}$ and the j-th source annotation $h_j$. These energies are normalized via softmax to produce alignment weights $\\alpha_{ij}$.",
+      "key_formula": "e_{ij} = v_a^\\top \\tanh(W_a s_{i-1} + U_a h_j)",
+      "novelty_vs_prior": "Proposed as part of the RNNsearch architecture. Unlike traditional hard alignment or monotonic alignment (e.g., Graves 2013), this allows non-monotonic, soft alignment computed via a differentiable neural network.",
+      "is_novel_to_this_paper": true
+    },
+    {
+      "name": "Gated Hidden Unit RNN",
+      "description": "Uses gated hidden units (similar to LSTM but with update and reset gates) for the recurrent layers in both the encoder and decoder to mitigate vanishing gradients and capture long-term dependencies.",
+      "key_formula": "s_i = (1-z_i) \\circ s_{i-1} + z_i \\circ \\tilde{s}_i",
+      "novelty_vs_prior": "Attributed to Cho et al. (2014a). It is an alternative to vanilla tanh RNNs and LSTMs, sharing the ability to model long-term dependencies via controlled gradient flow.",
+      "is_novel_to_this_paper": false
+    }
+  ]
+}

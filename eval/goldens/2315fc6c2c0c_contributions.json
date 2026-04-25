@@ -1,0 +1,43 @@
+{
+  "paper_id": "2315fc6c2c0c",
+  "field": "contributions",
+  "marked_at": "2026-04-25T11:04:02.354300+00:00",
+  "source_session": "/Users/a123/.paper-copilot/papers/2315fc6c2c0c/session.jsonl",
+  "value": [
+    {
+      "claim": "A large, deep convolutional neural network with 60 million parameters achieves top-1 and top-5 error rates of 37.5% and 17.0% on the ILSVRC-2010 test set, considerably better than the previous state-of-the-art.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "A variant of the model entered in the ILSVRC-2012 competition achieved a winning top-5 test error rate of 15.3%, compared to 26.2% achieved by the second-best entry.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "Deep convolutional neural networks with ReLU non-linearities train several times faster than their equivalents with saturating neurons (e.g., tanh).",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "Local response normalization, which implements a form of lateral inhibition, reduces top-1 and top-5 error rates by 1.4% and 1.2% respectively.",
+      "type": "novel_method",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "Overlapping pooling (with stride 2 and neighborhood size 3) reduces top-1 and top-5 error rates by 0.4% and 0.3% respectively compared to traditional non-overlapping pooling.",
+      "type": "novel_method",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "The depth of the network is important for performance; removing any of the five convolutional layers results in inferior performance, with middle layer removal causing about a 2% loss in top-1 performance.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "A highly-optimized GPU implementation of 2D convolution and other CNN training operations was written and made publicly available.",
+      "type": "novel_method",
+      "evidence_type": "explicit_claim"
+    }
+  ]
+}

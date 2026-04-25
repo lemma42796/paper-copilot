@@ -1,0 +1,57 @@
+{
+  "paper_id": "2315fc6c2c0c",
+  "field": "methods",
+  "marked_at": "2026-04-25T11:04:02.354300+00:00",
+  "source_session": "/Users/a123/.paper-copilot/papers/2315fc6c2c0c/session.jsonl",
+  "value": [
+    {
+      "name": "Convolutional Neural Network (CNN)",
+      "description": "A deep architecture consisting of five convolutional layers followed by three fully-connected layers and a 1000-way softmax output. The network has 60 million parameters and uses ReLU activations throughout. Convolutional layers use small kernels (11x11, 5x5, 3x3) with specific strides and padding strategies.",
+      "key_formula": null,
+      "novelty_vs_prior": "While CNNs existed prior to this work, this paper demonstrates their effectiveness at a massive scale (60M parameters) on high-resolution ImageNet data, proving that depth and width are critical for state-of-the-art performance.",
+      "is_novel_to_this_paper": false
+    },
+    {
+      "name": "ReLU Nonlinearity",
+      "description": "Uses Rectified Linear Units defined as f(x) = max(0, x) instead of saturating nonlinearities like tanh or sigmoid. This non-saturating activation function allows gradient descent to converge significantly faster.",
+      "key_formula": "f(x) = \\max(0, x)",
+      "novelty_vs_prior": "ReLUs were known in the community (citing Nair and Hinton), but this paper popularized their use in deep CNNs for image classification, demonstrating substantial training speedups over tanh units.",
+      "is_novel_to_this_paper": false
+    },
+    {
+      "name": "Local Response Normalization (LRN)",
+      "description": "A normalization scheme applied after ReLU activations that implements lateral inhibition by normalizing neuron activity based on the squared sum of adjacent kernel maps at the same spatial position. Formula: b^i_{x,y} = a^i_{x,y} / (k + alpha * sum((a^j_{x,y})^2))^beta.",
+      "key_formula": "b^i_{x,y} = a^i_{x,y} / \\left(k + \\alpha \\sum_{j} (a^j_{x,y})^2\\right)^\\beta",
+      "novelty_vs_prior": "This specific 'brightness normalization' scheme inspired by biological lateral inhibition is proposed as a novel technique to improve generalization, distinct from local contrast normalization used in prior work.",
+      "is_novel_to_this_paper": true
+    },
+    {
+      "name": "Overlapping Pooling",
+      "description": "A pooling strategy where the pooling neighborhoods overlap. Specifically, using a stride s=2 and neighborhood size z=3, compared to traditional non-overlapping pooling where s=z.",
+      "key_formula": null,
+      "novelty_vs_prior": "Proposed as a novel architectural choice to reduce overfitting and slightly improve accuracy compared to standard non-overlapping max-pooling.",
+      "is_novel_to_this_paper": true
+    },
+    {
+      "name": "Dropout",
+      "description": "A regularization technique where hidden neurons are randomly set to zero with probability 0.5 during training. This prevents co-adaptation of neurons and effectively trains an ensemble of exponentially many sparse networks. At test time, all neurons are used but outputs are multiplied by 0.5.",
+      "key_formula": null,
+      "novelty_vs_prior": "Dropout was recently introduced by Srivastava et al. (2014) [referenced as [10] in the paper]. This paper applies it successfully to large fully-connected layers in CNNs to combat severe overfitting.",
+      "is_novel_to_this_paper": false
+    },
+    {
+      "name": "Data Augmentation (PCA Color Jitter)",
+      "description": "Augmentation technique involving PCA on RGB pixel values across the training set. Principal components are added to each training image with magnitudes proportional to eigenvalues and random Gaussian variables. This simulates illumination invariance.",
+      "key_formula": "[p_1, p_2, p_3][\\alpha_1\\lambda_1, \\alpha_2\\lambda_2, \\alpha_3\\lambda_3]^T",
+      "novelty_vs_prior": "PCA color jitter was used in prior work (e.g., Krizhevsky & Hinton 2009 internal reports), but this paper explicitly details its application and impact on ImageNet classification.",
+      "is_novel_to_this_paper": false
+    },
+    {
+      "name": "Multi-GPU Parallelization",
+      "description": "Splits the network across two GPUs. Kernels in certain layers connect only to kernel maps on the same GPU, while others connect to all maps. This minimizes inter-GPU communication bandwidth requirements while allowing larger models to fit.",
+      "key_formula": null,
+      "novelty_vs_prior": "While multi-GPU training exists, this specific connectivity pattern (restricted connections between columns on different GPUs) is proposed as an efficient parallelization scheme for very large CNNs.",
+      "is_novel_to_this_paper": true
+    }
+  ]
+}

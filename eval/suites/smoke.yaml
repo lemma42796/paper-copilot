@@ -1,0 +1,29 @@
+name: smoke
+
+papers:
+  - paper_id: 2c03df8b48bf
+    pdf: /Users/a123/paper-copilot-test-pdfs/Deep residual learning for image recognition.pdf
+    fields: [methods, contributions]
+
+  - paper_id: 2315fc6c2c0c
+    pdf: /Users/a123/paper-copilot-test-pdfs/ImageNet classification with deep convolutional neural networks.pdf
+    fields: [methods, contributions]
+
+  - paper_id: 268d347e8a55
+    pdf: /Users/a123/paper-copilot-test-pdfs/vit.pdf
+    fields: [methods, contributions]
+
+  - paper_id: 071b16f25117
+    pdf: /Users/a123/paper-copilot-test-pdfs/Neural machine translation by jointly learning to align and translate.pdf
+    fields: [methods, contributions]
+
+  - paper_id: 445d06b2ac99
+    pdf: /Users/a123/paper-copilot-test-pdfs/Rethinking the Inception architecture for computer vision.pdf
+    fields: [methods, contributions]
+
+# Absolute caps. Skim+Deep on a single paper is typically ≤ ¥0.07 / ≤ 60s
+# at qwen-flash. Caps are deliberately loose (~3x typical) so the suite
+# only fires on real cost regressions, not LLM noise.
+budget_per_paper:
+  cost_cny: 0.20
+  latency_s: 180

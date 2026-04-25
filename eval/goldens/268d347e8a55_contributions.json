@@ -1,0 +1,33 @@
+{
+  "paper_id": "268d347e8a55",
+  "field": "contributions",
+  "marked_at": "2026-04-25T11:04:02.809814+00:00",
+  "source_session": "/Users/a123/.paper-copilot/papers/268d347e8a55/session.jsonl",
+  "value": [
+    {
+      "claim": "A pure Transformer applied directly to sequences of image patches can perform very well on image classification tasks without relying on convolutional neural networks.",
+      "type": "novel_method",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "Large-scale pre-training (14M-300M images) trumps the inductive biases inherent to CNNs, allowing Vision Transformers to approach or beat state-of-the-art performance.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "The best Vision Transformer model (ViT-H/14) achieves 88.55% top-1 accuracy on ImageNet validation set.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "Vision Transformers require substantially fewer computational resources to train compared to state-of-the-art convolutional networks while achieving comparable or better performance.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "Vision Transformers dominate ResNets on the performance/compute trade-off, using approximately 2-4x less compute to attain the same performance.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    }
+  ]
+}

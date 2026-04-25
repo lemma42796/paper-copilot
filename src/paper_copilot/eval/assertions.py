@@ -3,18 +3,25 @@
 Pure functions over JSON-shaped dicts (golden side: parsed from disk;
 output side: ``Paper.model_dump(mode='json')``). No Pydantic
 revalidation here — the suite owns that step. No LLM-as-judge by
-design; assertions are structural and keep on the side of caution
-(false positives are worse than false negatives in a regression test).
+design; assertions are structural and tuned to the LLM-noise floor
+observed empirically — see M14 v1 实测 in TASKS.md.
 
 Assertion strategy per field:
 
 - ``meta``: title / year / arxiv_id exact match; ``len(authors)`` match.
-- ``methods``: align by case-insensitive ``name``; every golden method
-  must appear in output with the same ``is_novel_to_this_paper`` value.
-- ``contributions``: ``len(output) >= len(golden)``, plus per-``type``
-  count must not regress. No claim-text match (LLM rewording is normal).
+  These are extracted verbatim from the paper's first page and stay
+  stable across reruns.
+- ``methods``: catastrophic length drop (output < 50% of golden).
+  Both name-keyed alignment AND ``is_novel_to_this_paper`` checks were
+  pulled — the LLM rephrases method names AND flips the novelty enum
+  stochastically across no-op reruns of the same prompt/model. M15 to
+  revisit with multi-run majority-vote goldens.
+- ``contributions``: catastrophic length drop only. ``type`` is an
+  LLM-picked enum that varies even at zero temperature, so per-type
+  count enforcement triggers at the noise floor.
 - ``experiments``: align by ``(dataset, metric)`` lowercased; every
-  golden experiment must appear.
+  golden experiment must appear (these names are stable — they come
+  from the paper's tables, not LLM phrasing).
 
 ``limitations`` and ``cross_paper_links`` deliberately have no
 assertion — see ``goldens.ALLOWED_FIELDS``.
@@ -22,7 +29,6 @@ assertion — see ``goldens.ALLOWED_FIELDS``.
 
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -32,7 +38,6 @@ FailureKind = Literal[
     "missing",
     "value_mismatch",
     "len_short",
-    "type_count_short",
     "budget_exceeded",
 ]
 
@@ -82,65 +87,58 @@ def assert_meta(golden: dict[str, Any], output: dict[str, Any]) -> list[FieldFai
     return fails
 
 
+_HALVING_THRESHOLD = 0.5
+
+
 def assert_methods(
     golden: list[dict[str, Any]], output: list[dict[str, Any]]
 ) -> list[FieldFailure]:
-    fails: list[FieldFailure] = []
-    output_by_key: dict[str, dict[str, Any]] = {}
-    for m in output:
-        output_by_key.setdefault(_norm(m.get("name", "")), m)
+    """Catastrophic length drop only. Two M14 v1 lessons baked in:
 
-    for gm in golden:
-        key = _norm(gm.get("name", ""))
-        display = gm.get("name", key) or "(unnamed)"
-        if key not in output_by_key:
-            fails.append(
-                FieldFailure(
-                    field=f"methods[{display}]",
-                    kind="missing",
-                    detail=f"golden method {display!r} absent in output",
-                )
+    - Method *names* drift across reruns ('Residual Learning Framework'
+      vs 'Residual Block') — silently accepted, not a regression.
+    - ``is_novel_to_this_paper`` *also* flips stochastically at the
+      noise floor (observed True↔False on identity shortcuts / dropout
+      under the same prompt + model), because it's a semantic judgment
+      with no stable LLM commitment. Per-method enum checks fired even
+      on no-op reruns. Pulled out of v1; M15 to revisit with multi-run
+      majority-vote goldens or a confidence-aware schema field.
+    """
+    fails: list[FieldFailure] = []
+    if golden and len(output) < len(golden) * _HALVING_THRESHOLD:
+        fails.append(
+            FieldFailure(
+                field="methods",
+                kind="len_short",
+                detail=(
+                    f"golden has {len(golden)} method(s), got {len(output)} (below 50% threshold)"
+                ),
             )
-            continue
-        om = output_by_key[key]
-        g_novel = gm.get("is_novel_to_this_paper")
-        o_novel = om.get("is_novel_to_this_paper")
-        if g_novel != o_novel:
-            fails.append(
-                FieldFailure(
-                    field=f"methods[{display}].is_novel_to_this_paper",
-                    kind="value_mismatch",
-                    detail=f"golden={g_novel}, got={o_novel}",
-                )
-            )
+        )
     return fails
 
 
 def assert_contributions(
     golden: list[dict[str, Any]], output: list[dict[str, Any]]
 ) -> list[FieldFailure]:
+    """Only fail on catastrophic length drop. ``type`` is an LLM-picked
+    enum that varies across reruns (e.g. ``novel_method`` vs
+    ``analysis`` for the same claim), so per-type count enforcement
+    produces false positives at the noise floor — see M14 v1 lesson in
+    TASKS.md.
+    """
     fails: list[FieldFailure] = []
-    if len(output) < len(golden):
+    if golden and len(output) < len(golden) * _HALVING_THRESHOLD:
         fails.append(
             FieldFailure(
                 field="contributions",
                 kind="len_short",
-                detail=f"golden has {len(golden)} contribution(s), got {len(output)}",
+                detail=(
+                    f"golden has {len(golden)} contribution(s), got {len(output)} "
+                    f"(below 50% threshold)"
+                ),
             )
         )
-
-    g_counts = Counter(c.get("type") for c in golden)
-    o_counts = Counter(c.get("type") for c in output)
-    for ctype, g_n in g_counts.items():
-        o_n = o_counts.get(ctype, 0)
-        if o_n < g_n:
-            fails.append(
-                FieldFailure(
-                    field=f"contributions[type={ctype}]",
-                    kind="type_count_short",
-                    detail=f"golden has {g_n}, got {o_n}",
-                )
-            )
     return fails
 
 

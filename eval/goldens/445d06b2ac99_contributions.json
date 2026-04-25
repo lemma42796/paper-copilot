@@ -1,0 +1,43 @@
+{
+  "paper_id": "445d06b2ac99",
+  "field": "contributions",
+  "marked_at": "2026-04-25T11:04:03.729767+00:00",
+  "source_session": "/Users/a123/.paper-copilot/papers/445d06b2ac99/session.jsonl",
+  "value": [
+    {
+      "claim": "Replacing large spatial convolutions (e.g., 5x5) with sequences of smaller convolutions (e.g., two 3x3 layers) reduces computational cost and parameters while maintaining expressiveness.",
+      "type": "novel_method",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "Factorizing asymmetric convolutions (e.g., 3x3 into 1x7 followed by 7x1) on medium grid sizes provides significant computational savings compared to symmetric factorizations.",
+      "type": "novel_method",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "A new efficient grid size reduction module that combines pooling and convolution in parallel to avoid representational bottlenecks while reducing feature map dimensions.",
+      "type": "novel_method",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "Label smoothing regularization, which replaces one-hot ground truth labels with a mixture including a uniform distribution, consistently improves top-1 and top-5 error rates.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "Auxiliary classifiers act primarily as regularizers rather than gradient propagators, especially when their fully connected layers are batch-normalized.",
+      "type": "analysis",
+      "evidence_type": "author_hedge"
+    },
+    {
+      "claim": "The proposed Inception-v3 architecture achieves 21.2% top-1 and 5.6% top-5 error on ILSVRC 2012 validation set with single-frame evaluation, outperforming prior state-of-the-art methods like VGGNet and He et al.'s PReLU network at a fraction of the computational cost.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "Ensembling four Inception-v3 models with multi-crop evaluation achieves 3.5% top-5 error on ILSVRC 2012, representing a significant reduction over previous ensemble results.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    }
+  ]
+}

@@ -89,54 +89,66 @@ def test_methods_pass_on_superset() -> None:
     assert assert_methods(golden, output) == []
 
 
-def test_methods_missing_flagged_with_name() -> None:
-    golden = [_method("Transformer"), _method("Scaled Dot-Product Attention")]
-    output = [_method("Transformer")]
-    fails = assert_methods(golden, output)
-    assert len(fails) == 1
-    assert fails[0].kind == "missing"
-    assert "Scaled Dot-Product Attention" in fails[0].field
+def test_methods_naming_drift_silently_accepted() -> None:
+    # LLM rephrases method names across runs — this is noise, not a
+    # regression. M14 v1 chose to silently accept it.
+    golden = [_method("Residual Learning Framework"), _method("Bottleneck Block")]
+    output = [_method("Residual Block"), _method("Bottleneck Architecture")]
+    assert assert_methods(golden, output) == []
 
 
-def test_methods_novelty_flip_flagged() -> None:
+def test_methods_novelty_flip_silently_accepted() -> None:
+    # is_novel_to_this_paper also flips stochastically at the noise
+    # floor; M14 v1 ignores it (M15 to revisit).
     golden = [_method("Transformer", novel=True)]
     output = [_method("Transformer", novel=False)]
+    assert assert_methods(golden, output) == []
+
+
+def test_methods_catastrophic_length_drop_flagged() -> None:
+    golden = [_method(f"M{i}") for i in range(6)]
+    output = [_method("M0"), _method("M1")]  # 2/6 < 50%
     fails = assert_methods(golden, output)
     assert len(fails) == 1
-    assert fails[0].kind == "value_mismatch"
-    assert fails[0].field == "methods[Transformer].is_novel_to_this_paper"
+    assert fails[0].kind == "len_short"
+    assert fails[0].field == "methods"
 
 
-def test_methods_match_case_insensitive() -> None:
-    golden = [_method("Transformer", novel=True)]
-    output = [_method("  transformer  ", novel=True)]
+def test_methods_50pc_or_above_passes() -> None:
+    golden = [_method(f"M{i}") for i in range(4)]
+    output = [_method("M0"), _method("M1")]  # 2/4 = 50% -> pass
     assert assert_methods(golden, output) == []
 
 
 # ---------- contributions ----------
 
 
-def test_contributions_pass_on_equal_count_and_types() -> None:
+def test_contributions_pass_on_equal_count() -> None:
     golden = [_contribution("novel_method"), _contribution("novel_result")]
     output = [_contribution("novel_method"), _contribution("novel_result")]
     assert assert_contributions(golden, output) == []
 
 
-def test_contributions_len_short_flagged() -> None:
-    golden = [_contribution(), _contribution(), _contribution()]
-    output = [_contribution()]
-    fails = assert_contributions(golden, output)
-    kinds = {f.kind for f in fails}
-    assert "len_short" in kinds
-
-
-def test_contributions_type_count_short_flagged() -> None:
+def test_contributions_type_drift_silently_accepted() -> None:
+    # LLM picks `type` differently across reruns; this is noise.
     golden = [_contribution("novel_method"), _contribution("novel_result")]
-    output = [_contribution("novel_method"), _contribution("novel_method")]
+    output = [_contribution("novel_method"), _contribution("analysis")]
+    assert assert_contributions(golden, output) == []
+
+
+def test_contributions_catastrophic_length_drop_flagged() -> None:
+    golden = [_contribution() for _ in range(5)]
+    output = [_contribution()]  # 1/5 < 50%
     fails = assert_contributions(golden, output)
-    type_fails = [f for f in fails if f.kind == "type_count_short"]
-    assert len(type_fails) == 1
-    assert "novel_result" in type_fails[0].field
+    assert len(fails) == 1
+    assert fails[0].kind == "len_short"
+    assert fails[0].field == "contributions"
+
+
+def test_contributions_50pc_or_above_passes() -> None:
+    golden = [_contribution() for _ in range(4)]
+    output = [_contribution(), _contribution()]  # 2/4 = 50%
+    assert assert_contributions(golden, output) == []
 
 
 # ---------- experiments ----------

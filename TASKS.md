@@ -11,7 +11,7 @@
 > 更新于 2026-04-25。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
-- **已完成**:M1–M13。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
+- **已完成**:M1–M14。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
   `--lang en|zh`。`paper-copilot doctor` (M9) 查最近 N 次 session 的
   cache 命中率 / p50-p95 latency / top-3 贵论文。`paper-copilot reindex`
   + `paper-copilot list` (M10) 落 SQLite 字段索引,支持 `--year` /
@@ -26,9 +26,51 @@
   (dataset, metric) 对齐,limitations / contributions 双栏 bullet,A↔B
   方向的 cross_paper_link 单独成节渲染;`--format json` 给脚本消费;
   `--deep` 占位 exit 2,延后到 M14 eval 落地后再做(0 LLM cost 默认路径)。
+  M14:`paper-copilot eval mark <pid> -f <field>` 从 session.jsonl 落
+  golden 进 `eval/goldens/<pid>_<field>.json`,`paper-copilot eval run
+  <suite.yaml>` 在 tmpdir(隔离用户索引)重跑 MainAgent,字段断言 +
+  绝对预算 cap。pyyaml 加进直接依赖。
 - **当前阶段**:**Phase 2 进行中**(读真实论文 → 自动追加 docs/issues.md),
-  等待 M14 启动。
-- **下一个编码 milestone**:**M14 (Golden curation + suite runner)**。
+  等待 M15 启动。
+- **下一个编码 milestone**:**M15 (Eval 报告 + 实战回归发现)**。
+- **M14 实测 (2026-04-25)**:
+  - 5 篇 × 2 字段 = 10 goldens 落盘:ResNet (2c03df8b48bf) / AlexNet
+    (2315fc6c2c0c) / ViT (268d347e8a55) / Bahdanau (071b16f25117) /
+    Inception (445d06b2ac99),都是 methods + contributions。
+  - **Transformer (a639448e61be) 跳过**:M5 期 session 没有 final_output
+    entry(那时还没引入),`mark` 报错。要用就 `read --force` 重读一次。
+  - **核心教训:LLM noise floor 比预想高**。第一版严格断言(every golden
+    method by name + per-type count)5/5 papers FAIL on no-op rerun:
+    1. Method *names* 跨次重命名(`Residual Learning Framework` ↔
+       `Residual Block`,`Bottleneck Building Block` ↔ `Bottleneck
+       Architecture`)— 名字 alignment 不能强制
+    2. `is_novel_to_this_paper` 在同 prompt + 同 model 下也会随机翻转
+       (Identity Shortcut Connections True↔False,Dropout False↔True)—
+       这是 M8 教训重现:semantic variant 的 prompt anchor 不可靠,
+       结构化 enum 也救不了
+    3. Contribution `type` 同样随机分布漂移(`novel_method` 偶尔变
+       `analysis`)
+  - **v1 最终断言策略**:
+    - meta 严格(verbatim 提取,稳定)
+    - methods / contributions:只 fail "灾难性长度下降"(< golden × 50%)
+    - experiments:严格 (dataset, metric) 对齐(数据集名是从论文表里
+      抄的,稳定)
+    - 弃用:methods name 对齐 / `is_novel_to_this_paper` / type 计数
+  - DoD 验证:同 prompt 同代码 5/5 PASS;故意改 DeepAgent system prompt
+    `"- Methods: skip this list. Return [] ..."` → 5/5 FAIL with
+    `len_short methods` 字段精确指认,exit 1,prompt 立即 git checkout 复原。
+  - Suite 隔离:每跑一个 paper 起新 tmpdir 当 `PAPER_COPILOT_HOME`,
+    RelatedAgent 自动短路(fields.db 空),用户的真索引不受影响;suite
+    可重复跑,跨次结果只受 LLM noise 影响(已被断言阈值吸收)。
+  - 单 suite run 5 篇 ~¥0.28、~5min。Goldens prep 阶段 5 篇 `read --force`
+    刷新 sessions(老 session 是 M5/M6/M7 期 schema,`is_novel` 为 None
+    之类)~¥0.28。整个 M14 LLM 总开销 ~¥0.85。
+  - **M15 该做什么**:多次跑同一篇做 majority-vote golden,把
+    `is_novel_to_this_paper` 这种 stochastic 字段从噪声里捞回来;OR 给
+    schema 加 confidence 字段;OR 接受 v1 现状,只看 budget + meta +
+    experiments + 灾难性长度。本届 M14 框架可发现 prompt 灾难性退化,
+    够用,不够发现微妙退化 — 这本身是 M15 报告 / 趋势可视化要解决的。
+- **M13 实测 (2026-04-25)**:
 - **M13 实测 (2026-04-25)**:
   - 三对人类对比:Transformer (2017) vs ViT (2021)、AlexNet (2012) vs
     ResNet (2015)、Bahdanau (2015) vs ViLBERT (2019)。
@@ -578,11 +620,15 @@ RelatedAgent → main/read/render 串线 → temporal validator 修复)。
 **依赖**：M12 以上都稳定了（否则 eval 的 ground truth 也会不稳）
 
 **DoD**：
-- [ ] 从 Phase 2 积累中挑 5 篇论文，每篇 mark 2 个字段为 golden
-- [ ] 跑一次 suite 能 pass（因为是对自己的输出 eval）
-- [ ] 改 prompt 故意让输出退化，再跑 suite 能 fail 并指出具体字段
+- [x] 从 Phase 2 积累中挑 5 篇论文，每篇 mark 2 个字段为 golden
+      (ResNet / AlexNet / ViT / Bahdanau / Inception × methods + contributions)
+- [x] 跑一次 suite 能 pass(loosen 断言至 LLM noise floor 之后:5/5 PASS)
+- [x] 改 prompt 故意让输出退化，再跑 suite 能 fail 并指出具体字段
+      (DeepAgent system prompt "Methods: skip this list" → 5/5 FAIL with
+      `len_short methods`)
 
-**预估**：2-3 sessions。
+**预估**：2-3 sessions(实际 2 sessions:Session A 数据层 / Session B 编排
++ goldens + DoD 验证 + noise floor 校准)。
 
 ---
 

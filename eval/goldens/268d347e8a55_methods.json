@@ -1,0 +1,29 @@
+{
+  "paper_id": "268d347e8a55",
+  "field": "methods",
+  "marked_at": "2026-04-25T11:04:02.809814+00:00",
+  "source_session": "/Users/a123/.paper-copilot/papers/268d347e8a55/session.jsonl",
+  "value": [
+    {
+      "name": "Vision Transformer (ViT)",
+      "description": "An image is split into fixed-size patches, which are linearly embedded and concatenated with a learnable class token. Learnable 1D position embeddings are added to this sequence, which is then processed by a standard Transformer encoder consisting of multi-head self-attention and MLP blocks with residual connections and layer normalization.",
+      "key_formula": "z_0 = [x_class; x^1_p E; ...; x^N_p E] + E_pos",
+      "novelty_vs_prior": "Unlike prior work that combines CNNs with attention or uses specialized attention patterns for efficiency, ViT applies a vanilla Transformer architecture directly to patch sequences with minimal modification, relying on large-scale data rather than architectural inductive biases.",
+      "is_novel_to_this_paper": true
+    },
+    {
+      "name": "Transformer Encoder",
+      "description": "Standard Transformer encoder layers consisting of Multi-Head Self-Attention (MSA) followed by an MLP block, with LayerNorm applied before each sub-layer and residual connections after each sub-layer.",
+      "key_formula": "z'_l = MSA(LN(z_{l-1})) + z_{l-1}",
+      "novelty_vs_prior": "Original proposal by Vaswani et al. (2017) for machine translation.",
+      "is_novel_to_this_paper": false
+    },
+    {
+      "name": "Hybrid Architecture",
+      "description": "A method where the input sequence to the Transformer is formed from feature maps of a CNN (e.g., ResNet) instead of raw image patches, potentially with a patch size of 1x1 corresponding to the spatial dimensions of the feature map.",
+      "key_formula": null,
+      "novelty_vs_prior": "Combining CNN backbones with Transformers has been explored in prior works (e.g., Wang et al., 2018; Wu et al., 2020); this paper implements it as a variant of ViT.",
+      "is_novel_to_this_paper": false
+    }
+  ]
+}

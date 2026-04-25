@@ -6,6 +6,7 @@ import typer
 
 from paper_copilot.cli.commands.compare import compare
 from paper_copilot.cli.commands.doctor import doctor
+from paper_copilot.cli.commands.eval import app as eval_app
 from paper_copilot.cli.commands.list import list_
 from paper_copilot.cli.commands.read import read
 from paper_copilot.cli.commands.reindex import reindex
@@ -23,6 +24,7 @@ app.command()(reindex)
 app.command(name="list")(list_)
 app.command(name="search")(search_cmd)
 app.command()(compare)
+app.add_typer(eval_app, name="eval")
 
 
 if __name__ == "__main__":

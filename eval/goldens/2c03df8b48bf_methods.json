@@ -1,0 +1,36 @@
+{
+  "paper_id": "2c03df8b48bf",
+  "field": "methods",
+  "marked_at": "2026-04-25T11:04:01.893034+00:00",
+  "source_session": "/Users/a123/.paper-copilot/papers/2c03df8b48bf/session.jsonl",
+  "value": [
+    {
+      "name": "Residual Learning Framework",
+      "description": "Reformulates the underlying mapping H(x) as F(x) + x, where stacked nonlinear layers learn the residual function F(x) = H(x) - x instead of the unreferenced mapping directly. This allows identity mappings to be approached by driving residuals to zero.",
+      "key_formula": "y = F(x, {W_i}) + x",
+      "novelty_vs_prior": "Prior work focused on fitting unreferenced mappings or used gated shortcuts (highway networks). This method uses parameter-free identity shortcuts to explicitly learn residuals, ensuring all information is passed through while adding residual corrections.",
+      "is_novel_to_this_paper": true
+    },
+    {
+      "name": "Identity Shortcut Connections",
+      "description": "Shortcut connections that skip one or more layers and perform identity mapping, adding their output to the stacked layers' output via element-wise addition. They introduce no extra parameters or computational complexity.",
+      "key_formula": "y = F(x, {W_i}) + x",
+      "novelty_vs_prior": "While shortcut connections existed previously (e.g., in Inception or auxiliary classifiers), this paper specifically adopts parameter-free identity shortcuts for residual learning, contrasting with highway networks which use learned gating functions.",
+      "is_novel_to_this_paper": true
+    },
+    {
+      "name": "Bottleneck Building Block",
+      "description": "A 3-layer building block for deeper ResNets (50+ layers) consisting of 1x1, 3x3, and 1x1 convolutions. The 1x1 layers reduce and restore dimensions, creating a bottleneck with smaller input/output dimensions for the 3x3 layer to improve efficiency.",
+      "key_formula": null,
+      "novelty_vs_prior": "Designed specifically for ResNets to enable extreme depth (152 layers) while maintaining lower complexity than VGG nets. It leverages identity shortcuts to avoid doubling model size/complexity that projection shortcuts would cause.",
+      "is_novel_to_this_paper": true
+    },
+    {
+      "name": "Batch Normalization",
+      "description": "Normalization technique applied right after each convolution and before activation to stabilize and accelerate training.",
+      "key_formula": null,
+      "novelty_vs_prior": "Introduced by Ioffe and Szegedy (2015), used here as a standard component in the training pipeline following prior practices.",
+      "is_novel_to_this_paper": false
+    }
+  ]
+}
