@@ -11,7 +11,7 @@
 > 更新于 2026-04-25。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
-- **已完成**:M1–M12。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
+- **已完成**:M1–M13。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
   `--lang en|zh`。`paper-copilot doctor` (M9) 查最近 N 次 session 的
   cache 命中率 / p50-p95 latency / top-3 贵论文。`paper-copilot reindex`
   + `paper-copilot list` (M10) 落 SQLite 字段索引,支持 `--year` /
@@ -21,9 +21,29 @@
   enum(5 档)挑库里 ≤ 3 篇相关论文,落盘 `graph/cross-paper-links.jsonl`
   并渲进 markdown 报告。`read` 末尾自动同步 fields.db + embeddings.db;
   `reindex --pdf-dir <dir>` 从历史 session 重建两个索引(embeddings 需
-  PDF 在场,按 sha1 paper_id 匹配)。
-- **当前阶段**:**等待 M13 启动**。
-- **下一个编码 milestone**:**M13 (`compare` 命令,纯 fields.db,0 LLM cost)**。
+  PDF 在场,按 sha1 paper_id 匹配)。M13:`paper-copilot compare <a> <b>`
+  从 fields.db 读两篇结构化数据,methods 按 name 对齐,experiments 按
+  (dataset, metric) 对齐,limitations / contributions 双栏 bullet,A↔B
+  方向的 cross_paper_link 单独成节渲染;`--format json` 给脚本消费;
+  `--deep` 占位 exit 2,延后到 M14 eval 落地后再做(0 LLM cost 默认路径)。
+- **当前阶段**:**Phase 2 进行中**(读真实论文 → 自动追加 docs/issues.md),
+  等待 M14 启动。
+- **下一个编码 milestone**:**M14 (Golden curation + suite runner)**。
+- **M13 实测 (2026-04-25)**:
+  - 三对人类对比:Transformer (2017) vs ViT (2021)、AlexNet (2012) vs
+    ResNet (2015)、Bahdanau (2015) vs ViLBERT (2019)。
+  - Methods 对齐:同时代同主题对(Transformer/ViT)0 共享(name 大小写
+    精确匹配 — ViT 没把 "Transformer" 列成自己的 method),AlexNet/ResNet
+    8 a-only / 4 b-only。fuzzy 匹配/语义合并不进 M13(LLM 活,留 --deep)。
+  - Cross-paper-links 渲染:Bahdanau ↔ ViLBERT 那对触发 `A → B
+    shares_method` 一行,从 fields.db 的 `cross_paper_links` 字段直读,
+    不读 graph/cross-paper-links.jsonl(后者 append-only 有历史污染)。
+  - 退出码契约:正常 0 / 缺 paper_id 1 / `--deep`、同 id、bad format 2。
+  - 0 LLM 默认路径已 grep 验证(compare.py 不 import llm_client/anthropic/
+    Embedder)。
+  - 决定:`--deep` 实现延后,理由:CLAUDE.md 成本纪律要求新 LLM call
+    site 先有 eval 再加;M14 之前盲飞会让 prompt 静默退化无人发现。
+    flag 留着,占位文案明确指向 M14。
 - **M12 实测 (2026-04-25)**:
   - Bahdanau (2015,12 候选库) `--force` 重读:LLM 输出 2 link
     (`builds_on→Transformer-2017`, `shares_method→ViLBERT-2019`)。
@@ -534,10 +554,12 @@ RelatedAgent → main/read/render 串线 → temporal validator 修复)。
 **依赖**：M10
 
 **DoD**：
-- [ ] 对 Phase 2 积累的论文中挑 3 对做对比，输出人类可读
-- [ ] 不加 `--deep` 时不调用 LLM（0 cost）
+- [x] 对 Phase 2 积累的论文中挑 3 对做对比，输出人类可读 (Transformer/ViT,
+      AlexNet/ResNet, Bahdanau/ViLBERT — 见 Current Status M13 实测)
+- [x] 不加 `--deep` 时不调用 LLM（0 cost — grep 验证 compare.py 无 LLM
+      imports;`--deep` 占位 exit 2,延后到 M14 eval 落地)
 
-**预估**：1 session。
+**预估**：1 session(实际 1 session)。
 
 ---
 
