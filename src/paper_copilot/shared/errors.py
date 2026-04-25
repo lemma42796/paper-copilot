@@ -32,3 +32,7 @@ class SessionError(PaperCopilotError):
 
 class PdfError(PaperCopilotError):
     pass
+
+
+class EvalError(PaperCopilotError):
+    pass
