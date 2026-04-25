@@ -160,18 +160,50 @@ paper_id 取 best chunk→top-k。**不做重排器**(MVP)。chunker 进
 一次性 invoke 吞。
 
 ### `eval/`
-内部 eval 模块。用历史 session 中被用户标记为 `golden: true` 的条目作为
-ground truth，跑回归。核心功能：
+内部 eval 模块。Goldens 是字段级快照(不是 session 级标记),suite 跑
+MainAgent 重读对比。
 
-- **Golden curation**：`paper-copilot eval mark <session_id> --field
-  contribution` 把某个 session 的某个字段标为 golden。
-- **Suite 定义**：YAML 格式，列出要跑的 paper + 要 check 的 field。
-- **Assertion 类型**：schema check（自动从 Pydantic 派生）、field-level
-  diff、cost-under、latency-under。**不做 LLM-as-judge**（至少 v1 不做）。
-- **Report**：HTML + JSONL 双份，含 accuracy / cost / cache hit rate
-  三项趋势。
+**M14 v1 落地**:
 
-M5 之前这个模块只有空目录 + README。
+- `goldens.py` — `eval/goldens/<paper_id>_<field>.json` 一篇一字段一文件
+  (仓库内,纳入 git)。`mark_from_session` 直接读 session.jsonl 的最近
+  `final_output`,不读 fields.db(后者会被 reindex 改写,不是真值)。
+  支持字段:meta / contributions / methods / experiments(limitations
+  / cross_paper_links 故意不支持,见 assertions 节)。
+- `suite.py` — Pydantic Suite/PaperSpec/BudgetPerPaper schema,YAML
+  入。每个 paper 跑 MainAgent.run 前先校 `compute_paper_id(pdf) ==
+  paper_id`(防 PDF 换路径),再用 tmpdir 当 PAPER_COPILOT_HOME 起隔离
+  run(RelatedAgent 自动短路,用户的真索引不动,suite 可重复)。
+- `assertions.py` — 纯函数,JSON dict in / `FieldFailure` list out。
+- `cli/commands/eval.py` — `eval mark` / `eval run`,后者按结果 exit
+  0/1。
+- `eval/suites/smoke.yaml` — 5 篇 × 2 字段示例 suite,绝对预算 cap
+  (¥0.20 / 180s 每篇)。
+
+**断言策略**(M14 实测校准过的 noise floor):
+
+| 字段 | 触发 fail 的条件 |
+|---|---|
+| meta | title / year / arxiv_id 严格相等;authors 长度匹配 |
+| methods | 长度 < golden × 50%(灾难性下降) |
+| contributions | 长度 < golden × 50% |
+| experiments | (dataset, metric) 对齐每个 golden 必须出现 |
+| budget(suite 配) | cost / latency 超 YAML 绝对 cap |
+
+**故意丢掉的断言**(noise floor 太高 → 假阳性):
+
+- methods name 对齐(LLM 跨次重命名:`Residual Learning Framework` ↔
+  `Residual Block`)
+- `is_novel_to_this_paper`(同 prompt 同模型也随机翻转,M8 教训重现)
+- contribution `type` 计数(同样跨次漂移)
+- limitations(无稳定结构 key)
+- cross_paper_links(tmpdir 隔离下永远空)
+
+**永不做**:LLM-as-judge(架构红线)。
+
+**M5 之前这个模块只有空目录 + README;M14 之后是 v1 有产出但有限。M15 的
+任务是趋势报告 + 把 stochastic 字段(尤其 `is_novel_to_this_paper`)用
+multi-run majority-vote 捞回来。**
 
 ### `shared/`
 - `logging.py`：统一结构化日志（JSON 格式，落盘 + 终端美化）

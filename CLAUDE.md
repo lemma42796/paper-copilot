@@ -244,6 +244,29 @@ One M12 lesson worth keeping (2026-04-25):
   deterministically after the call, don't try to talk the model into
   it.
 
+One M14 lesson worth keeping (2026-04-25):
+
+- **The LLM noise floor on structured enums is higher than the
+  schema would suggest. Eval assertions must measure to that floor,
+  not below it.** First-pass M14 assertions enforced strict
+  name-keyed alignment on `methods` and equality on
+  `is_novel_to_this_paper`; on a no-op rerun (same prompt, same
+  model, same PDFs) all 5 of 5 papers failed. Two reasons:
+  (1) the LLM rephrases method names across runs ('Residual
+  Learning Framework' ↔ 'Residual Block'), and
+  (2) `is_novel_to_this_paper` flips True↔False on borderline cases
+  (Identity Shortcut Connections, Dropout) under literally identical
+  inputs — same M8-class semantic-variant problem, just on a bool
+  enum instead of free text. The fix wasn't to tighten the prompt
+  (we know that doesn't work); it was to *drop those assertions*
+  from v1 and document the noise floor in the module docstring.
+  Generalizable rule: before adding an eval assertion, run the
+  pipeline on the same input ≥ 2 times and confirm the field is
+  stable. If it isn't, the assertion will be a flake source — design
+  around it (multi-run majority-vote goldens, confidence fields,
+  catastrophic-only thresholds) instead of pretending stochasticity
+  isn't there.
+
 ---
 
 ## Cost discipline
@@ -254,11 +277,15 @@ section is the single source of truth; do not restate it here.
 - Every LLM call goes through `agents/llm_client.py`. Do not construct
   `anthropic.Anthropic()` clients anywhere else in the codebase.
 - Before changing the default model (switching to a different qwen tier
-  or to another provider), run the eval suite on ≥ 5 real papers and
-  confirm no regression. If the eval suite doesn't exist yet (pre-M14),
-  stop and ask the human.
+  or to another provider), run `paper-copilot eval run
+  eval/suites/smoke.yaml` and confirm 0 regressions. The current v1
+  suite catches catastrophic-class regressions (meta drift, > 50%
+  field-length drop, missing dataset/metric); subtler regressions
+  need the M15 trend report.
 - When you add a new LLM call site, note in your reply the expected
-  per-call token usage and cost estimate.
+  per-call token usage and cost estimate. New call sites also need
+  eval coverage before they land — if no suite exists for the new
+  flow, write one (or extend `smoke.yaml`) before merging.
 
 ---
 

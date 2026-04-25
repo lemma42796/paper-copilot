@@ -32,17 +32,29 @@ cp .env.example .env
 ## 用法
 
 ```bash
-paper-copilot <path/to/paper.pdf>
+# 单篇深读 → 落 session + Markdown 报告
+paper-copilot read <path/to/paper.pdf> [--force] [--lang en|zh]
+
+# 跨论文检索(M10/M11)
+paper-copilot list                                    # 列已索引论文
+paper-copilot list --year 2023 --field method --contains attention
+paper-copilot search "<自然语言查询>" [--year ...] [--k N]
+
+# 重建索引(从已有 session.jsonl)
+paper-copilot reindex [--pdf-dir <dir>]               # 加 --pdf-dir 一并重建 embeddings.db
+
+# 两篇并排对比(M13,纯 fields.db,0 LLM 成本)
+paper-copilot compare <paper_id_a> <paper_id_b> [--format text|json]
+
+# 观测最近 N 次 session 的 cache 命中率 / latency / cost(M9)
+paper-copilot doctor [--n 20]
+
+# Eval(M14)— golden curation + suite 回归
+paper-copilot eval mark <paper_id> -f methods -f contributions
+paper-copilot eval run eval/suites/smoke.yaml
 ```
 
-**选项**:
-
-| flag | 作用 |
-|---|---|
-| `--force` | 覆盖已存在的 session(同一 PDF 第二次读时需加) |
-| `--lang en\|zh` / `-l` | 输出语言,默认 `en` |
-
-`--lang zh` 时,叙述字段(`Contribution.claim` / `Method.description` /
+`read --lang zh` 时,叙述字段(`Contribution.claim` / `Method.description` /
 `Method.novelty_vs_prior` / `Limitation.description`)+ Markdown 章节标题
 切换为中文;数据集名、metric、数值、作者、enum 值、`Experiment.raw`(原文
 引用)等识别/事实字段保留英文原样。
@@ -50,16 +62,27 @@ paper-copilot <path/to/paper.pdf>
 ## 输出
 
 ```
-~/.paper-copilot/papers/<paper_id>/
-├── session.jsonl    # 完整流程 trace(可 grep / replay)
-└── report.md        # Markdown 报告
+~/.paper-copilot/                       # 用户运行时数据
+├── papers/<paper_id>/
+│   ├── session.jsonl                    # 完整流程 trace(可 grep / replay)
+│   └── report.md                        # Markdown 报告
+├── fields.db                            # SQLite 字段索引(M10)
+├── embeddings.db                        # sqlite-vec 向量索引(M11)
+├── embeddings_meta.json
+└── graph/cross-paper-links.jsonl        # 跨论文关系 append-only(M12)
+
+eval/                                    # 仓库内,纳入 git
+├── goldens/<paper_id>_<field>.json      # 单字段 golden 快照
+└── suites/<name>.yaml                   # suite 定义
 ```
 
 `paper_id = SHA1(PDF bytes)[:12]`,同一 PDF 改名或换位置映射到同一 id。
 
-终端同时输出 rich 渲染的 markdown + session/report 路径 + cost 统计。
+`read` 同时落 fields.db / embeddings.db,后续 `list` / `search` / `compare`
+/ `eval` 都基于这两个索引。
 
-## 当前状态(M7)
+## 当前状态(M14)
 
-只实现了 `read` 一个子命令。后续 milestone(M10+)会加 `compare` / `search`
-/ `list` / `doctor`。细节见 [TASKS.md](TASKS.md)。
+`read` / `list` / `search` / `compare` / `doctor` / `reindex` / `eval`
+七个子命令可用。下一步 M15(eval HTML 报告 + 实战回归发现)。细节见
+[TASKS.md](TASKS.md)。
