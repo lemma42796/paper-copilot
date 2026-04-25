@@ -494,7 +494,13 @@ cli.reindex
 - [~] 50-100 篇规模下，sqlite-vec 的跨库检索 < 500ms
       — 13 篇下 warm 287-973ms;50-100 篇规模无实测,sqlite-vec 线性扫描
       复杂度下预估仍远低于 1s,M14 eval 时正式验。
-- [ ] RelatedAgent 的自动关联粒度：整篇 vs 章节 vs 方法级？
+- [x] RelatedAgent 的自动关联粒度：整篇 vs 章节 vs 方法级？
+      — **M12 决定整篇粒度(2026-04-25)**:`CrossPaperLink` 描述新论文
+      到候选论文的整篇关系(`relation_type` 5 档 enum + explanation),
+      不切到 method/section 级。理由:章节级关联会强迫 LLM 在 ~2K-token
+      payload 里推理多对多,Phase 2 13 篇规模 + qwen-flash 输出稳定性
+      要求下不划算;真要章节级先靠 `compare` 命令 dogfood。M14 golden
+      时如果出现"两篇方法 X 类似但其它无关"的 case 再考虑细粒度。
 - [x] fields.db 的 SQL schema：结构化字段能否用 JSON column + 表达式索引
       解决，不需要正则化成多表 — **M10 验证通过(2026-04-24)**:单表
       `papers(paper_id, indexed_at, data TEXT)` + 两个 `json_extract`
@@ -503,10 +509,12 @@ cli.reindex
       raw JSON 存 Paper,新字段自动流入。未来重验条件:
       (a) 库 > 1k 篇时 LIKE 是否需切 FTS5
       (b) 新增 author / venue 查询维度时,`json_each` 扫描成本是否显著
-- [~] `read` 流程新增跨论文步骤后，端到端延迟能否控制在 90s 内
+- [x] `read` 流程新增跨论文步骤后，端到端延迟能否控制在 90s 内
       — M11 `read` 末尾只加 "split_by_sections + chunk + encode + upsert"
-      这一段,ViLBERT 实测加起来 ~5-10s(CPU bge-m3),远低于 90s。M12
-      加 RelatedAgent(再调一次 LLM)后重验才算真结论。
+      这一段,ViLBERT 实测加起来 ~5-10s(CPU bge-m3),远低于 90s。
+      **M12 加 RelatedAgent 后(2026-04-25)**:Bahdanau --force 重读
+      RelatedAgent 段 latency 2.1s(query encode + KNN + 1 次 LLM 调用),
+      端到端总耗时仍在 30-60s 量级,DoD 满足。
 - [ ] `Method.name` 跨论文对齐：是否需要 canonicalization 层（同义词合并、
       小写归一），还是靠 embedding 相似度在查询时处理？
 

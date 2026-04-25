@@ -8,20 +8,47 @@
 
 ## Current Status
 
-> 更新于 2026-04-24。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
+> 更新于 2026-04-25。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
-- **已完成**:M1–M11。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
+- **已完成**:M1–M12。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
   `--lang en|zh`。`paper-copilot doctor` (M9) 查最近 N 次 session 的
   cache 命中率 / p50-p95 latency / top-3 贵论文。`paper-copilot reindex`
   + `paper-copilot list` (M10) 落 SQLite 字段索引,支持 `--year` /
   `--field ... --contains ...` 查询。`paper-copilot search "<q>"` (M11)
   跨论文 hybrid search:bge-m3 本地 embedding + sqlite-vec KNN + fields
-  预过滤。`read` 末尾自动同步 fields.db + embeddings.db;`reindex
-  --pdf-dir <dir>` 从历史 session 重建两个索引(embeddings 需 PDF
-  在场,按 sha1 paper_id 匹配)。
-- **当前阶段**:**等待 M12 启动**。
-- **下一个编码 milestone**:**M12 (RelatedAgent + 集成到 read)**。
+  预过滤。M12:`read` 末尾 spawn RelatedAgent,基于 `cross_paper_links`
+  enum(5 档)挑库里 ≤ 3 篇相关论文,落盘 `graph/cross-paper-links.jsonl`
+  并渲进 markdown 报告。`read` 末尾自动同步 fields.db + embeddings.db;
+  `reindex --pdf-dir <dir>` 从历史 session 重建两个索引(embeddings 需
+  PDF 在场,按 sha1 paper_id 匹配)。
+- **当前阶段**:**等待 M13 启动**。
+- **下一个编码 milestone**:**M13 (`compare` 命令,纯 fields.db,0 LLM cost)**。
+- **M12 实测 (2026-04-25)**:
+  - Bahdanau (2015,12 候选库) `--force` 重读:LLM 输出 2 link
+    (`builds_on→Transformer-2017`, `shares_method→ViLBERT-2019`)。
+    **temporal validator** 拦掉错向 builds_on(候选 year > 新论文 year +
+    directional 类型 → drop),最终落盘 1 条 ViLBERT shares_method,
+    人工评 0/1 false。
+  - **重要发现**:LLM 即使看到候选 year 字段也会把"我影响了它"硬塞进
+    `builds_on`(M8 教训命中:semantic variant prompt 修不动)。
+    `_DIRECTIONAL_RELATIONS = {builds_on, compares_against,
+    applies_in_different_domain}` 三个类型走严格时序校验
+    (`candidate.year > new_paper.year > 0` → drop);`shares_method` /
+    `contrasts_with` 对称类型免检。
+  - RelatedAgent 单次成本(input 654 + cache_creation 1011 + output 210):
+    **~¥0.002**(latency 2.1s),DoD `< $0.02 ≈ ¥0.144` 富余 70x。
+  - Cache 策略遵 M9 结论:system + tools 打 marker,user 不打。RelatedAgent
+    user payload ~2K tokens 在 Dashscope qwen-flash 临界区,保守不碰。
+  - Session trace 完整保留 LLM 原始 tool_use 输出(2 link)+ final_output
+    的 validator-filtered 版本(1 link),M14 eval 直接对比即可量化"LLM
+    错向率 vs validator 拦截率"。
+  - 已知遗留:`shares_method` ViLBERT 链 borderline(Bahdanau enc-dec 内
+    attention vs ViLBERT 跨模态 co-attention,机制粒度不同),M14 golden
+    时再判。
+  - graph/cross-paper-links.jsonl 是 append-only,首跑无 validator 时
+    误落的 1 行 `builds_on→Transformer` 留作历史,不主动改写。M14 用
+    图时按 "读最新行覆盖" 处理。
 - **M11 实测 (2026-04-24)**:
   - 13 篇全量 reindex(bge-m3 CPU 推理,MacBook M1):**186.9s**,
     DoD ≤ 5 min,约 2.7x 余量。单篇 chunks 14-107 不等,总 621 chunks。
@@ -472,11 +499,27 @@ system+tools。如将来 qwen 版本升级触发阈值变化,用 `scripts/m9_cac
 **依赖**：M11
 
 **DoD**：
-- [ ] 新 read 一篇论文，如果库里有相关的，至少关联 1 篇；如果不相关就不强加
-- [ ] 虚假关联率（人工判断）< 30%
-- [ ] 每次关联额外成本 < $0.02
+- [x] 新 read 一篇论文，如果库里有相关的，至少关联 1 篇；如果不相关就不强加
+      — Bahdanau 实测:13 篇库挑出 ViLBERT 1 条 + Transformer 被时序校验
+      拦下,5 篇 CV 全过滤。
+- [x] 虚假关联率（人工判断）< 30%
+      — Bahdanau 单 paper:LLM 50% 错(builds_on 方向反),validator 拦
+      后 0/1 = 0%。多 paper 样本要等 M14 golden suite 正式测。
+- [x] 每次关联额外成本 < $0.02
+      — RelatedAgent 单次 ~¥0.002 ≈ $0.0003,70x 余量。
 
-**预估**：2-3 sessions。
+**架构决定 (2026-04-25)**:
+- `relation_type` 锁定 5 档 enum(`builds_on` / `compares_against` /
+  `shares_method` / `contrasts_with` / `applies_in_different_domain`);
+- 时序校验放后置 validator 而非 prompt anchor(M8 教训);
+- `graph/cross-paper-links.jsonl` 由 `knowledge/graph_store.py` 维护
+  (append-only),paper_id+related_paper_id+relation_type+explanation+
+  related_title+indexed_at 单行,反向查询扫全文件(MVP 规模够);
+- RelatedAgent 跳过条件:库里 < 2 篇候选(self 过滤后)直接返回空,
+  不调 LLM。
+
+**预估**:2-3 sessions(实际 3 sessions:schema → graph_store →
+RelatedAgent → main/read/render 串线 → temporal validator 修复)。
 
 ---
 

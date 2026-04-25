@@ -18,6 +18,14 @@ EvidenceType = Literal["explicit_claim", "author_hedge", "our_inference"]
 
 LimitationType = Literal["scope", "method", "empirical"]
 
+RelationType = Literal[
+    "builds_on",
+    "compares_against",
+    "shares_method",
+    "contrasts_with",
+    "applies_in_different_domain",
+]
+
 
 class PaperMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -269,16 +277,47 @@ class Limitation(BaseModel):
 
 
 class CrossPaperLink(BaseModel):
-    """Placeholder for cross-paper relations. Schema finalized in M12 (RelatedAgent)."""
-
     model_config = ConfigDict(extra="forbid")
 
-    related_paper_id: str = Field(description="paper_id of the related paper in the local library.")
-    explanation: str = Field(
+    related_paper_id: str = Field(
         description=(
-            "1-2 sentences describing how the two papers relate. "
-            "Schema finalized in M12 — keep this free-text for now."
+            "The paper_id of the related paper from the candidate list. "
+            "Copy the value exactly as provided — do not invent, rename, or truncate."
         )
+    )
+    related_title: str = Field(
+        description=(
+            "Title of the related paper, copied verbatim from the candidate list. "
+            "Stored alongside related_paper_id so downstream rendering needs no second lookup."
+        )
+    )
+    relation_type: RelationType = Field(
+        description=(
+            "How the new paper relates to this related paper. Pick the single closest "
+            "match.\n"
+            "- builds_on: the new paper extends or directly uses a core idea from the "
+            "related paper\n"
+            "- compares_against: the new paper treats the related paper as a baseline "
+            "or prior SOTA to beat\n"
+            "- shares_method: both papers use a substantively similar mechanism without "
+            "either citing the other as the source\n"
+            "- contrasts_with: the new paper takes a deliberately opposite approach "
+            "(e.g. sparse vs dense, symbolic vs learned)\n"
+            "- applies_in_different_domain: same mechanism applied to a different task "
+            "or modality (e.g. vision → audio)\n"
+            "If none of these fit cleanly, do not emit a link at all."
+        )
+    )
+    explanation: str = Field(
+        min_length=1,
+        description=(
+            "1-2 sentences grounded in the mechanism, not the metric. State what "
+            "concretely connects the two papers — which component, assumption, or "
+            "technique is shared or opposed. "
+            "Bad: 'both are strong on ImageNet'. "
+            "Good: 'both replace global self-attention with a local windowed variant, "
+            "but Swin tiles the window while Longformer uses dilation'."
+        ),
     )
 
 

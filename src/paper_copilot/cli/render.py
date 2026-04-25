@@ -50,6 +50,23 @@ _EVIDENCE_LABELS: dict[str, dict[str, str]] = {
     },
 }
 
+_RELATION_LABELS: dict[str, dict[str, str]] = {
+    "en": {
+        "builds_on": "builds on",
+        "compares_against": "compares against",
+        "shares_method": "shares method with",
+        "contrasts_with": "contrasts with",
+        "applies_in_different_domain": "applies in a different domain from",
+    },
+    "zh": {
+        "builds_on": "基于",
+        "compares_against": "对比基线",
+        "shares_method": "方法相近",
+        "contrasts_with": "对立路线",
+        "applies_in_different_domain": "跨领域应用",
+    },
+}
+
 
 def to_markdown(paper: Paper, *, language: Literal["en", "zh"] = "en") -> str:
     h = _HEADERS[language]
@@ -104,10 +121,15 @@ def to_markdown(paper: Paper, *, language: Literal["en", "zh"] = "en") -> str:
     lines.append("")
 
     if paper.cross_paper_links:
+        relation = _RELATION_LABELS[language]
         lines.append(f"## {h['related']}")
         lines.append("")
         for link in paper.cross_paper_links:
-            lines.append(f"- **{link.related_paper_id}**: {link.explanation}")
+            label = relation[link.relation_type]
+            lines.append(
+                f"- *{link.related_title}* (`{link.related_paper_id}`) "
+                f"**[{label}]** — {link.explanation}"
+            )
         lines.append("")
 
     return "\n".join(lines)

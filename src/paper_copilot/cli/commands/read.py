@@ -16,6 +16,7 @@ from paper_copilot.agents.main import MainAgent
 from paper_copilot.cli.render import to_markdown
 from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
+from paper_copilot.knowledge.graph_store import append_links
 from paper_copilot.knowledge.meta import IndexMeta, write_meta
 from paper_copilot.knowledge.sync import index_paper, index_paper_embeddings
 from paper_copilot.retrieval.sections import split_by_sections
@@ -55,19 +56,34 @@ async def _read_async(pdf_path: Path, force: bool, language: Literal["en", "zh"]
             )
         shutil.rmtree(pdir)
 
-    agent = MainAgent(LLMClient())
-    run = await agent.run(pdf_path, language=language)
-
-    md = to_markdown(run.paper, language=language)
-    report_path = pdir / "report.md"
-    report_path.write_text(md, encoding="utf-8")
-
     root = default_root()
-    with FieldsStore.open(root / "fields.db") as store:
-        index_paper(run.paper, pid, store)
+    fields_db = root / "fields.db"
+    embeddings_db = root / "embeddings.db"
+    meta_path = root / "embeddings_meta.json"
 
     console = Console()
-    with console.status("[dim]indexing embeddings (first run downloads bge-m3)…[/dim]"):
+    with console.status("[dim]loading bge-m3 (first run downloads)…[/dim]"):
+        embedder = Embedder()
+
+    with (
+        FieldsStore.open(fields_db) as fields_store,
+        EmbeddingsStore.open(embeddings_db, dim=EMBEDDING_DIM) as embeddings_store,
+    ):
+        agent = MainAgent(LLMClient())
+        run = await agent.run(
+            pdf_path,
+            language=language,
+            embedder=embedder,
+            fields_store=fields_store,
+            embeddings_store=embeddings_store,
+        )
+
+        md = to_markdown(run.paper, language=language)
+        report_path = pdir / "report.md"
+        report_path.write_text(md, encoding="utf-8")
+
+        index_paper(run.paper, pid, fields_store)
+
         raw_sections = split_by_sections(pdf_path, run.skim_run.result.skeleton)
         sections = [
             Section(
@@ -78,23 +94,24 @@ async def _read_async(pdf_path: Path, force: bool, language: Literal["en", "zh"]
             )
             for s in raw_sections
         ]
-        embedder = Embedder()
-        meta_path = root / "embeddings_meta.json"
-        with EmbeddingsStore.open(root / "embeddings.db", dim=EMBEDDING_DIM) as es:
-            index_paper_embeddings(pid, sections, store=es, embedder=embedder)
-            write_meta(
-                meta_path,
-                IndexMeta.fresh(
-                    embedding_model=MODEL_NAME, embedding_dim=EMBEDDING_DIM
-                ).with_counts(
-                    n_papers=es.count_papers(), n_chunks=es.count_chunks()
-                ),
-            )
+        index_paper_embeddings(pid, sections, store=embeddings_store, embedder=embedder)
+        write_meta(
+            meta_path,
+            IndexMeta.fresh(embedding_model=MODEL_NAME, embedding_dim=EMBEDDING_DIM).with_counts(
+                n_papers=embeddings_store.count_papers(),
+                n_chunks=embeddings_store.count_chunks(),
+            ),
+        )
+
+    if run.paper.cross_paper_links:
+        append_links(pid, list(run.paper.cross_paper_links), root=root)
 
     console.print(Markdown(md))
     console.print()
     console.print(f"[dim]session: {run.session_path}[/dim]")
     console.print(f"[dim]report:  {report_path}[/dim]")
+    if run.related_run is not None and run.related_run.skipped_reason is not None:
+        console.print(f"[dim]related: skipped ({run.related_run.skipped_reason})[/dim]")
     c = run.cost
     console.print(
         f"[dim]cost:    ¥{c.cost_cny:.4f} "

@@ -226,6 +226,24 @@ Two M8 lessons worth keeping in mind (2026-04-24):
   across 13 papers). Enums force a discrete bucket pick and keep
   downstream code honest.
 
+One M12 lesson worth keeping (2026-04-25):
+
+- **Directional enums need a deterministic post-validator, not a prompt
+  anchor.** `CrossPaperLink.relation_type` has three directional values
+  (`builds_on` / `compares_against` / `applies_in_different_domain`)
+  and two symmetric (`shares_method` / `contrasts_with`). On the M12
+  shake-out run, qwen3.6-flash had Bahdanau (2015) emit
+  `builds_on→Transformer (2017)` despite the candidate's `year=2017`
+  being right there in the prompt. This is the same M8-class semantic
+  variant that prompt anchors don't fix — the model picks the closest
+  enum even when temporally impossible. Solution:
+  `agents.related._validate_links` enforces `candidate.year ≤
+  new_paper.year` for the three directional types after the LLM
+  returns. Pattern generalizes: when an enum has structure the LLM
+  must respect (temporal, causal, hierarchical), enforce it
+  deterministically after the call, don't try to talk the model into
+  it.
+
 ---
 
 ## Cost discipline

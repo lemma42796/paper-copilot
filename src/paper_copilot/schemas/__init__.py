@@ -8,6 +8,7 @@ from paper_copilot.schemas.paper import (
     Method,
     Paper,
     PaperMeta,
+    RelationType,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "Method",
     "Paper",
     "PaperMeta",
+    "RelationType",
 ]

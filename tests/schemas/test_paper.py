@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from paper_copilot.schemas import (
     Contribution,
+    CrossPaperLink,
     Experiment,
     Paper,
     PaperMeta,
@@ -156,3 +157,67 @@ def test_experiment_pages_json_roundtrip() -> None:
     restored = Experiment.model_validate_json(exp.model_dump_json())
     assert restored.pages == [5, 6]
     assert restored == exp
+
+
+def _valid_cross_paper_link_dict() -> dict[str, Any]:
+    return {
+        "related_paper_id": "a639448e61be",
+        "related_title": "Attention Is All You Need",
+        "relation_type": "builds_on",
+        "explanation": (
+            "extends the Transformer's scaled dot-product attention by replacing "
+            "the dense softmax with a sparse top-k selection"
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "relation_type",
+    [
+        "builds_on",
+        "compares_against",
+        "shares_method",
+        "contrasts_with",
+        "applies_in_different_domain",
+    ],
+)
+def test_cross_paper_link_accepts_all_relation_types(relation_type: str) -> None:
+    data = _valid_cross_paper_link_dict() | {"relation_type": relation_type}
+    link = CrossPaperLink.model_validate(data)
+    assert link.relation_type == relation_type
+
+
+def test_cross_paper_link_unknown_relation_type_rejected() -> None:
+    data = _valid_cross_paper_link_dict() | {"relation_type": "vaguely_related"}
+    with pytest.raises(ValidationError):
+        CrossPaperLink.model_validate(data)
+
+
+def test_cross_paper_link_empty_explanation_rejected() -> None:
+    data = _valid_cross_paper_link_dict() | {"explanation": ""}
+    with pytest.raises(ValidationError) as exc:
+        CrossPaperLink.model_validate(data)
+    assert any(e["loc"] == ("explanation",) for e in exc.value.errors())
+
+
+def test_cross_paper_link_extra_field_rejected() -> None:
+    data = _valid_cross_paper_link_dict() | {"confidence": 0.9}
+    with pytest.raises(ValidationError) as exc:
+        CrossPaperLink.model_validate(data)
+    assert any(
+        e["type"] == "extra_forbidden" and e["loc"] == ("confidence",) for e in exc.value.errors()
+    )
+
+
+def test_cross_paper_link_json_roundtrip() -> None:
+    link = CrossPaperLink.model_validate(_valid_cross_paper_link_dict())
+    restored = CrossPaperLink.model_validate_json(link.model_dump_json())
+    assert restored == link
+
+
+def test_paper_accepts_cross_paper_links() -> None:
+    data = _valid_paper_dict()
+    data["cross_paper_links"] = [_valid_cross_paper_link_dict()]
+    paper = Paper.model_validate(data)
+    assert len(paper.cross_paper_links) == 1
+    assert paper.cross_paper_links[0].relation_type == "builds_on"
