@@ -11,6 +11,8 @@ wheels/
 
 # Paper Copilot runtime data
 data/
+eval/runs/
+eval/report.html
 .env
 .env.local
 

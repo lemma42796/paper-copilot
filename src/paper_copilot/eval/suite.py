@@ -38,6 +38,7 @@ from paper_copilot.agents.main import MainAgent
 from paper_copilot.eval import goldens
 from paper_copilot.eval.assertions import FieldFailure, assert_field
 from paper_copilot.session.paths import compute_paper_id
+from paper_copilot.shared.cost import CostSnapshot
 from paper_copilot.shared.errors import EvalError
 
 SuiteFieldName = Literal["meta", "contributions", "methods", "experiments"]
@@ -74,7 +75,7 @@ class FieldResult:
 class PaperResult:
     paper_id: str
     pdf: Path
-    cost_cny: float
+    cost: CostSnapshot
     latency_s: float
     fields: tuple[FieldResult, ...]
     budget_failures: tuple[FieldFailure, ...]
@@ -156,7 +157,6 @@ async def _run_paper(
                 os.environ["PAPER_COPILOT_HOME"] = prior_home
 
     paper_dump = run.paper.model_dump(mode="json")
-    cost = run.cost.cost_cny
 
     field_results: list[FieldResult] = []
     for field in spec.fields:
@@ -171,12 +171,12 @@ async def _run_paper(
 
     budget_fails: list[FieldFailure] = []
     if budget is not None:
-        if budget.cost_cny is not None and cost > budget.cost_cny:
+        if budget.cost_cny is not None and run.cost.cost_cny > budget.cost_cny:
             budget_fails.append(
                 FieldFailure(
                     field="budget.cost_cny",
                     kind="budget_exceeded",
-                    detail=f"cap={budget.cost_cny:.4f} got={cost:.4f}",
+                    detail=f"cap={budget.cost_cny:.4f} got={run.cost.cost_cny:.4f}",
                 )
             )
         if budget.latency_s is not None and elapsed > budget.latency_s:
@@ -191,7 +191,7 @@ async def _run_paper(
     return PaperResult(
         paper_id=spec.paper_id,
         pdf=pdf_path,
-        cost_cny=cost,
+        cost=run.cost,
         latency_s=elapsed,
         fields=tuple(field_results),
         budget_failures=tuple(budget_fails),

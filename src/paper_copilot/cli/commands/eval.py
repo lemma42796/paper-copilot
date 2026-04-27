@@ -14,6 +14,8 @@ from paper_copilot.eval.goldens import (
     file_path,
     mark_from_session,
 )
+from paper_copilot.eval.report import write_report
+from paper_copilot.eval.runs import load_history, write_run
 from paper_copilot.eval.suite import (
     SuiteResult,
     load_suite,
@@ -77,6 +79,14 @@ def run(
         Path | None,
         typer.Option("--goldens-dir", help="Override default eval/goldens/ location"),
     ] = None,
+    runs_dir: Annotated[
+        Path | None,
+        typer.Option("--runs-dir", help="Override default eval/runs/ location"),
+    ] = None,
+    no_record: Annotated[
+        bool,
+        typer.Option("--no-record", help="Skip writing run history to eval/runs/"),
+    ] = False,
 ) -> None:
     """Execute a suite: rerun the pipeline on each paper, compare to goldens."""
     try:
@@ -96,7 +106,48 @@ def run(
         raise typer.Exit(code=2) from e
 
     _render(console, result)
+
+    if not no_record:
+        try:
+            run_path = write_run(result, runs_dir=runs_dir)
+            console.print(f"[dim]recorded run → {run_path}[/dim]")
+        except EvalError as e:
+            console.print(f"[yellow]warning:[/yellow] could not record run: {e}")
+
     raise typer.Exit(code=0 if result.passed else 1)
+
+
+@app.command("report")
+def report(
+    out: Annotated[
+        Path,
+        typer.Option("--out", "-o", help="Output HTML path"),
+    ] = Path("eval/report.html"),
+    last: Annotated[
+        int | None,
+        typer.Option("--last", "-n", help="Only include the last N runs"),
+    ] = None,
+    suite: Annotated[
+        str | None,
+        typer.Option("--suite", help="Filter to one suite name"),
+    ] = None,
+    runs_dir: Annotated[
+        Path | None,
+        typer.Option("--runs-dir", help="Override default eval/runs/ location"),
+    ] = None,
+) -> None:
+    """Render an HTML trend report from recorded eval runs."""
+    rows = load_history(runs_dir=runs_dir, suite_name=suite, last=last)
+    write_report(rows, out)
+    console = Console()
+    if not rows:
+        console.print(
+            "[yellow]no run history found[/yellow] — run "
+            "[cyan]paper-copilot eval run <suite.yaml>[/cyan] first."
+        )
+    else:
+        n_runs = len({r.run_id for r in rows})
+        console.print(f"[green]wrote[/green] {out}  ({n_runs} run(s), {len(rows)} row(s))")
 
 
 def _render(console: Console, result: SuiteResult) -> None:
@@ -113,7 +164,7 @@ def _render(console: Console, result: SuiteResult) -> None:
         summary.add_row(
             p.paper_id,
             status,
-            f"{p.cost_cny:.4f}",
+            f"{p.cost.cost_cny:.4f}",
             f"{p.latency_s:.1f}",
             str(n_fail),
         )
