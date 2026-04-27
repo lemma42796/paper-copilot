@@ -29,7 +29,7 @@ from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.schemas.paper import Paper, PaperMeta
 from paper_copilot.session import SessionStore
 from paper_copilot.session.paths import compute_paper_id
-from paper_copilot.shared.cost import CostSnapshot, CostTracker
+from paper_copilot.shared.cost import CostSnapshot, CostTracker, pricing_for_model
 from paper_copilot.shared.embedder import Embedder
 
 __all__ = ["MainAgent", "MainRun"]
@@ -97,7 +97,7 @@ class MainAgent:
         paper = paper_draft.model_copy(update={"cross_paper_links": links})
         store.append_final_output(payload=paper.model_dump(mode="json"))
 
-        tracker = CostTracker()
+        tracker = CostTracker(pricing=pricing_for_model(DEFAULT_MODEL))
         if skim_run.response.usage is not None:
             tracker.record(skim_run.response.usage)
         if deep_run.response.usage is not None:

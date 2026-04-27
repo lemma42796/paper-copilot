@@ -5,7 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from paper_copilot.shared.cost import CostTracker
+from paper_copilot.shared.cost import (
+    CostTracker,
+    QwenFlashPricing,
+    QwenPlusPricing,
+    pricing_for_model,
+)
 from paper_copilot.shared.logging import configure_logging
 
 
@@ -67,6 +72,28 @@ def test_cost_calculation_known_values() -> None:
     )
     # 1.2 (input) + 7.2 (output) + 1.5 (cache-create) + 0.12 (cache-hit) = 10.02 CNY
     assert tracker.total_cost_cny == pytest.approx(10.02)
+
+
+def test_plus_pricing_known_values() -> None:
+    tracker = CostTracker(pricing=QwenPlusPricing())
+    tracker.record(
+        {
+            "input_tokens": 1_000_000,
+            "output_tokens": 1_000_000,
+            "cache_creation_input_tokens": 1_000_000,
+            "cache_read_input_tokens": 1_000_000,
+        }
+    )
+    # 2.0 (input) + 12.0 (output) + 2.5 (cache-create) + 0.2 (cache-hit) = 16.7 CNY
+    assert tracker.total_cost_cny == pytest.approx(16.7)
+
+
+def test_pricing_for_model_routing() -> None:
+    assert isinstance(pricing_for_model("qwen3.6-flash"), QwenFlashPricing)
+    assert isinstance(pricing_for_model("qwen3.6-plus"), QwenPlusPricing)
+    assert isinstance(pricing_for_model("qwen3.6-plus-2026-04-02"), QwenPlusPricing)
+    with pytest.raises(ValueError, match="no pricing registered"):
+        pricing_for_model("gpt-4o")
 
 
 def test_context_manager_logs_summary(tmp_path: Path) -> None:

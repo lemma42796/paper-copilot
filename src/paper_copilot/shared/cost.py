@@ -1,4 +1,9 @@
-"""Token-usage and CNY cost tracking for qwen3.6-flash via Dashscope.
+"""Token-usage and CNY cost tracking for Dashscope qwen3.6 tier models.
+
+Pricing is keyed on the model id via :func:`pricing_for_model`; supported
+tiers are currently ``qwen3.6-flash`` and ``qwen3.6-plus`` (incl. snapshot
+suffixes like ``qwen3.6-plus-2026-04-02``). New tiers must be added
+explicitly — fall-through would silently mis-charge.
 
 Consumes the ``usage`` object returned by the Anthropic-compatible API
 (either a real ``anthropic.types.Usage`` instance or a plain ``dict``).
@@ -33,6 +38,39 @@ class QwenFlashPricing:
 
 
 @dataclass(frozen=True, slots=True)
+class QwenPlusPricing:
+    """Dashscope qwen3.6-plus tiered pricing, CNY per million tokens.
+
+    source: 百炼模型广场 → Qwen3.6-Plus 产品页
+    accessed: 2026-04-27
+    note: Plus is exactly 1.67x flash across all four line items at this
+    snapshot. Same out-of-scope caveats as ``QwenFlashPricing``.
+    """
+
+    INPUT_PER_MTOK_CNY: float = 2.0
+    CACHE_CREATE_PER_MTOK_CNY: float = 2.5
+    CACHE_HIT_PER_MTOK_CNY: float = 0.2
+    OUTPUT_PER_MTOK_CNY: float = 12.0
+
+
+type Pricing = QwenFlashPricing | QwenPlusPricing
+
+
+def pricing_for_model(model: str) -> Pricing:
+    """Map a Dashscope qwen3.6 model id to its pricing tier.
+
+    Accepts both rolling aliases (``qwen3.6-flash``) and snapshot ids
+    (``qwen3.6-plus-2026-04-02``). Raises on unknown — silent fall-through
+    to a default would mis-charge instead of failing loud.
+    """
+    if model.startswith("qwen3.6-flash"):
+        return QwenFlashPricing()
+    if model.startswith("qwen3.6-plus"):
+        return QwenPlusPricing()
+    raise ValueError(f"no pricing registered for model {model!r}")
+
+
+@dataclass(frozen=True, slots=True)
 class CostSnapshot:
     input_tokens: int
     output_tokens: int
@@ -64,7 +102,7 @@ def read_usage_field(usage: UsageLike, name: str) -> int:
 
 
 class CostTracker:
-    def __init__(self, pricing: QwenFlashPricing | None = None) -> None:
+    def __init__(self, pricing: Pricing | None = None) -> None:
         self._pricing = pricing if pricing is not None else QwenFlashPricing()
         self._input_tokens = 0
         self._output_tokens = 0
