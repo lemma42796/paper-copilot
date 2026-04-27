@@ -8,10 +8,10 @@
 
 ## Current Status
 
-> 更新于 2026-04-25。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
+> 更新于 2026-04-27。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
-- **已完成**:M1–M14。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
+- **已完成**:M1–M14 + M15 Session A。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
   `--lang en|zh`。`paper-copilot doctor` (M9) 查最近 N 次 session 的
   cache 命中率 / p50-p95 latency / top-3 贵论文。`paper-copilot reindex`
   + `paper-copilot list` (M10) 落 SQLite 字段索引,支持 `--year` /
@@ -29,10 +29,42 @@
   M14:`paper-copilot eval mark <pid> -f <field>` 从 session.jsonl 落
   golden 进 `eval/goldens/<pid>_<field>.json`,`paper-copilot eval run
   <suite.yaml>` 在 tmpdir(隔离用户索引)重跑 MainAgent,字段断言 +
-  绝对预算 cap。pyyaml 加进直接依赖。
-- **当前阶段**:**Phase 2 进行中**(读真实论文 → 自动追加 docs/issues.md),
-  等待 M15 启动。
-- **下一个编码 milestone**:**M15 (Eval 报告 + 实战回归发现)**。
+  绝对预算 cap。pyyaml 加进直接依赖。M15 Session A:`eval run` 自动落
+  `eval/runs/<run_id>.jsonl`(per-run 一文件,带 git_sha + cache_hit_ratio);
+  `paper-copilot eval report` 渲一份纯 stdlib 手搓 SVG 静态 HTML,三张
+  趋势图(per-field PASS rate / per-paper cost / per-paper cache-hit ratio)
+  + 顶部 last-vs-prev diff(PASS 翻转 / cost ±10% / cache ±10%)。
+  `eval/runs/` + `eval/report.html` 进 .gitignore 当 runtime data。
+- **当前阶段**:**Phase 2 已完成**(13 篇样本 + M8 5 条 issue 全关,
+  详见 `docs/issues.md` 顶部"Phase 2 收尾"段)。日常使用继续,但红线
+  已过,不再阻塞下一个 milestone。
+- **下一个编码 milestone**:**M15 Session B (真实模型切换演练 + story)**。
+- **M15 Session A 实测 (2026-04-27)**:
+  - 6 次 smoke.yaml 跑(5 baseline + 1 degraded),~12min wall、**~¥1.7**
+    LLM 开销。每次自动落 `eval/runs/<run_id>.jsonl`,`eval report` 一
+    秒生成 19KB 静态 HTML。
+  - **趋势图直接验证 M14 教训**:run 5(完全没改任何东西)AlexNet methods
+    自然噪声 7→3 触 `len_short`,methods PASS rate 那条线一根锯齿从 100%
+    跌到 80%。run 6 故意改 DeepAgent prompt 为 "Methods: skip this list"
+    后 5/5 papers got 0 methods,同条线直坠 0% 形成断崖。**run 5 锯齿
+    vs run 6 断崖,肉眼一秒区分 noise vs catastrophic** —— M15 的核心价值。
+  - **last-vs-prev diff 自动捕获**:degraded 跑触发 4 条 PASS→FAIL methods
+    flip(第 5 个本来就 FAIL 不算 flip)、2 条 cost drift -19%/-20%
+    (LLM 不写 methods 所以更便宜)、2 条 cache drift > ±10%。
+  - **零依赖手搓 SVG**:不引入 plotly/matplotlib,polyline + circle marker
+    + 5 档 Y 轴网格,800x280 静态画布。`<title>` SVG tooltip 给数值,
+    open in browser 不需要 JS / 网络。
+  - **架构决策**:`PaperResult.cost_cny: float` → `cost: CostSnapshot`,
+    把 cache_read/creation 字段透出给 runs.py。`eval run` 默认 record,
+    `--no-record` opt-out;`eval report --last N --suite NAME` 切片。
+  - **测试**:9 个 unit test 覆盖 RunRow 往返 / disjoint cache 计费 /
+    `last+suite_name` 顺序(必须先 filter 再 truncate,否则 last=2 在
+    最后两个 deep run 上 filter smoke 会得 0 行)。
+  - **gitignore eval/runs/**:开源场景下 run 历史是 runtime data
+    (跟 `data/` 一样),不应当混进 repo。Session B 模型切换的 story
+    单独 commit 一份静态 HTML/截图到 `docs/stories/` 当证据。
+  - **DoD 状态**:HTML 报告可读 ✅、baseline 噪声+断崖在图上可见 ✅、
+    退化故事记录 ⏳ 留给 Session B。
 - **M14 实测 (2026-04-25)**:
   - 5 篇 × 2 字段 = 10 goldens 落盘:ResNet (2c03df8b48bf) / AlexNet
     (2315fc6c2c0c) / ViT (268d347e8a55) / Bahdanau (071b16f25117) /
@@ -644,11 +676,13 @@ RelatedAgent → main/read/render 串线 → temporal validator 修复)。
 **依赖**：M14
 
 **DoD**：
-- [ ] HTML 报告能打开，三个趋势图可读
-- [ ] 至少一次真实"退化被 eval 发现"的案例 + 完整故事记录
-- [ ] 这个案例的数字（退化百分比、修复后改善）进入简历 bullet
+- [x] HTML 报告能打开,三个趋势图可读 — Session A 完成 (2026-04-27),
+      6 次 smoke 实测、19KB 静态 HTML、零 JS 依赖手搓 SVG。
+- [ ] 至少一次真实"退化被 eval 发现"的案例 + 完整故事记录 — Session B,
+      待真实模型切换 (qwen-flash → qwen-plus 或同档) 演练。
+- [ ] 这个案例的数字（退化百分比、修复后改善）进入简历 bullet — Session B。
 
-**预估**：2 sessions。
+**预估**：2 sessions。Session A 已完成 (1 session)。
 
 ---
 
