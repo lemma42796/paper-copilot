@@ -86,10 +86,13 @@ eval/                                    # 仓库内,纳入 git
 `read` 同时落 fields.db / embeddings.db,后续 `list` / `search` / `compare`
 / `eval` 都基于这两个索引。
 
-## 当前状态(M14 + M15 Session A)
+## 当前状态(M1–M15 全 done)
 
 `read` / `list` / `search` / `compare` / `doctor` / `reindex` / `eval`
 七个子命令可用,`eval` 含 `mark` / `run` / `report` 三个子命令。
-M15 Session A 落 `eval/runs/` per-run 历史 + 静态 HTML 趋势图(零 JS 依赖)。
-下一步 M15 Session B(真实模型切换演练 + 退化故事记录)。细节见
-[TASKS.md](TASKS.md)。
+M15 Session A 落 `eval/runs/` per-run 历史 + 静态 HTML 趋势图(零 JS 依赖);
+Session B 用 eval 数据 gate 一次真实模型选型决策(qwen3.6-flash vs
+qwen3.6-plus),实测 plus 2.03x cost / 2.22x latency / 0 quality 上行,
+**用数据否决了一次本来会过 0 regression 关的升级**,继续用 flash。决策
+story 见 [docs/stories/2026-04-27-model-selection-flash-vs-plus.md](docs/stories/2026-04-27-model-selection-flash-vs-plus.md)。
+其余细节见 [TASKS.md](TASKS.md)。

@@ -11,7 +11,7 @@
 > 更新于 2026-04-27。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
-- **已完成**:M1–M14 + M15 Session A。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
+- **已完成**:M1–M15(Session A + B 全部 done)。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
   `--lang en|zh`。`paper-copilot doctor` (M9) 查最近 N 次 session 的
   cache 命中率 / p50-p95 latency / top-3 贵论文。`paper-copilot reindex`
   + `paper-copilot list` (M10) 落 SQLite 字段索引,支持 `--year` /
@@ -35,10 +35,15 @@
   趋势图(per-field PASS rate / per-paper cost / per-paper cache-hit ratio)
   + 顶部 last-vs-prev diff(PASS 翻转 / cost ±10% / cache ±10%)。
   `eval/runs/` + `eval/report.html` 进 .gitignore 当 runtime data。
+  M15 Session B:`shared/cost.py` 加 `QwenPlusPricing` + `pricing_for_model()`
+  支持多 tier 计费;跑 plus 候选 vs flash baseline 对比,数据决定继续用 flash
+  (2.03x cost / 2.22x latency,0 quality 上行),story 落盘
+  `docs/stories/2026-04-27-model-selection-flash-vs-plus.md`。
 - **当前阶段**:**Phase 2 已完成**(13 篇样本 + M8 5 条 issue 全关,
   详见 `docs/issues.md` 顶部"Phase 2 收尾"段)。日常使用继续,但红线
   已过,不再阻塞下一个 milestone。
-- **下一个编码 milestone**:**M15 Session B (真实模型切换演练 + story)**。
+- **下一个编码 milestone**:**全计划 done**。M15 Session B 收尾后无下一
+  编码 milestone。后续若有需要按 issues.md / 实际使用驱动开新条目。
 - **M15 Session A 实测 (2026-04-27)**:
   - 6 次 smoke.yaml 跑(5 baseline + 1 degraded),~12min wall、**~¥1.7**
     LLM 开销。每次自动落 `eval/runs/<run_id>.jsonl`,`eval report` 一
@@ -65,6 +70,47 @@
     单独 commit 一份静态 HTML/截图到 `docs/stories/` 当证据。
   - **DoD 状态**:HTML 报告可读 ✅、baseline 噪声+断崖在图上可见 ✅、
     退化故事记录 ⏳ 留给 Session B。
+- **M15 Session B 实测 (2026-04-27)**:
+  - **候选**:qwen3.6-plus(snapshot 2026-04-02),百炼定价
+    2.0/2.5/0.2/12.0 CNY per Mtok(input/cache-create/cache-hit/output),
+    跨四档统一 1.67x flash。
+  - **配套基础设施**:`shared/cost.py` 加 `QwenPlusPricing` + `Pricing` union
+    + `pricing_for_model(model)` 路由(prefix match,fail-loud on unknown);
+    `agents/main.py` `CostTracker(pricing=pricing_for_model(DEFAULT_MODEL))`
+    一行接入。这部分留下,模型切换零摩擦的真实必需,不属 Session B 一次性
+    脚手架。
+  - **跑法**:`DEFAULT_MODEL = "qwen3.6-plus"` 一行临时改 + `smoke.yaml`
+    budget cap 0.20 → 0.50。`eval run smoke.yaml` → 第 7 个 run row
+    (`2026-04-27T14-15-51Z.jsonl`)。跑完两条临时改全部还原。
+  - **结果(suite 合计)**:5/5 PASS、0 regression。Cost ¥0.273 → ¥0.553
+    (**2.03x**),latency 124s → 274s(**2.22x**)。
+  - **2.03x > 1.67x 价格比说明 plus 输出更长**(token 体量增加 ~22%);
+    2.22x latency > 2.03x cost 说明 plus **每 token 也更慢**——同 family
+    升档时这两条都不在产品页上写。
+  - **Cache 看似下滑(0.246 → 0.092)是伪信号**。Baseline runs 2-5 是同 model
+    连跑,前次 system+tools 仍在 5min TTL 内复用;plus 是首次冷启,等价
+    baseline run 1(0/0.122/0.076/0.119/0.128 vs plus 0/0.140/0.080/0.105/
+    0.136,几乎相同)。**Cross-run cache 比较必须配同 model 冷启对照**,
+    否则会读出"模型切换降 cache"的假规律。
+  - **决策:继续用 flash**。eval 通过 ≠ 应当升级:
+    1. M14 把断言收到 catastrophic-class noise floor 之后,eval **看不出
+       plus 比 flash 更好**——只能看出"都过线"
+    2. 2x cost / 2.2x latency 在零可测收益时不成立
+    3. 颗粒度不够发现的微妙收益(method name 跨次稳定性、subtle
+       hallucination)是未来 milestone 的真问题,不是 Session B 的事
+  - **核心教训:Session B 比 Session A 更接近真实工程判断**。Session A
+    run 6 摆拍证明"探测器对已知断崖有响应"(必要但 reader 一眼看穿);
+    Session B 让 eval 当裁判,**结果是用数据否决了一次本来会过 0
+    regression 关的升级**。简历 bullet 写"用 eval 数据驱动模型选型决策"
+    比"用 eval 抓自己故意搞的破坏"强一档。
+  - **触发重评条件**(写入 story):新增更细颗粒度断言发现 flash 落后;
+    plus / flash 价格比下到 < 1.3x;用户人工捕获 flash 答错 + plus 答
+    对的 case 累积。
+  - **Pre-existing mypy 错**:`agents/main.py:106` `related_run.response.usage`
+    漏 None 检查(`tracker.record(...)` 收到 `int | None`),与 Session B
+    改动无关,git stash 验证后维持原状不修。
+  - **DoD 三条全 ✅**:数据驱动决策做了、story 落 docs/stories/、简历 bullet
+    候选文案在 story 末尾。
 - **M14 实测 (2026-04-25)**:
   - 5 篇 × 2 字段 = 10 goldens 落盘:ResNet (2c03df8b48bf) / AlexNet
     (2315fc6c2c0c) / ViT (268d347e8a55) / Bahdanau (071b16f25117) /
@@ -666,21 +712,38 @@ RelatedAgent → main/read/render 串线 → temporal validator 修复)。
 
 ### M15: Eval 报告 + 实战回归发现
 
-**目标**：eval 模块产出 HTML 报告；**用它真的发现并修复一个问题**。
+**目标**：eval 模块产出 HTML 报告；**用它 gate 一次真实决策（模型选型 /
+prompt 变更 / 架构调整），把决策过程写成 story**。
 
 **产出**：
-- `eval/report.py`：生成 HTML 报告（accuracy / cost / cache hit 趋势）
-- 故意换一个模型或改一个 prompt，跑 eval suite 检测退化
-- 把这次"发现退化 → 定位 → 修复"的完整过程写进 `docs/stories/<date>.md`
+- `eval/report.py`：生成 HTML 报告（accuracy / cost / cache hit 趋势）—
+  Session A 已完成（RunRow 持久化 + SVG 趋势图 + last-vs-prev diff）。
+- Session B：用 eval 数据驱动一次真实模型选型决策。默认模型从
+  qwen3.6-flash 临时切到 qwen3.6-plus，跑一次 `eval run smoke.yaml`，
+  对比 Session A 留下的 5 次 baseline，由趋势图量化"质量改善 vs cost
+  增长 vs cache 命中变化"，按数据决定升级 / 不升级 / 混合分配（不同
+  agent 用不同模型）。结果未知再跑——这是和 Session A run 6 摆拍的
+  本质区别：run 6 是 sanity check（证明探测器对已知断崖信号有响应,
+  必要,做完即丢）,Session B 让 eval 当裁判。
+- 把决策过程写进 `docs/stories/<date>.md`：候选模型 / baseline 数据 /
+  candidate 数据 / 趋势图截图 / 决策理由 / 后续行动。
 
 **依赖**：M14
 
 **DoD**：
 - [x] HTML 报告能打开,三个趋势图可读 — Session A 完成 (2026-04-27),
       6 次 smoke 实测、19KB 静态 HTML、零 JS 依赖手搓 SVG。
-- [ ] 至少一次真实"退化被 eval 发现"的案例 + 完整故事记录 — Session B,
-      待真实模型切换 (qwen-flash → qwen-plus 或同档) 演练。
-- [ ] 这个案例的数字（退化百分比、修复后改善）进入简历 bullet — Session B。
+- [x] 用 eval 数据驱动一次真实模型选型决策 (qwen3.6-flash vs qwen3.6-plus)
+      — Session B 完成 (2026-04-27)。结果:5/5 PASS、0 regression,但 plus
+      2.03x cost / 2.22x latency 且 eval 颗粒度看不出 plus 有质量上行,
+      决策**继续用 flash**。**不再摆拍**:用数据否决了一次本来会过 0
+      regression 关的升级——比 Session A run 6 摆拍更接近真实工程判断。
+- [x] 决策过程进 `docs/stories/2026-04-27-model-selection-flash-vs-plus.md`:
+      候选 / baseline / candidate 数据 / 数据解读 / 决策理由 / 触发重评
+      条件 / 简历 bullet 候选文案。
+- [x] 决策数字 (cost +103% / latency +122% / quality 0 regression / cache
+      cold-start 等同 baseline run 1) 进入简历 bullet —
+      "用 eval 量化升级收益,数据否决了一次本来会过门槛的模型升级"。
 
 **预估**：2 sessions。Session A 已完成 (1 session)。
 

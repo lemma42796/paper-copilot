@@ -226,13 +226,41 @@ MainAgent 重读对比。
   时刻被趋势图替代(更便宜:每篇跑 5 次 vs 一次跑 5 篇,数学等价但
   不需要重标 golden)。
 
+**M15 Session B 落地**(2026-04-27,把 eval 当真实决策的裁判):
+
+- 候选 qwen3.6-plus(snapshot 2026-04-02),百炼定价 2.0/2.5/0.2/12.0
+  CNY per Mtok,跨四档统一 1.67x flash。配套基础设施:`shared/cost.py`
+  加 `QwenPlusPricing` + `Pricing` union + `pricing_for_model(model)` 路由
+  (prefix match,fail-loud on unknown);`agents/main.py`
+  `CostTracker(pricing=pricing_for_model(DEFAULT_MODEL))` 一行接入。这部分
+  留下,**未来切换零摩擦的真实必需**,不算 Session B 一次性脚手架。
+- 跑法:`DEFAULT_MODEL = "qwen3.6-plus"` 一行临时改 + `smoke.yaml` budget
+  cap 0.20 → 0.50。一次 `eval run` 落第 7 个 run row,跑完两条临时改全部
+  还原。
+- 结果:5/5 PASS、0 regression。但 cost ¥0.273 → ¥0.553(**2.03x**,大于
+  价格比 1.67x → 说明 plus 输出更长 ~22%),latency 124s → 274s(**2.22x**,
+  大于 cost ratio → plus 每 token 也更慢),cache 冷启等同 baseline run 1。
+- 决策:**继续用 flash**。eval 颗粒度看不出 plus 有质量上行(M14 收到
+  catastrophic-class noise floor 之后只能看出"都过线"),2x cost / 2.2x
+  latency 在零可测收益时不成立。
+- **Session B 比 Session A 更接近真实工程判断**:Session A run 6 摆拍证明
+  探测器对已知断崖有响应(必要但 reader 一眼看穿);Session B 让 eval 当
+  裁判,**用数据否决了一次本来会过 0 regression 关的升级**——这才是 eval
+  系统的真实价值。决策 story `docs/stories/2026-04-27-model-selection-flash-vs-plus.md`。
+- **Cross-run cache 比较的陷阱**:baseline runs 2-5 是同 model 连跑前次
+  system+tools 仍在 5min TTL 内复用,plus run 7 是该 model 首次冷启。直
+  接平均会读出"模型切换降 cache"的假规律,正确对比是 candidate run 1 vs
+  baseline run 1。
+
 **M5 之前这个模块只有空目录 + README;M14 是 v1 有产出但有限;
-M15 Session A 把"信号 vs 噪声"可视化做出来,Session B 用真实模型
-切换跑出第一份退化故事并写进简历。**
+M15 Session A 把"信号 vs 噪声"可视化做出来,Session B 用 eval 数据驱动
+了一次真实模型选型决策并落 story 简历可见。**
 
 ### `shared/`
 - `logging.py`：统一结构化日志（JSON 格式，落盘 + 终端美化）
-- `cost.py`：Cost tracker，按 session 累计 input/output/cached token
+- `cost.py`：Cost tracker,按 session 累计 input/output/cached token。
+  支持多 tier 计费(`QwenFlashPricing` + `QwenPlusPricing`),`pricing_for_model(model)`
+  按 model id 前缀路由(M15 Session B)
 - `cache.py`：Prompt cache 辅助（layer 打标、边界插入）
 - `errors.py`：统一异常基类
 - `jsonschema.py`：JSON Schema 工具。当前提供 `inline_refs`，把 Pydantic
@@ -290,6 +318,13 @@ query rewrite / chunk rerank 等子任务——统一使用 **qwen3.6-flash**，
 - **为什么不做分层**：Sonnet / Haiku 分层的意义在 Anthropic 原生生态
   （价格差 ~5×）才成立；qwen3.6-flash 在 flash 档位价格已经足够便宜，
   分层带来的实现复杂度不值
+- **2026-04-27 M15 Session B 复核**:把 `DEFAULT_MODEL` 临时切到 qwen3.6-plus
+  跑一次 `eval run smoke.yaml`,实测 plus **2.03x cost / 2.22x latency / 0
+  quality 上行**(eval 颗粒度看不出 plus 比 flash 更好,M14 noise floor
+  之后只能看出"都过线")。**用数据否决了一次本来会过 0 regression 关的升
+  级**,继续用 flash。多 tier 计费基础设施(`QwenPlusPricing` +
+  `pricing_for_model()`)留下供下次切换零摩擦。详细数据 + 触发重评条件见
+  `docs/stories/2026-04-27-model-selection-flash-vs-plus.md`。
 
 `CLAUDE.md` 的 "Cost discipline" 只保留操作规则（所有 LLM 调用必须走
 `agents/llm_client.py` 等），不再重复默认——此节为单一真源。

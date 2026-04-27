@@ -289,6 +289,47 @@ One M15 Session A lesson worth keeping (2026-04-27):
   zero JS) is enough — don't pull in plotly/matplotlib for a CLI
   tool's diagnostic page.
 
+One M15 Session B lesson worth keeping (2026-04-27):
+
+- **"0 regressions" passes the eval gate but does not equal "approve
+  the upgrade" — you need a positive ROI signal too.** Session B ran
+  qwen3.6-plus against the smoke suite as a real upgrade candidate.
+  All 5 papers PASSed; 0 field regression. The M9 cost-discipline
+  rule "before changing default model, run eval and confirm 0
+  regressions" was satisfied. But the data also showed plus was
+  **2.03x cost / 2.22x latency** for **0 measurable quality gain**
+  (the M14 catastrophic-class assertions pass for both flash and
+  plus — eval can't tell which is better, only that both are above
+  the floor). Decision: stay on flash. Generalizable rule: a "no
+  regression" pass on a coarse eval is a *necessary* condition for
+  upgrade, not *sufficient*. Without a metric that distinguishes
+  candidate from baseline on the upside, an upgrade with cost
+  increase fails on cost discipline alone. This also means: the
+  highest-leverage future eval work is finer-grained quality
+  assertions (method name stability, subtle hallucination rates),
+  not more catastrophic-class coverage. Worth more than another
+  smoke variant.
+
+- **"Plus uses more output tokens" is a hidden multiplier on tier
+  upgrades.** Pricing page said 1.67x flash; actual cost ratio came
+  out 2.03x. Latency ratio came out 2.22x — even larger than cost,
+  which means plus is also slower per token. Two amplifiers stack
+  in the same direction. Anytime you're costing-out a tier upgrade,
+  use the *measured* ratio from a real run, never the price-page
+  ratio — the latter is a lower bound only.
+
+- **Cross-run cache comparison needs a same-model cold-start
+  baseline, or it lies.** Session A baseline runs 2-5 were back-to-back
+  flash, so each one's first paper benefited from the previous run's
+  still-warm system+tools cache (5-min TTL). Plus run 7 was the first
+  plus call — cold relative to flash baselines. A naive average over
+  baselines (0.246) vs candidate (0.092) reads "plus halved cache hit"
+  — but candidate run 7's per-paper numbers (0/0.140/0.080/0.105/0.136)
+  match flash run 1's per-paper numbers (0/0.122/0.076/0.119/0.128)
+  almost exactly. Same architecture, just no warm predecessor. Always
+  compare candidate run-1 vs baseline run-1 when switching models, not
+  candidate vs N-run baseline mean.
+
 ---
 
 ## Cost discipline
@@ -303,7 +344,14 @@ section is the single source of truth; do not restate it here.
   eval/suites/smoke.yaml` and confirm 0 regressions. The current v1
   suite catches catastrophic-class regressions (meta drift, > 50%
   field-length drop, missing dataset/metric); subtler regressions
-  need the M15 trend report.
+  need the M15 trend report. **0 regressions is necessary but not
+  sufficient** — also need a positive ROI signal (measurable quality
+  gain large enough to justify the cost / latency delta). M15 Session
+  B (2026-04-27) demonstrated this: qwen3.6-plus passed 5/5 with 0
+  regression but cost 2.03x / latency 2.22x with no measurable quality
+  upside, and was rejected. Multi-tier pricing (`QwenPlusPricing`,
+  `pricing_for_model()`) is in place so the *next* upgrade trial is
+  zero-friction.
 - When you add a new LLM call site, note in your reply the expected
   per-call token usage and cost estimate. New call sites also need
   eval coverage before they land — if no suite exists for the new
