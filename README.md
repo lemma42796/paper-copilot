@@ -52,6 +52,9 @@ paper-copilot doctor [--n 20]
 # Eval(M14)— golden curation + suite 回归
 paper-copilot eval mark <paper_id> -f methods -f contributions
 paper-copilot eval run eval/suites/smoke.yaml
+
+# Eval 趋势报告(M15 Session A)— 跨多次 run 看 PASS rate / cost / cache trend
+paper-copilot eval report [--last N] [--suite NAME] [-o eval/report.html]
 ```
 
 `read --lang zh` 时,叙述字段(`Contribution.claim` / `Method.description` /
@@ -73,7 +76,9 @@ paper-copilot eval run eval/suites/smoke.yaml
 
 eval/                                    # 仓库内,纳入 git
 ├── goldens/<paper_id>_<field>.json      # 单字段 golden 快照
-└── suites/<name>.yaml                   # suite 定义
+├── suites/<name>.yaml                   # suite 定义
+├── runs/<run_id>.jsonl                  # M15 Session A: per-run history(.gitignore)
+└── report.html                          # M15 Session A: 趋势报告(.gitignore)
 ```
 
 `paper_id = SHA1(PDF bytes)[:12]`,同一 PDF 改名或换位置映射到同一 id。
@@ -81,8 +86,10 @@ eval/                                    # 仓库内,纳入 git
 `read` 同时落 fields.db / embeddings.db,后续 `list` / `search` / `compare`
 / `eval` 都基于这两个索引。
 
-## 当前状态(M14)
+## 当前状态(M14 + M15 Session A)
 
 `read` / `list` / `search` / `compare` / `doctor` / `reindex` / `eval`
-七个子命令可用。下一步 M15(eval HTML 报告 + 实战回归发现)。细节见
+七个子命令可用,`eval` 含 `mark` / `run` / `report` 三个子命令。
+M15 Session A 落 `eval/runs/` per-run 历史 + 静态 HTML 趋势图(零 JS 依赖)。
+下一步 M15 Session B(真实模型切换演练 + 退化故事记录)。细节见
 [TASKS.md](TASKS.md)。

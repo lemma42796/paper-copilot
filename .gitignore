@@ -22,6 +22,7 @@ eval/report.html
 # IDEs
 .vscode/settings.json
 .idea/
+.claude/
 
 # Python tool caches
 .pytest_cache/

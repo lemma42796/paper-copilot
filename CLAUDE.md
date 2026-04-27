@@ -267,6 +267,28 @@ One M14 lesson worth keeping (2026-04-25):
   catastrophic-only thresholds) instead of pretending stochasticity
   isn't there.
 
+One M15 Session A lesson worth keeping (2026-04-27):
+
+- **For stochastic signals, trend over N runs beats majority-vote
+  goldens — cheaper and visually equivalent.** M14 left three options
+  open for handling LLM noise (majority-vote, confidence field,
+  accept-as-is). M15 Session A added a fourth that obsoletes the
+  first: persist every `eval run` as a `RunRow` flat record, then
+  render a static SVG line chart of PASS rate per field over time.
+  Run 5 (no-op rerun) hit a natural noise event — AlexNet methods
+  7→3 trips `len_short` — and showed up as a single sawtooth on the
+  chart. Run 6 (deliberate prompt degrade) showed up as the line
+  cliffing to 0%. **Sawtooth vs cliff is eyeball-distinguishable in
+  one second; the binary PASS/FAIL of a single run is not.** Cost-wise:
+  trend over 5 papers × 1 run ≡ 1 paper × 5 runs in signal terms,
+  but the former is the path you're already running, while the
+  latter requires re-marking goldens. Generalize: when you have a
+  noisy boolean assertion, before reaching for majority-vote
+  infrastructure, ask "can I just run this N times and look at the
+  shape of the line?" Often yes. Hand-rolled SVG (polyline + circles,
+  zero JS) is enough — don't pull in plotly/matplotlib for a CLI
+  tool's diagnostic page.
+
 ---
 
 ## Cost discipline

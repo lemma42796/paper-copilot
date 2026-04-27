@@ -175,8 +175,8 @@ MainAgent 重读对比。
   paper_id`(防 PDF 换路径),再用 tmpdir 当 PAPER_COPILOT_HOME 起隔离
   run(RelatedAgent 自动短路,用户的真索引不动,suite 可重复)。
 - `assertions.py` — 纯函数,JSON dict in / `FieldFailure` list out。
-- `cli/commands/eval.py` — `eval mark` / `eval run`,后者按结果 exit
-  0/1。
+- `cli/commands/eval.py` — `eval mark` / `eval run` / `eval report`,
+  `run` 按结果 exit 0/1 并默认 record 一份 run 历史(`--no-record` 可关)。
 - `eval/suites/smoke.yaml` — 5 篇 × 2 字段示例 suite,绝对预算 cap
   (¥0.20 / 180s 每篇)。
 
@@ -201,9 +201,34 @@ MainAgent 重读对比。
 
 **永不做**:LLM-as-judge(架构红线)。
 
-**M5 之前这个模块只有空目录 + README;M14 之后是 v1 有产出但有限。M15 的
-任务是趋势报告 + 把 stochastic 字段(尤其 `is_novel_to_this_paper`)用
-multi-run majority-vote 捞回来。**
+**M15 Session A 落地**(2026-04-27,趋势可视化解决 noise floor):
+
+- `runs.py` — `RunRow` 扁平 schema(每行 = 一个 (run_id, paper_id, field)),
+  `write_run(SuiteResult)` 落 `eval/runs/<run_id>.jsonl`,`load_history`
+  读最近 N 个文件并按 `suite_name` 切片。**先 filter 再 truncate** 是
+  关键(否则 last=2 在最后两个 deep run 上 filter smoke 会得 0 行)。
+  `cache_hit_ratio = cache_read / (input + cache_read + cache_create)`
+  按 disjoint 计费拍。`run_id` 用 `2026-04-27T15-30-45Z` 文件名安全格式,
+  字典序 = 时间序。
+- `report.py` — 纯 stdlib 手搓 SVG,800x280 画布、polyline + circle marker
+  + 5 档 Y 轴网格 + `<title>` SVG tooltip,**零 JS / 零图表库依赖**。
+  三张图:per-field PASS rate、per-paper cost (¥)、per-paper cache-hit
+  ratio。顶部 markdown 摘要 diff 最近一次 vs 上一次:PASS 翻转(↗/↘)、
+  cost drift > ±10%、cache drift > ±10%。空状态(无 run 历史)给 hint
+  指向 `eval run`。
+- **解决了什么**:M14 实测出 LLM noise floor 高 → 单跑 PASS/FAIL 是
+  二元噪声(同 prompt 同模型也会 4/5 vs 5/5 抖)。趋势图把"一根锯齿"
+  vs"整条断崖"画出来,肉眼可分 noise vs catastrophic regression。
+  Session A 实测 6 跑(5 baseline + 1 故意 degrade)恰好踩到这两种
+  情况,DoD 三条第一条 ✅。
+- **没做什么**:multi-run majority-vote golden、schema confidence 字段、
+  HTML 交互式滚动/筛选。M14 节末提到的"M15 该做什么"三选一在 Session A
+  时刻被趋势图替代(更便宜:每篇跑 5 次 vs 一次跑 5 篇,数学等价但
+  不需要重标 golden)。
+
+**M5 之前这个模块只有空目录 + README;M14 是 v1 有产出但有限;
+M15 Session A 把"信号 vs 噪声"可视化做出来,Session B 用真实模型
+切换跑出第一份退化故事并写进简历。**
 
 ### `shared/`
 - `logging.py`：统一结构化日志（JSON 格式，落盘 + 终端美化）
