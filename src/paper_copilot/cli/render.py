@@ -111,7 +111,10 @@ def to_markdown(paper: Paper, *, language: Literal["en", "zh"] = "en") -> str:
         val = f"{e.value}{e.unit or ''}" if e.value is not None else "n/a"
         pages = f" (p. {', '.join(str(p) for p in e.pages)})" if e.pages else ""
         lines.append(f"- **{e.dataset}** / {e.metric}: **{val}** vs {e.comparison_baseline}{pages}")
-        lines.append(f"  - _{e.raw}_")
+        already_shown = f"{val} vs {e.comparison_baseline}".lower()
+        raw_norm = (e.raw or "").strip().lower()
+        if raw_norm and raw_norm not in already_shown:
+            lines.append(f"  - _{e.raw}_")
     lines.append("")
 
     lines.append(f"## {h['limitations']}")
