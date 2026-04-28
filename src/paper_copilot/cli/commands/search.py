@@ -40,19 +40,29 @@ def search_cmd(
         typer.Option(
             "--field",
             "-f",
-            help=f"Field to pre-filter: {', '.join(available_fields())}",
+            help=(
+                f"Pre-filter to papers whose <field> contains --contains "
+                f"(one of: {', '.join(available_fields())}). Must be paired with --contains."
+            ),
         ),
     ] = None,
     contains: Annotated[
         str | None,
-        typer.Option("--contains", "-c", help="Substring to match in the chosen field"),
+        typer.Option(
+            "--contains",
+            "-c",
+            help="Case-insensitive substring used with --field to pre-filter before vector search.",
+        ),
     ] = None,
-    k: Annotated[int, typer.Option("--k", help="Number of papers to return")] = 10,
+    k: Annotated[
+        int,
+        typer.Option("--k", help="Number of top-k papers to return."),
+    ] = 10,
     root: Annotated[
         Path | None, typer.Option("--root", help="Override PAPER_COPILOT_HOME root")
     ] = None,
 ) -> None:
-    """Semantic search across the local paper library."""
+    """Top-k semantic search (sqlite-vec) over the local paper library; optional substring pre-filter."""
     if (field is None) != (contains is None):
         raise typer.BadParameter("--field and --contains must be used together")
     if field is not None and field not in available_fields():

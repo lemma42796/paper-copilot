@@ -52,7 +52,7 @@ def reindex(
         ),
     ] = None,
 ) -> None:
-    """Rebuild fields.db (and embeddings.db if --pdf-dir is given)."""
+    """Rebuild fields.db (and embeddings.db with --pdf-dir) from session.jsonl traces."""
     home = root if root is not None else default_root()
     papers_dir = home / "papers"
     if not papers_dir.exists():

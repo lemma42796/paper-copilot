@@ -37,23 +37,30 @@ def list_(
         typer.Option(
             "--field",
             "-f",
-            help=f"Field to search: {', '.join(available_fields())}",
+            help=(
+                f"Field to substring-match (one of: {', '.join(available_fields())}). "
+                "Must be paired with --contains."
+            ),
         ),
     ] = None,
     contains: Annotated[
         str | None,
-        typer.Option("--contains", "-c", help="Substring to match (case-insensitive)"),
+        typer.Option(
+            "--contains",
+            "-c",
+            help="Case-insensitive substring to match in the chosen --field.",
+        ),
     ] = None,
     format_: Annotated[
         str,
-        typer.Option("--format", help="Output format: text or json"),
+        typer.Option("--format", help="Output format: text (default, table) or json."),
     ] = "text",
     root: Annotated[
         Path | None,
         typer.Option("--root", help="Override PAPER_COPILOT_HOME root"),
     ] = None,
 ) -> None:
-    """List indexed papers, optionally filtered by year or field substring."""
+    """List indexed papers from fields.db; filter by --year or --field/--contains substring (no LLM)."""
     if format_ not in ("text", "json"):
         raise typer.BadParameter(f"unsupported format: {format_!r}; use 'text' or 'json'")
     if (field is None) != (contains is None):

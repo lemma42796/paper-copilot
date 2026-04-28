@@ -14,7 +14,15 @@ from paper_copilot.cli.commands.search import search_cmd
 
 app = typer.Typer(
     name="paper-copilot",
-    help="Local-first paper reading copilot.",
+    help=(
+        "Local-first paper reading copilot.\n\n"
+        "Reads PDFs through a skim → deep → related agent pipeline, writes a "
+        "Markdown report, and indexes structured fields + embeddings on disk so "
+        "you can later list / search / compare across the whole library. "
+        "Eval and doctor commands cover regression and cost observability.\n\n"
+        "Data lives in $PAPER_COPILOT_HOME (default ~/.paper-copilot/). "
+        "Per-command details: `pc <command> --help`."
+    ),
     add_completion=False,
     no_args_is_help=True,
 )

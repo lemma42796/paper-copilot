@@ -42,14 +42,14 @@ class _SessionAgg:
 def doctor(
     n: Annotated[
         int,
-        typer.Option("--n", "-n", help="Number of most recent sessions to report"),
+        typer.Option("--n", "-n", help="Number of most recent sessions to include in the report."),
     ] = 10,
     format_: Annotated[
         str,
-        typer.Option("--format", "-f", help="Output format: text or json"),
+        typer.Option("--format", "-f", help="Output format: text (default, table) or json."),
     ] = "text",
 ) -> None:
-    """Report cache hit rate, cost, and latency across recent sessions."""
+    """Cache hit rate, latency, and ¥ cost across the last N sessions (no LLM calls)."""
     if n <= 0:
         raise typer.BadParameter(f"--n must be positive, got {n}")
     if format_ not in ("text", "json"):
