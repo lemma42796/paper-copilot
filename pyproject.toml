@@ -24,6 +24,7 @@ dependencies = [
 
 [project.scripts]
 paper-copilot = "paper_copilot.cli.main:app"
+pc = "paper_copilot.cli.main:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/paper_copilot"]

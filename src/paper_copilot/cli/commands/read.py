@@ -29,14 +29,27 @@ def read(
     pdf_path: Annotated[Path, typer.Argument(help="Path to the paper PDF")],
     force: Annotated[
         bool,
-        typer.Option("--force", help="Overwrite existing session for this paper"),
+        typer.Option(
+            "--force",
+            help=(
+                "Re-run the pipeline and overwrite the existing session. "
+                "Without --force, `read` just prints the existing report.md."
+            ),
+        ),
     ] = False,
     lang: Annotated[
         str,
-        typer.Option("--lang", "-l", help="Output language: en or zh"),
+        typer.Option(
+            "--lang",
+            "-l",
+            help=(
+                "Report language: en or zh. Narrative fields translate; "
+                "dataset names, metrics, numbers, authors, raw quotes stay English."
+            ),
+        ),
     ] = "en",
 ) -> None:
-    """Deep-read a paper and write a structured Markdown report."""
+    """Read a PDF end-to-end (skim → deep → related); write report.md and index fields + embeddings."""
     if lang not in ("en", "zh"):
         raise typer.BadParameter(f"unsupported language: {lang!r}; use 'en' or 'zh'")
     asyncio.run(_read_async(pdf_path, force, cast("Literal['en', 'zh']", lang)))
@@ -50,10 +63,19 @@ async def _read_async(pdf_path: Path, force: bool, language: Literal["en", "zh"]
     pdir = paper_dir(pid)
     if pdir.exists():
         if not force:
-            raise typer.BadParameter(
-                f"session already exists for paper_id={pid} at {pdir}. "
-                "Rerun with --force to overwrite."
-            )
+            report_path = pdir / "report.md"
+            if not report_path.exists():
+                raise typer.BadParameter(
+                    f"session exists for paper_id={pid} at {pdir} but report.md "
+                    "is missing. Rerun with --force to overwrite."
+                )
+            console = Console()
+            console.print(Markdown(report_path.read_text(encoding="utf-8")))
+            console.print()
+            console.print(f"[dim]session: {pdir / 'session.jsonl'}[/dim]")
+            console.print(f"[dim]report:  {report_path}[/dim]")
+            console.print("[dim]已有结果 — 用 --force 重跑[/dim]")
+            return
         shutil.rmtree(pdir)
 
     root = default_root()
