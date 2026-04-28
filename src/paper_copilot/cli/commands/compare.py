@@ -1,4 +1,8 @@
-"""`paper-copilot compare <paper_id_a> <paper_id_b>` subcommand.
+"""`paper-copilot compare <paper_a> <paper_b>` subcommand.
+
+Each argument may be either a 12-char paper_id (from `paper-copilot list`)
+or a path to a PDF (the SHA1[:12] of its bytes is the paper_id).
+
 
 Reads two papers from fields.db and renders a side-by-side comparison.
 Methods align by case-insensitive name; experiments align by
@@ -19,31 +23,37 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from paper_copilot.cli.commands._shared import resolve_paper_arg
 from paper_copilot.knowledge.fields_store import FieldsStore, PaperRow
 from paper_copilot.session.paths import default_root
 
 
 def compare(
-    paper_id_a: Annotated[str, typer.Argument(help="paper_id of the first paper")],
-    paper_id_b: Annotated[str, typer.Argument(help="paper_id of the second paper")],
+    paper_a: Annotated[str, typer.Argument(help="paper_id or path to a PDF (first paper)")],
+    paper_b: Annotated[str, typer.Argument(help="paper_id or path to a PDF (second paper)")],
     format_: Annotated[
         str,
-        typer.Option("--format", help="Output format: text or json"),
+        typer.Option("--format", help="Output format: text (default, table) or json."),
     ] = "text",
     deep: Annotated[
         bool,
-        typer.Option("--deep", help="LLM-backed synthesis (deferred until M14)"),
+        typer.Option(
+            "--deep",
+            help="LLM-backed synthesis. Currently disabled (cost discipline); exits 2.",
+        ),
     ] = False,
     root: Annotated[
         Path | None,
         typer.Option("--root", help="Override PAPER_COPILOT_HOME root"),
     ] = None,
 ) -> None:
-    """Side-by-side compare two indexed papers."""
+    """Side-by-side field compare for two papers (paper_id or PDF path) — pure SQLite, 0 LLM cost."""
     if format_ not in ("text", "json"):
         raise typer.BadParameter(f"unsupported format: {format_!r}; use 'text' or 'json'")
+    paper_id_a = resolve_paper_arg(paper_a)
+    paper_id_b = resolve_paper_arg(paper_b)
     if paper_id_a == paper_id_b:
-        raise typer.BadParameter("paper_id_a and paper_id_b must differ")
+        raise typer.BadParameter("the two papers must differ")
     if deep:
         typer.echo(
             "--deep is deferred until M14 lands an eval suite "

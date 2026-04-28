@@ -9,6 +9,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from paper_copilot.cli.commands._shared import resolve_paper_arg
 from paper_copilot.eval.goldens import (
     ALLOWED_FIELDS,
     file_path,
@@ -25,14 +26,17 @@ from paper_copilot.shared.errors import EvalError
 
 app = typer.Typer(
     name="eval",
-    help="Mark goldens and run regression suites.",
+    help="Eval workflow: `mark` goldens, `run` regression suites, `report` HTML trend.",
     no_args_is_help=True,
 )
 
 
 @app.command("mark")
 def mark(
-    paper_id: Annotated[str, typer.Argument(help="paper_id from `paper-copilot list`")],
+    paper: Annotated[
+        str,
+        typer.Argument(help="paper_id (from `paper-copilot list`) or path to a PDF"),
+    ],
     field: Annotated[
         list[str] | None,
         typer.Option(
@@ -60,6 +64,7 @@ def mark(
             f"unsupported field(s) {invalid}; allowed: {', '.join(ALLOWED_FIELDS)}"
         )
 
+    paper_id = resolve_paper_arg(paper)
     try:
         records = mark_from_session(paper_id, fields, root=root, dir_=dir_)
     except EvalError as e:
@@ -85,7 +90,13 @@ def run(
     ] = None,
     no_record: Annotated[
         bool,
-        typer.Option("--no-record", help="Skip writing run history to eval/runs/"),
+        typer.Option(
+            "--no-record",
+            help=(
+                "Don't append this run to eval/runs/. For ad-hoc debugging; "
+                "skipping the record means `eval report` won't see it."
+            ),
+        ),
     ] = False,
 ) -> None:
     """Execute a suite: rerun the pipeline on each paper, compare to goldens."""
@@ -125,7 +136,7 @@ def report(
     ] = Path("eval/report.html"),
     last: Annotated[
         int | None,
-        typer.Option("--last", "-n", help="Only include the last N runs"),
+        typer.Option("--last", "-n", help="Only include the last N runs (default: all)."),
     ] = None,
     suite: Annotated[
         str | None,
