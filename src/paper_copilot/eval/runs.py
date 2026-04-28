@@ -20,11 +20,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from paper_copilot.eval._paths import default_runs_dir, find_project_root
 from paper_copilot.eval.suite import SuiteResult
 from paper_copilot.shared.errors import EvalError
-
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_RUNS_DIR = _REPO_ROOT / "eval" / "runs"
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +80,7 @@ def make_run_id(now: datetime | None = None) -> str:
 def _git_sha() -> str:
     result = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"],
-        cwd=_REPO_ROOT,
+        cwd=find_project_root(),
         capture_output=True,
         text=True,
         check=False,
@@ -111,7 +109,7 @@ def write_run(
 ) -> Path:
     rid = run_id if run_id is not None else make_run_id()
     sha = git_sha if git_sha is not None else _git_sha()
-    base = runs_dir if runs_dir is not None else DEFAULT_RUNS_DIR
+    base = runs_dir if runs_dir is not None else default_runs_dir()
     base.mkdir(parents=True, exist_ok=True)
     path = base / f"{rid}.jsonl"
     if path.exists():
@@ -154,7 +152,7 @@ def load_history(
     suite_name: str | None = None,
     last: int | None = None,
 ) -> list[RunRow]:
-    base = runs_dir if runs_dir is not None else DEFAULT_RUNS_DIR
+    base = runs_dir if runs_dir is not None else default_runs_dir()
     if not base.exists():
         return []
     files = sorted(p for p in base.iterdir() if p.suffix == ".jsonl")

@@ -23,13 +23,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from paper_copilot.eval._paths import default_goldens_dir
 from paper_copilot.session import SessionStore
 from paper_copilot.shared.errors import EvalError
 
 ALLOWED_FIELDS: tuple[str, ...] = ("meta", "contributions", "methods", "experiments")
-
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_GOLDENS_DIR = _REPO_ROOT / "eval" / "goldens"
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +49,7 @@ class GoldenRecord:
 
 
 def file_path(paper_id: str, field: str, *, dir_: Path | None = None) -> Path:
-    base = dir_ if dir_ is not None else DEFAULT_GOLDENS_DIR
+    base = dir_ if dir_ is not None else default_goldens_dir()
     return base / f"{paper_id}_{field}.json"
 
 
