@@ -5,9 +5,11 @@ Pipeline: structured filter on ``fields.db`` produces a candidate
 restricted to that set, then chunks are grouped by paper so a single
 hit per paper is returned with the best-matching chunk.
 
-No reranker — ARCHITECTURE.md 135 defers that. The only tuning knob is
-``overfetch``, which widens the KNN pool before the per-paper group-by
-so a paper isn't missed when one bad chunk outranks its own best chunk.
+No reranker — ARCHITECTURE.md 135 defers that. ``overfetch`` controls
+the initial pool width (``k * overfetch`` chunks); if grouping leaves
+fewer than ``k`` unique papers and the pool was the bottleneck, the
+search escalates once to the full chunk index and re-groups. Worst
+case is one extra full-table KNN scan per query.
 """
 
 from __future__ import annotations
@@ -58,19 +60,22 @@ def search(
     if candidates is not None and not candidates:
         return []
 
-    hits = embeddings_store.knn(
-        query_vec,
-        k=k * overfetch,
-        paper_ids=list(candidates) if candidates is not None else None,
-    )
+    paper_ids_arg = list(candidates) if candidates is not None else None
+    pool = k * overfetch
+    hits = embeddings_store.knn(query_vec, k=pool, paper_ids=paper_ids_arg)
     if not hits:
         return []
 
-    best_per_paper: dict[str, ChunkHit] = {}
-    for h in hits:
-        prev = best_per_paper.get(h.paper_id)
-        if prev is None or h.distance < prev.distance:
-            best_per_paper[h.paper_id] = h
+    best_per_paper = _group_best_chunk_per_paper(hits)
+
+    if len(best_per_paper) < k and len(hits) == pool:
+        # Top-k*overfetch chunks clustered into < k papers. Re-pull at the
+        # full index size so the per-paper group-by has room to surface
+        # papers whose best chunk was outranked by a popular paper's tail.
+        ceiling = embeddings_store.count_chunks()
+        if ceiling > pool:
+            hits = embeddings_store.knn(query_vec, k=ceiling, paper_ids=paper_ids_arg)
+            best_per_paper = _group_best_chunk_per_paper(hits)
 
     ordered = sorted(best_per_paper.values(), key=lambda h: h.distance)[:k]
 
@@ -90,6 +95,15 @@ def search(
             )
         )
     return results
+
+
+def _group_best_chunk_per_paper(hits: list[ChunkHit]) -> dict[str, ChunkHit]:
+    best: dict[str, ChunkHit] = {}
+    for h in hits:
+        prev = best.get(h.paper_id)
+        if prev is None or h.distance < prev.distance:
+            best[h.paper_id] = h
+    return best
 
 
 def _candidate_paper_ids(

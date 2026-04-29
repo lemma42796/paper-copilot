@@ -146,3 +146,54 @@ def test_returned_metadata_is_populated(stores) -> None:
     )
     assert results[0].title == "Paper A (2024)"
     assert results[0].year == 2024
+
+
+def test_search_escalates_pool_when_top_chunks_cluster(tmp_path: Path) -> None:
+    # pA owns the 5 nearest chunks; pB and pC each have one chunk
+    # that's farther but still relevant. With k=3, overfetch=1 the
+    # initial pool of 3 is all-pA — escalation must re-pull at the
+    # full ceiling so pB and pC surface.
+    with (
+        FieldsStore.open(tmp_path / "f.db") as fs,
+        EmbeddingsStore.open(tmp_path / "e.db", dim=DIM) as es,
+    ):
+        now = datetime.now(UTC).isoformat()
+        fs.upsert("pA", _payload("Paper A", 2024), now)
+        fs.upsert("pB", _payload("Paper B", 2024), now)
+        fs.upsert("pC", _payload("Paper C", 2024), now)
+
+        def _row(pid: str, ord_: int) -> ChunkRow:
+            return ChunkRow(
+                chunk_id=0, paper_id=pid, ord=ord_, section="Intro",
+                page_start=1, page_end=1, text=f"{pid}-{ord_}",
+            )
+
+        # pA: 5 chunks tightly hugging the query axis (all very near).
+        es.replace_paper(
+            "pA",
+            [_row("pA", i) for i in range(5)],
+            np.array(
+                [[1, 0.01 * i, 0, 0] for i in range(5)],
+                dtype=np.float32,
+            ),
+        )
+        # pB and pC each have a single chunk farther away.
+        es.replace_paper(
+            "pB", [_row("pB", 0)],
+            np.array([[1, 0.5, 0, 0]], dtype=np.float32),
+        )
+        es.replace_paper(
+            "pC", [_row("pC", 0)],
+            np.array([[1, 0.6, 0, 0]], dtype=np.float32),
+        )
+
+        results = search(
+            np.array([1, 0, 0, 0], dtype=np.float32),
+            fields_store=fs,
+            embeddings_store=es,
+            k=3,
+            overfetch=1,
+        )
+
+    assert {r.paper_id for r in results} == {"pA", "pB", "pC"}
+    assert results[0].paper_id == "pA"  # closest still ranks first
