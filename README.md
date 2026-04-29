@@ -157,7 +157,8 @@ paper-copilot doctor -f json       # 接 jq 之类
 # 钉 golden(选哪些字段做基准)
 paper-copilot eval mark 2c03df8b48bf -f methods -f contributions
 
-# 跑回归 suite
+# 跑回归 suite(suite 里的 pdf 路径相对当前工作目录解析,
+# 见 eval/suites/smoke.yaml — 在含有那 5 篇 PDF 的目录运行)
 paper-copilot eval run eval/suites/smoke.yaml
 
 # 渲染跨 run 趋势 HTML
