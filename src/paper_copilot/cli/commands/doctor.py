@@ -4,6 +4,12 @@ Walks ``$PAPER_COPILOT_HOME/papers/*/session.jsonl``, aggregates the
 ``llm_call`` events emitted by Skim/Deep agents (added in M9), and
 renders a per-session breakdown plus global p50/p95 latency and top-3
 most expensive sessions. Single source of truth for the M9 DoD check.
+
+Sessions written before the ``llm_call`` event existed (pre-M9, plus
+the 2026-04-24 batch where Skim/Deep wrote ``final_output`` /
+``tool_use`` only) carry no telemetry. Their rows still surface so the
+paper isn't hidden from the report, but every numeric column renders
+``—``; in JSON those fields are ``null`` and ``has_telemetry=false``.
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ from paper_copilot.shared.errors import SessionError
 class _SessionAgg:
     paper_id: str
     mtime: float
+    has_telemetry: bool
     n_calls: int
     input_tokens: int
     output_tokens: int
@@ -89,11 +96,12 @@ def _collect_sessions(n: int) -> list[_SessionAgg]:
 
         calls = [e for e in entries if isinstance(e, LLMCall)]
         if not calls:
-            # no llm_call events yet (pre-M9 session, or still running)
+            # no llm_call events: pre-M9/M14 session, or still running
             aggs.append(
                 _SessionAgg(
                     paper_id=_short_paper_id(entries, paper_id),
                     mtime=mtime,
+                    has_telemetry=False,
                     n_calls=0,
                     input_tokens=0,
                     output_tokens=0,
@@ -119,6 +127,7 @@ def _collect_sessions(n: int) -> list[_SessionAgg]:
             _SessionAgg(
                 paper_id=_short_paper_id(entries, paper_id),
                 mtime=mtime,
+                has_telemetry=True,
                 n_calls=len(calls),
                 input_tokens=input_t,
                 output_tokens=output_t,
@@ -184,7 +193,11 @@ def _emit_text(sessions: list[_SessionAgg], latencies: list[int]) -> None:
         console.print(f"[yellow]no sessions found under[/yellow] {default_root() / 'papers'}")
         return
 
-    top3 = sorted(sessions, key=lambda s: s.cost_cny, reverse=True)[:3]
+    top3 = sorted(
+        [s for s in sessions if s.has_telemetry],
+        key=lambda s: s.cost_cny,
+        reverse=True,
+    )[:3]
     top3_ids = {s.paper_id for s in top3}
 
     table = Table(title="paper-copilot doctor — recent sessions", show_lines=False)
@@ -198,20 +211,24 @@ def _emit_text(sessions: list[_SessionAgg], latencies: list[int]) -> None:
     table.add_column("latency", justify="right")
     table.add_column("cost ¥", justify="right")
 
+    blank = "[dim]—[/dim]"
     for s in sessions:
         style = "red" if s.paper_id in top3_ids and s.cost_cny > 0 else None
-        table.add_row(
-            s.paper_id,
-            str(s.n_calls),
-            f"{s.input_tokens:,}",
-            f"{s.output_tokens:,}",
-            f"{s.cache_read_tokens:,}",
-            f"{s.cache_creation_tokens:,}",
-            f"{s.hit_rate * 100:.1f}",
-            f"{s.latency_ms_total:,}ms",
-            f"{s.cost_cny:.4f}",
-            style=style,
-        )
+        if s.has_telemetry:
+            table.add_row(
+                s.paper_id,
+                str(s.n_calls),
+                f"{s.input_tokens:,}",
+                f"{s.output_tokens:,}",
+                f"{s.cache_read_tokens:,}",
+                f"{s.cache_creation_tokens:,}",
+                f"{s.hit_rate * 100:.1f}",
+                f"{s.latency_ms_total:,}ms",
+                f"{s.cost_cny:.4f}",
+                style=style,
+            )
+        else:
+            table.add_row(s.paper_id, blank, blank, blank, blank, blank, blank, blank, blank)
     console.print(table)
 
     # global stats
@@ -221,10 +238,12 @@ def _emit_text(sessions: list[_SessionAgg], latencies: list[int]) -> None:
     global_hit = _hit_rate(total_in, total_read, total_create)
     p50, p95 = _p50_p95(latencies)
 
+    legacy = sum(1 for s in sessions if not s.has_telemetry)
+    legacy_suffix = f" ({legacy} pre-M14, no telemetry)" if legacy else ""
     console.print(
         f"[dim]global hit rate: {global_hit * 100:.1f}%  "
         f"latency p50={p50}ms  p95={p95}ms  "
-        f"sessions={len(sessions)}[/dim]"
+        f"sessions={len(sessions)}{legacy_suffix}[/dim]"
     )
     if top3:
         console.print("[dim]top-3 most expensive:[/dim]")
@@ -239,28 +258,44 @@ def _emit_json(sessions: list[_SessionAgg], latencies: list[int]) -> None:
     p50, p95 = _p50_p95(latencies)
 
     payload = {
-        "sessions": [
-            {
-                "paper_id": s.paper_id,
-                "n_calls": s.n_calls,
-                "input_tokens": s.input_tokens,
-                "output_tokens": s.output_tokens,
-                "cache_read_tokens": s.cache_read_tokens,
-                "cache_creation_tokens": s.cache_creation_tokens,
-                "hit_rate": s.hit_rate,
-                "latency_ms_total": s.latency_ms_total,
-                "cost_cny": s.cost_cny,
-            }
-            for s in sessions
-        ],
+        "sessions": [_session_json(s) for s in sessions],
         "global": {
             "hit_rate": _hit_rate(total_in, total_read, total_create),
             "latency_ms_p50": p50,
             "latency_ms_p95": p95,
             "n_sessions": len(sessions),
+            "n_sessions_no_telemetry": sum(1 for s in sessions if not s.has_telemetry),
         },
     }
     typer.echo(json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+def _session_json(s: _SessionAgg) -> dict[str, object]:
+    if not s.has_telemetry:
+        return {
+            "paper_id": s.paper_id,
+            "has_telemetry": False,
+            "n_calls": None,
+            "input_tokens": None,
+            "output_tokens": None,
+            "cache_read_tokens": None,
+            "cache_creation_tokens": None,
+            "hit_rate": None,
+            "latency_ms_total": None,
+            "cost_cny": None,
+        }
+    return {
+        "paper_id": s.paper_id,
+        "has_telemetry": True,
+        "n_calls": s.n_calls,
+        "input_tokens": s.input_tokens,
+        "output_tokens": s.output_tokens,
+        "cache_read_tokens": s.cache_read_tokens,
+        "cache_creation_tokens": s.cache_creation_tokens,
+        "hit_rate": s.hit_rate,
+        "latency_ms_total": s.latency_ms_total,
+        "cost_cny": s.cost_cny,
+    }
 
 
 def _p50_p95(values: list[int]) -> tuple[int, int]:
