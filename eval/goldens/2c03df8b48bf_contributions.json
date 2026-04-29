@@ -2,7 +2,6 @@
   "paper_id": "2c03df8b48bf",
   "field": "contributions",
   "marked_at": "2026-04-25T11:04:01.893034+00:00",
-  "source_session": "/Users/a123/.paper-copilot/papers/2c03df8b48bf/session.jsonl",
   "value": [
     {
       "claim": "A deep residual learning framework is proposed that reformulates layers to learn residual functions with reference to layer inputs, easing the training of substantially deeper networks.",

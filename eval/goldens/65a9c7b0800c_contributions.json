@@ -1,0 +1,32 @@
+{
+  "paper_id": "65a9c7b0800c",
+  "field": "contributions",
+  "marked_at": "2026-04-28T11:42:00.742670+00:00",
+  "value": [
+    {
+      "claim": "ViLBERT is a two-stream visiolinguistic model that extends BERT with co-attentional transformer layers to learn task-agnostic joint representations of image content and natural language.",
+      "type": "novel_method",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "The proposed pretraining tasks (masked multi-modal modelling and multi-modal alignment prediction) on the Conceptual Captions dataset enable effective visual grounding without task-specific fine-tuning initially.",
+      "type": "novel_method",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "ViLBERT achieves state-of-the-art performance on four vision-and-language tasks: Visual Question Answering (VQA 2.0), Visual Commonsense Reasoning (VCR), Referring Expressions (RefCOCO+), and Caption-Based Image Retrieval (Flickr30k).",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "The two-stream architecture with sparse co-attention outperforms single-stream unified models and models without the specific pretraining objectives across multiple downstream tasks.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    },
+    {
+      "claim": "Pretrained ViLBERT can perform zero-shot caption-based image retrieval on Flickr30k, demonstrating that visual grounding capabilities are learned during pretraining and generalize without fine-tuning.",
+      "type": "novel_result",
+      "evidence_type": "explicit_claim"
+    }
+  ]
+}

@@ -35,7 +35,6 @@ class GoldenRecord:
     paper_id: str
     field: str
     marked_at: str
-    source_session: str
     value: Any  # JSON-shaped: dict for `meta`, list for the others.
 
     def to_json(self) -> dict[str, Any]:
@@ -43,7 +42,6 @@ class GoldenRecord:
             "paper_id": self.paper_id,
             "field": self.field,
             "marked_at": self.marked_at,
-            "source_session": self.source_session,
             "value": self.value,
         }
 
@@ -74,7 +72,6 @@ def read(paper_id: str, field: str, *, dir_: Path | None = None) -> GoldenRecord
         paper_id=raw["paper_id"],
         field=raw["field"],
         marked_at=raw["marked_at"],
-        source_session=raw["source_session"],
         value=raw["value"],
     )
 
@@ -101,7 +98,6 @@ def mark_from_session(
         )
 
     marked_at = datetime.now(UTC).isoformat()
-    source = str(store.path)
 
     records: list[GoldenRecord] = []
     for field in fields:
@@ -111,7 +107,6 @@ def mark_from_session(
             paper_id=paper_id,
             field=field,
             marked_at=marked_at,
-            source_session=source,
             value=final.payload[field],
         )
         write(record, dir_=dir_)

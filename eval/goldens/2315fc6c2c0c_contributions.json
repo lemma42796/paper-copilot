@@ -2,7 +2,6 @@
   "paper_id": "2315fc6c2c0c",
   "field": "contributions",
   "marked_at": "2026-04-25T11:04:02.354300+00:00",
-  "source_session": "/Users/a123/.paper-copilot/papers/2315fc6c2c0c/session.jsonl",
   "value": [
     {
       "claim": "A large, deep convolutional neural network with 60 million parameters achieves top-1 and top-5 error rates of 37.5% and 17.0% on the ILSVRC-2010 test set, considerably better than the previous state-of-the-art.",

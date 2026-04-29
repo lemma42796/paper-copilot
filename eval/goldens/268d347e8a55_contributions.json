@@ -2,7 +2,6 @@
   "paper_id": "268d347e8a55",
   "field": "contributions",
   "marked_at": "2026-04-25T11:04:02.809814+00:00",
-  "source_session": "/Users/a123/.paper-copilot/papers/268d347e8a55/session.jsonl",
   "value": [
     {
       "claim": "A pure Transformer applied directly to sequences of image patches can perform very well on image classification tasks without relying on convolutional neural networks.",

@@ -2,7 +2,6 @@
   "paper_id": "071b16f25117",
   "field": "methods",
   "marked_at": "2026-04-25T11:04:03.271762+00:00",
-  "source_session": "/Users/a123/.paper-copilot/papers/071b16f25117/session.jsonl",
   "value": [
     {
       "name": "RNNsearch (Attention-based NMT)",

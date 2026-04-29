@@ -2,7 +2,6 @@
   "paper_id": "071b16f25117",
   "field": "contributions",
   "marked_at": "2026-04-25T11:04:03.271762+00:00",
-  "source_session": "/Users/a123/.paper-copilot/papers/071b16f25117/session.jsonl",
   "value": [
     {
       "claim": "A neural machine translation architecture that jointly learns to align and translate by using an attention mechanism to compute context vectors for each target word, avoiding the bottleneck of a fixed-length source sentence vector.",

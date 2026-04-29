@@ -2,7 +2,6 @@
   "paper_id": "445d06b2ac99",
   "field": "contributions",
   "marked_at": "2026-04-25T11:04:03.729767+00:00",
-  "source_session": "/Users/a123/.paper-copilot/papers/445d06b2ac99/session.jsonl",
   "value": [
     {
       "claim": "Replacing large spatial convolutions (e.g., 5x5) with sequences of smaller convolutions (e.g., two 3x3 layers) reduces computational cost and parameters while maintaining expressiveness.",

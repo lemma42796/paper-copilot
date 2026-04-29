@@ -22,7 +22,6 @@ def _record(**overrides: object) -> GoldenRecord:
         "paper_id": "abc123",
         "field": "methods",
         "marked_at": "2026-04-25T00:00:00+00:00",
-        "source_session": "/tmp/session.jsonl",
         "value": [{"name": "Transformer"}],
     }
     base.update(overrides)
@@ -96,7 +95,7 @@ def test_mark_from_session_writes_one_file_per_field(tmp_path: Path) -> None:
         "limitations": [],
         "cross_paper_links": [],
     }
-    session_path = _seed_session_with_final(home, "pid_x", payload)
+    _seed_session_with_final(home, "pid_x", payload)
 
     records = mark_from_session(
         "pid_x",
@@ -110,7 +109,6 @@ def test_mark_from_session_writes_one_file_per_field(tmp_path: Path) -> None:
     for r in records:
         on_disk = read("pid_x", r.field, dir_=goldens_dir)
         assert on_disk.value == payload[r.field]
-        assert on_disk.source_session == str(session_path)
 
 
 def test_mark_from_session_rejects_unsupported_field(tmp_path: Path) -> None:
