@@ -24,8 +24,8 @@
   PDF 在场,按 sha1 paper_id 匹配)。M13:`paper-copilot compare <a> <b>`
   从 fields.db 读两篇结构化数据,methods 按 name 对齐,experiments 按
   (dataset, metric) 对齐,limitations / contributions 双栏 bullet,A↔B
-  方向的 cross_paper_link 单独成节渲染;`--format json` 给脚本消费;
-  `--deep` 占位 exit 2,延后到 M14 eval 落地后再做(0 LLM cost 默认路径)。
+  方向的 cross_paper_link 单独成节渲染;`--format json` 给脚本消费
+  (0 LLM cost)。
   M14:`paper-copilot eval mark <pid> -f <field>` 从 session.jsonl 落
   golden 进 `eval/goldens/<pid>_<field>.json`,`paper-copilot eval run
   <suite.yaml>` 在 tmpdir(隔离用户索引)重跑 MainAgent,字段断言 +
@@ -154,16 +154,13 @@
     ResNet (2015)、Bahdanau (2015) vs ViLBERT (2019)。
   - Methods 对齐:同时代同主题对(Transformer/ViT)0 共享(name 大小写
     精确匹配 — ViT 没把 "Transformer" 列成自己的 method),AlexNet/ResNet
-    8 a-only / 4 b-only。fuzzy 匹配/语义合并不进 M13(LLM 活,留 --deep)。
+    8 a-only / 4 b-only。fuzzy 匹配/语义合并不进 M13(需要 LLM)。
   - Cross-paper-links 渲染:Bahdanau ↔ ViLBERT 那对触发 `A → B
     shares_method` 一行,从 fields.db 的 `cross_paper_links` 字段直读,
     不读 graph/cross-paper-links.jsonl(后者 append-only 有历史污染)。
-  - 退出码契约:正常 0 / 缺 paper_id 1 / `--deep`、同 id、bad format 2。
+  - 退出码契约:正常 0 / 缺 paper_id 1 / 同 id、bad format 2。
   - 0 LLM 默认路径已 grep 验证(compare.py 不 import llm_client/anthropic/
     Embedder)。
-  - 决定:`--deep` 实现延后,理由:CLAUDE.md 成本纪律要求新 LLM call
-    site 先有 eval 再加;M14 之前盲飞会让 prompt 静默退化无人发现。
-    flag 留着,占位文案明确指向 M14。
 - **M12 实测 (2026-04-25)**:
   - Bahdanau (2015,12 候选库) `--force` 重读:LLM 输出 2 link
     (`builds_on→Transformer-2017`, `shares_method→ViLBERT-2019`)。
@@ -669,15 +666,13 @@ RelatedAgent → main/read/render 串线 → temporal validator 修复)。
 
 **产出**：
 - `cli/commands/compare.py`：从 fields.db 读两篇的结构化字段，渲染对比表
-- 支持 `--deep` flag：调 LLM 做额外分析（可选）
 
 **依赖**：M10
 
 **DoD**：
 - [x] 对 Phase 2 积累的论文中挑 3 对做对比，输出人类可读 (Transformer/ViT,
       AlexNet/ResNet, Bahdanau/ViLBERT — 见 Current Status M13 实测)
-- [x] 不加 `--deep` 时不调用 LLM（0 cost — grep 验证 compare.py 无 LLM
-      imports;`--deep` 占位 exit 2,延后到 M14 eval 落地)
+- [x] compare 0 LLM cost（grep 验证 compare.py 无 LLM imports）
 
 **预估**：1 session(实际 1 session)。
 

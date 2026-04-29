@@ -362,7 +362,6 @@ cli.read
 cli.compare
   → 直接从 knowledge.fields.db 读两篇的结构化字段    # 不走 agent
   → 格式化为对比表（markdown）
-  → 可选：如果用户加 --deep，派 MainAgent 做补充分析
   → cli prints table
 ```
 
@@ -464,7 +463,6 @@ cli.reindex
   再调一次模型。
 - 这也是对自己的**dogfood 压力**：如果 compare 的输出不够好，说明结构化
   抽取有问题，应该回去改 DeepAgent，而不是用 LLM 掩盖。
-- 加 `--deep` flag 给用户"我还想要 LLM 进一步对比"的逃生口。
 
 ### 为什么不做 LLM-as-judge？
 

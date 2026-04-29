@@ -7,10 +7,6 @@ or a path to a PDF (the SHA1[:12] of its bytes is the paper_id).
 Reads two papers from fields.db and renders a side-by-side comparison.
 Methods align by case-insensitive name; experiments align by
 (dataset, metric). Shared rows render first, then A-only, then B-only.
-
-No LLM. ``--deep`` is accepted but exits 2 with a deferral message
-until M14 gives us an eval suite to keep an LLM-backed synthesis
-honest (see CLAUDE.md cost discipline).
 """
 
 from __future__ import annotations
@@ -35,13 +31,6 @@ def compare(
         str,
         typer.Option("--format", help="Output format: text (default, table) or json."),
     ] = "text",
-    deep: Annotated[
-        bool,
-        typer.Option(
-            "--deep",
-            help="LLM-backed synthesis. Currently disabled (cost discipline); exits 2.",
-        ),
-    ] = False,
     root: Annotated[
         Path | None,
         typer.Option("--root", help="Override PAPER_COPILOT_HOME root"),
@@ -54,13 +43,6 @@ def compare(
     paper_id_b = resolve_paper_arg(paper_b)
     if paper_id_a == paper_id_b:
         raise typer.BadParameter("the two papers must differ")
-    if deep:
-        typer.echo(
-            "--deep is deferred until M14 lands an eval suite "
-            "(CLAUDE.md cost discipline: new LLM call sites need eval coverage).",
-            err=True,
-        )
-        raise typer.Exit(code=2)
 
     home = root if root is not None else default_root()
     db_path = home / "fields.db"
