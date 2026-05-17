@@ -8,7 +8,7 @@
 
 ## Current Status
 
-> 更新于 2026-04-27。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
+> 更新于 2026-05-17。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
 - **已完成**:M1–M15(Session A + B 全部 done)。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
@@ -42,8 +42,16 @@
 - **当前阶段**:**Phase 2 已完成**(13 篇样本 + M8 5 条 issue 全关,
   详见 `docs/issues.md` 顶部"Phase 2 收尾"段)。日常使用继续,但红线
   已过,不再阻塞下一个 milestone。
-- **下一个编码 milestone**:**全计划 done**。M15 Session B 收尾后无下一
-  编码 milestone。后续若有需要按 issues.md / 实际使用驱动开新条目。
+- **下一个编码 milestone**:**M16 候选目标已记录,未开始**。M15 Session B
+  后主功能计划完成;下一步若继续打磨,优先做 M16 的工程硬化、阅读质量指标
+  和开源可复现性。不要自动开工,等明确指令。
+- **2026-05-17 交接上下文**:当前项目是固定的多 Agent 论文阅读流水线
+  (Main → Skim → Deep → Related) + eval harness,不是 Codex / Claude Code /
+  OpenClaw 风格的"LLM 自主调工具、观察结果、继续推进直到任务完成"的
+  agent runtime。现有 `agents.loop.run_agent_loop` 有 tool-loop 雏形,但
+  主流程没有用;Skim/Deep/Related 的 tool_use 主要是结构化输出通道。若
+  目标是"解放人类干活"和真实生产力,路线应是先做 M16 硬化,再做 M17
+  Autonomous Research Loop。
 - **M15 Session A 实测 (2026-04-27)**:
   - 6 次 smoke.yaml 跑(5 baseline + 1 degraded),~12min wall、**~¥1.7**
     LLM 开销。每次自动落 `eval/runs/<run_id>.jsonl`,`eval report` 一
@@ -741,6 +749,166 @@ prompt 变更 / 架构调整），把决策过程写成 story**。
       "用 eval 量化升级收益,数据否决了一次本来会过门槛的模型升级"。
 
 **预估**：2 sessions。Session A 已完成 (1 session)。
+
+---
+
+### M16: 工程硬化 + 阅读质量指标 + 开源可复现性（候选，未开始）
+
+**目标**：把项目从"能讲深度的个人工程项目"打磨到"更接近优秀开源项目 /
+面试展示级 LLM Agent 项目"。M16 不加新论文阅读功能,只补可靠性、质量指标、
+可复现 demo 和展示材料。
+
+**为什么现在做**：M14/M15 已经证明 eval/cost/cache harness 有价值,但当前
+项目还存在几个会影响开源可信度和简历叙事的缺口:
+
+- schema 校验失败没有 retry/fallback,LLM 偶发坏结构会让 `read` 直接失败
+- `eval/suites/smoke.yaml` 依赖本地 PDF,clone 后不能开箱跑
+- `ruff` / `mypy` 还不是全绿,也没有 CI 自动拦截
+- 现有指标偏工程观测(cost / latency / cache),缺少"读得准不准"的质量指标
+- session trace 已有,但 per-agent 成功率 / retry / 成本延迟还没有汇总成指标
+- README 缺少一眼能懂的 agent 流程图、demo 输出和指标表
+
+**产出**：
+
+- **失败恢复**:
+  - schema validation 失败时自动 retry 一次
+  - retry 仍失败时把原始 tool input / validation error 写入 session
+  - 用户报错明确指出 agent、字段、失败原因
+  - `read --force` 改成先跑到临时目录,成功后再替换旧 session/report/index,
+    避免新 run 失败时丢掉旧成功结果
+- **阅读质量指标**:
+  - extraction completeness:关键 methods / experiments / contributions 是否抽全
+  - unsupported claim rate:抽取结果中找不到论文依据的比例
+  - evidence coverage:每条 contribution / method / experiment 是否带页码或原文片段
+  - schema first-pass valid rate:第一次 tool-call 输出就过 schema 的比例
+  - eval pass stability:同一 smoke suite 多次运行 PASS/FAIL 是否稳定
+  - p95 latency per paper
+  - cost per successful paper
+  - RelatedAgent link precision 作为跨论文关联的辅助指标,不要把项目叙事带偏成 RAG
+- **证据追溯**:
+  - 为 contribution / method / experiment 增加 evidence 引用方案
+  - report 里能展示页码或短 evidence snippet
+  - eval 能统计 evidence coverage 和 unsupported claim rate
+- **可复现 demo**:
+  - 提供 fixture 下载脚本或明确的 `examples/` 输入集
+  - `eval/suites/smoke.yaml` 在文档指定步骤下可复现运行
+  - 提交一份示例 `report.md` / eval report 截图或 HTML artifact
+- **Agent 可观测性**:
+  - 统计 per-agent latency / tokens / cost / schema retry / failure rate
+  - `doctor` 或 `eval report` 增加 agent 级汇总
+  - RelatedAgent skipped reason / link validator drop reason 可聚合查看
+- **边界与开源工程**:
+  - 收敛 agents 的公开 run 入口,让 eval 不直接依赖 agents 内部类
+  - 加 GitHub Actions: `ruff check .` / `mypy` / `pytest`
+  - README 增加 agent 流程图、真实输出片段、指标表、"不是普通 RAG demo"的说明
+  - 可选:CONTRIBUTING.md / issue template / badges / demo video
+
+**依赖**：
+
+- M14/M15 eval 基础设施稳定
+- 先修当前门禁红项:`ruff`、`mypy`
+- 不引入新依赖;如果 evidence 或 metrics 需要额外库,先讨论再加
+
+**DoD**：
+
+- [ ] `uv run ruff check .` 通过
+- [ ] `uv run mypy` 通过
+- [ ] `uv run pytest` 通过
+- [ ] GitHub Actions 自动跑 ruff / mypy / pytest
+- [ ] smoke eval 在文档步骤下可复现运行,不依赖未说明的本地 PDF 状态
+- [ ] schema first-pass valid rate / retry rate / per-agent cost latency 有记录
+- [ ] 至少 5 篇论文有 evidence coverage / unsupported claim rate 人工抽样结果
+- [ ] README 展示 agent 流程、demo 输出、核心指标和模型选型故事
+
+**预估**：3-5 sessions。先做门禁 + 可复现 demo,再做质量指标和 evidence。
+
+---
+
+### M17: Autonomous Research Loop（候选，未开始）
+
+**目标**：把 paper-copilot 从"读一篇论文的固定流水线"升级成"能完成一个
+研究任务的论文研究助理"。用户给研究目标,系统自动分解任务、调用工具 /
+worker agent、观察结果、补读缺口、汇总报告,直到任务完成或触发预算 /
+turn 上限。
+
+**当前事实**：项目已有 `agents.loop.run_agent_loop`、session trace、cost
+tracker、schema/tool-use 基础,但主功能没有使用真正的 tool loop。SkimAgent /
+DeepAgent / RelatedAgent 都是一次性 forced tool-call,更像结构化抽取 worker。
+M17 的价值不是"堆更多 agent",而是让 LLM 在 harness 内自主推进研究任务。
+
+**目标体验**：
+
+```bash
+paper-copilot research "compare attention mechanisms for vision-language models" \
+  --pdf-dir ./papers --budget-cny 2.0
+```
+
+系统自动:
+
+1. 枚举或搜索候选论文
+2. 对未读论文调用 `read_paper`
+3. 搜索本地库找相关论文和片段
+4. 挑 3-8 篇最相关论文做比较
+5. 发现证据不足时补读 section / paper
+6. 写 synthesis report,列出结论、证据、未覆盖问题和后续阅读建议
+
+**核心设计原则**：
+
+- 主 Agent 是 planner / controller,不是又一个一次性总结 prompt
+- worker agent / tools 必须 bounded:明确输入输出、预算、失败语义
+- 每一步都写 session trace:thought 摘要、tool call、tool result、cost、
+  schema validation、termination reason
+- deterministic tools 优先于 LLM 自由发挥:已有 `read`、`search`、`compare`、
+  `list`、`doctor` 能包装成 tool surface
+- 不能让 agent 随意扫全库和无限读 PDF;必须有 max_turns、max_budget、
+  max_papers、max_sections
+- eval 不只看最终文本,还要看 task success、工具调用路径、预算和证据覆盖
+
+**候选工具 surface**：
+
+- `list_papers(pdf_dir | library_filter) -> paper candidates`
+- `read_paper(pdf_path | paper_id) -> Paper summary + session path`
+- `search_library(query, filters, k) -> ranked papers/chunks`
+- `inspect_paper(paper_id, fields) -> structured fields + evidence`
+- `deep_read_section(paper_id, section_query) -> extracted evidence`
+- `compare_papers(a, b) -> structured comparison`
+- `find_related_papers(paper_id, k) -> related links/candidates`
+- `write_synthesis_report(topic, paper_ids, evidence) -> markdown report`
+
+**指标**：
+
+- task success rate:给定研究任务是否产出可用 report
+- evidence coverage:报告里关键结论是否有 paper_id/page/snippet
+- unsupported claim rate:人工抽样发现无依据结论的比例
+- tool-call success rate / retry rate / failure reason 分布
+- per-task cost / p95 latency / turns / papers read
+- ablation:固定流水线 vs autonomous loop 在复杂任务上的人工验收差异
+
+**MVP 范围**：
+
+- 只支持本地 PDF 目录 + 已有 library,不联网搜论文
+- 只做 1 类任务:`research "<topic>" --pdf-dir <dir>`
+- 最多读取 5 篇新论文,最多 12 turns,预算默认 ¥2
+- 输出一份 `research-report.md` 和完整 session trace
+- 失败时明确说明缺哪些论文/证据/预算,不编完整结论
+
+**依赖**：
+
+- M16 至少完成门禁全绿、schema retry、可复现 demo、基础质量指标
+- agents 需要公开稳定 tool surface,eval 不直接摸内部类
+- 若要加真正 planner prompt,先设计 eval case,不要先写复杂编排
+
+**DoD**：
+
+- [ ] `paper-copilot research "<topic>" --pdf-dir <dir>` 能端到端跑通
+- [ ] 至少 3 个固定研究任务有人工验收记录
+- [ ] session trace 能还原每一步工具调用和决策
+- [ ] max_turns / max_budget / max_papers 都能触发并给出清晰终止原因
+- [ ] report 中关键结论带 evidence,人工抽样 unsupported claim rate 可统计
+- [ ] 与固定 `read + compare` 手工流程做一次对比,说明自动 loop 节省了哪些人工步骤
+
+**预估**：4-8 sessions。不要在 M16 前开工;否则会把未硬化的流水线包进更
+复杂的 agent runtime 里,调试成本会爆炸。
 
 ---
 
