@@ -226,7 +226,7 @@ eval/                                   # 仓库内
 - [VISION.md](VISION.md) — 项目目标与非目标
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 模块边界与数据流
 - [TASKS.md](TASKS.md) — 里程碑与实现进度
-- [CLAUDE.md](CLAUDE.md) — 工程规约
+- [AGENTS.md](AGENTS.md) — 工程规约
 - `docs/stories/` — 关键技术决策记录
 
 ## 许可

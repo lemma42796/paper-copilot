@@ -326,7 +326,7 @@ query rewrite / chunk rerank 等子任务——统一使用 **qwen3.6-flash**，
   `pricing_for_model()`)留下供下次切换零摩擦。详细数据 + 触发重评条件见
   `docs/stories/2026-04-27-model-selection-flash-vs-plus.md`。
 
-`CLAUDE.md` 的 "Cost discipline" 只保留操作规则（所有 LLM 调用必须走
+`AGENTS.md` 的 "Cost discipline" 只保留操作规则（所有 LLM 调用必须走
 `agents/llm_client.py` 等），不再重复默认——此节为单一真源。
 
 ## 关键数据流
