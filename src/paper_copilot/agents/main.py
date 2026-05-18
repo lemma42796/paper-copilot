@@ -98,12 +98,16 @@ class MainAgent:
         store.append_final_output(payload=paper.model_dump(mode="json"))
 
         tracker = CostTracker(pricing=pricing_for_model(DEFAULT_MODEL))
-        if skim_run.response.usage is not None:
-            tracker.record(skim_run.response.usage)
-        if deep_run.response.usage is not None:
-            tracker.record(deep_run.response.usage)
-        if related_run is not None and related_run.response is not None:
-            tracker.record(related_run.response.usage)
+        for response in skim_run.responses:
+            if response.usage is not None:
+                tracker.record(response.usage)
+        for response in deep_run.responses:
+            if response.usage is not None:
+                tracker.record(response.usage)
+        if related_run is not None:
+            for response in related_run.responses:
+                if response.usage is not None:
+                    tracker.record(response.usage)
 
         return MainRun(
             paper=paper,

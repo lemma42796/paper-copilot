@@ -62,7 +62,10 @@ def search_cmd(
         Path | None, typer.Option("--root", help="Override PAPER_COPILOT_HOME root")
     ] = None,
 ) -> None:
-    """Top-k semantic search (sqlite-vec) over the local paper library; optional substring pre-filter."""
+    """Top-k semantic search over the local paper library.
+
+    Uses sqlite-vec with optional substring pre-filter.
+    """
     if (field is None) != (contains is None):
         raise typer.BadParameter("--field and --contains must be used together")
     if field is not None and field not in available_fields():

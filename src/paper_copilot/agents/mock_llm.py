@@ -29,6 +29,9 @@ class MockLLM:
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | None = None,
+        system: str | list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         if self._cursor >= len(self._responses):
             raise AgentError("mock script exhausted")

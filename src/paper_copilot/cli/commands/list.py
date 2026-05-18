@@ -60,7 +60,10 @@ def list_(
         typer.Option("--root", help="Override PAPER_COPILOT_HOME root"),
     ] = None,
 ) -> None:
-    """List indexed papers from fields.db; filter by --year or --field/--contains substring (no LLM)."""
+    """List indexed papers from fields.db.
+
+    Filter by --year or --field/--contains substring. No LLM call.
+    """
     if format_ not in ("text", "json"):
         raise typer.BadParameter(f"unsupported format: {format_!r}; use 'text' or 'json'")
     if (field is None) != (contains is None):

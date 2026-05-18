@@ -36,7 +36,10 @@ def compare(
         typer.Option("--root", help="Override PAPER_COPILOT_HOME root"),
     ] = None,
 ) -> None:
-    """Side-by-side field compare for two papers (paper_id or PDF path) — pure SQLite, 0 LLM cost."""
+    """Side-by-side field compare for two papers.
+
+    Accepts paper_id or PDF path. Pure SQLite, 0 LLM cost.
+    """
     if format_ not in ("text", "json"):
         raise typer.BadParameter(f"unsupported format: {format_!r}; use 'text' or 'json'")
     paper_id_a = resolve_paper_arg(paper_a)

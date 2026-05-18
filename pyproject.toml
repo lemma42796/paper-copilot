@@ -52,7 +52,7 @@ mypy_path = "src"
 files = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["sqlite_vec", "FlagEmbedding"]
+module = ["sqlite_vec", "FlagEmbedding", "yaml"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

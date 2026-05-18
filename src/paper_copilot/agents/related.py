@@ -24,7 +24,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from paper_copilot.agents.llm_client import DEFAULT_MODEL, LLMClient
-from paper_copilot.agents.loop import LLMResponse, TextBlock, ToolUseBlock
+from paper_copilot.agents.loop import LLMResponse
+from paper_copilot.agents.tool_validation import call_validated_tool
 from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.knowledge.hybrid_search import SearchResult, search
@@ -32,7 +33,6 @@ from paper_copilot.schemas.paper import CrossPaperLink, Paper
 from paper_copilot.session import SessionStore
 from paper_copilot.shared.cache import cached_system, mark_tools_cached
 from paper_copilot.shared.embedder import Embedder
-from paper_copilot.shared.errors import AgentError
 from paper_copilot.shared.jsonschema import inline_refs
 from paper_copilot.shared.logging import get_logger
 
@@ -102,6 +102,7 @@ class RelatedResult:
 class RelatedRun:
     result: RelatedResult
     response: LLMResponse | None
+    responses: tuple[LLMResponse, ...] = ()
     request_messages: list[dict[str, Any]] = field(default_factory=list)
     request_tools: list[dict[str, Any]] = field(default_factory=list)
     skipped_reason: str | None = None
@@ -149,41 +150,18 @@ class RelatedAgent:
             self._store.append_system_message(_SYSTEM_PROMPT)
             self._store.append_message(role="user", text=user_text)
 
-        response = await self._client.generate(
+        validated = await call_validated_tool(
+            self._client,
+            agent_name=_AGENT_NAME,
+            model=DEFAULT_MODEL,
             messages=messages,
             tools=tools,
-            tool_choice={"type": "tool", "name": _TOOL_NAME},
+            tool_name=_TOOL_NAME,
+            tool_input_model=_RelatedToolInput,
+            store=self._store,
             system=cached_system(_SYSTEM_PROMPT),
         )
-
-        if self._store is not None:
-            self._store.append_llm_call(
-                agent=_AGENT_NAME,
-                model=DEFAULT_MODEL,
-                usage=response.usage if response.usage is not None else {},
-                latency_ms=response.latency_ms,
-                stop_reason=response.stop_reason,
-            )
-            for block in response.content:
-                if isinstance(block, TextBlock):
-                    self._store.append_message(role="assistant", text=block.text)
-                elif isinstance(block, ToolUseBlock):
-                    self._store.append_tool_use(block.id, block.name, block.input)
-
-        tool_use_blocks = [b for b in response.content if isinstance(b, ToolUseBlock)]
-        if len(tool_use_blocks) != 1:
-            raise AgentError(
-                f"expected exactly 1 tool_use block, got {len(tool_use_blocks)} "
-                f"(stop_reason={response.stop_reason!r}, "
-                f"total content blocks={len(response.content)})"
-            )
-        block = tool_use_blocks[0]
-        if block.name != _TOOL_NAME:
-            raise AgentError(f"expected tool_use name={_TOOL_NAME!r}, got {block.name!r}")
-
-        parsed = _RelatedToolInput.model_validate(block.input)
-        if self._store is not None:
-            self._store.append_schema_validation(success=True)
+        parsed = validated.parsed
 
         links = _validate_links(
             parsed.links,
@@ -194,7 +172,8 @@ class RelatedAgent:
 
         return RelatedRun(
             result=RelatedResult(links=links),
-            response=response,
+            response=validated.response,
+            responses=validated.responses,
             request_messages=messages,
             request_tools=tools,
         )
@@ -228,28 +207,31 @@ def _build_user_text(new_paper: Paper, candidates: list[SearchResult]) -> str:
         lines.append(f"Year: {new_paper.meta.year}")
     if new_paper.contributions:
         lines.append("Top contributions:")
-        for c in new_paper.contributions[:_NEW_PAPER_TOP_CONTRIBUTIONS]:
-            lines.append(f"- {c.claim}")
+        for contribution in new_paper.contributions[:_NEW_PAPER_TOP_CONTRIBUTIONS]:
+            lines.append(f"- {contribution.claim}")
     if new_paper.methods:
         method_names = [m.name for m in new_paper.methods[:_NEW_PAPER_TOP_METHODS]]
         lines.append(f"Key methods: {', '.join(method_names)}")
 
     lines.append("")
     lines.append(f"## Candidates (ranked by vector similarity, {len(candidates)} total)")
-    for rank, c in enumerate(candidates, start=1):
+    for rank, candidate in enumerate(candidates, start=1):
         lines.append("")
-        lines.append(f"[{rank}] related_paper_id={c.paper_id} distance={c.best_chunk.distance:.3f}")
-        lines.append(f"related_title: {c.title}")
-        if c.year:
-            lines.append(f"Year: {c.year}")
-        cand_contribs = c.paper_data.get("contributions", []) or []
+        lines.append(
+            f"[{rank}] related_paper_id={candidate.paper_id} "
+            f"distance={candidate.best_chunk.distance:.3f}"
+        )
+        lines.append(f"related_title: {candidate.title}")
+        if candidate.year:
+            lines.append(f"Year: {candidate.year}")
+        cand_contribs = candidate.paper_data.get("contributions", []) or []
         if cand_contribs:
             lines.append("Top contributions:")
             for contrib in cand_contribs[:_CANDIDATE_TOP_CONTRIBUTIONS]:
                 claim = contrib.get("claim", "")
                 if claim:
                     lines.append(f"- {claim}")
-        cand_methods = c.paper_data.get("methods", []) or []
+        cand_methods = candidate.paper_data.get("methods", []) or []
         if cand_methods:
             names = [
                 m.get("name", "") for m in cand_methods[:_CANDIDATE_TOP_METHODS] if m.get("name")

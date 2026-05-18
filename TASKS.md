@@ -42,9 +42,14 @@
 - **当前阶段**:**Phase 2 已完成**(13 篇样本 + M8 5 条 issue 全关,
   详见 `docs/issues.md` 顶部"Phase 2 收尾"段)。日常使用继续,但红线
   已过,不再阻塞下一个 milestone。
-- **下一个编码 milestone**:**M16 候选目标已记录,未开始**。M15 Session B
-  后主功能计划完成;下一步若继续打磨,优先做 M16 的工程硬化、阅读质量指标
-  和开源可复现性。不要自动开工,等明确指令。
+- **最新编码进展**:**M16-min 已完成**(2026-05-18)。按用户裁剪范围,
+  本轮只做门禁全绿 + schema validation retry/failure trace;不做 GitHub
+  Actions(避免 push 邮件噪音),不做可复现 smoke eval。当前
+  `uv run ruff check .` / `uv run mypy` / `uv run pytest` 全绿;Skim/Deep/
+  Related 的结构化 tool 输出校验失败会自动 retry 一次,失败 trace 写入
+  session。
+- **下一个编码 milestone**:等待明确指令。可选择继续补 M16 剩余质量指标/
+  evidence,或进入 M17 chat-first tool harness。不要自动开工。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
@@ -826,14 +831,19 @@ prompt 变更 / 架构调整），把决策过程写成 story**。
 
 **DoD**：
 
-- [ ] `uv run ruff check .` 通过
-- [ ] `uv run mypy` 通过
-- [ ] `uv run pytest` 通过
+- [x] `uv run ruff check .` 通过
+- [x] `uv run mypy` 通过
+- [x] `uv run pytest` 通过
 - [ ] GitHub Actions 自动跑 ruff / mypy / pytest
 - [ ] smoke eval 在文档步骤下可复现运行,不依赖未说明的本地 PDF 状态
 - [ ] schema first-pass valid rate / retry rate / per-agent cost latency 有记录
 - [ ] 至少 5 篇论文有 evidence coverage / unsupported claim rate 人工抽样结果
 - [ ] README 展示 agent 流程、demo 输出、核心指标和模型选型故事
+
+**M16-min 裁剪记录 (2026-05-18)**:用户明确跳过 GitHub Actions(每次 push
+发邮件很烦)和可复现 smoke eval。本轮完成门禁全绿与 schema validation
+最小恢复:一次 retry、失败时 session 保留 raw tool_use input +
+schema_validation error,CLI 最终错误包含 agent / tool / field loc。
 
 **预估**：3-5 sessions。先做门禁 + 可复现 demo,再做质量指标和 evidence。
 

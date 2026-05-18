@@ -22,11 +22,11 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from paper_copilot.agents.llm_client import DEFAULT_MODEL, LLMClient
-from paper_copilot.agents.loop import LLMResponse, TextBlock, ToolUseBlock
+from paper_copilot.agents.loop import LLMResponse
+from paper_copilot.agents.tool_validation import call_validated_tool
 from paper_copilot.schemas.paper import PaperMeta, PaperSkeleton
 from paper_copilot.session import SessionStore
 from paper_copilot.shared.cache import cached_system, cached_user_text, mark_tools_cached
-from paper_copilot.shared.errors import AgentError
 from paper_copilot.shared.jsonschema import inline_refs
 from paper_copilot.shared.logging import get_logger
 from paper_copilot.shared.pdf import PdfFrontMatter, load_front_matter
@@ -85,6 +85,7 @@ class SkimRun:
 
     result: SkimResult
     response: LLMResponse
+    responses: tuple[LLMResponse, ...]
     request_messages: list[dict[str, Any]]
     request_tools: list[dict[str, Any]]
 
@@ -120,41 +121,18 @@ class SkimAgent:
         if self._store is not None:
             self._store.append_system_message(_SYSTEM_PROMPT)
             self._store.append_message(role="user", text=user_text)
-        response = await self._client.generate(
+        validated = await call_validated_tool(
+            self._client,
+            agent_name="SkimAgent",
+            model=DEFAULT_MODEL,
             messages=messages,
             tools=tools,
-            tool_choice={"type": "tool", "name": _TOOL_NAME},
+            tool_name=_TOOL_NAME,
+            tool_input_model=_SkimToolInput,
+            store=self._store,
             system=cached_system(_SYSTEM_PROMPT),
         )
-
-        if self._store is not None:
-            self._store.append_llm_call(
-                agent="SkimAgent",
-                model=DEFAULT_MODEL,
-                usage=response.usage if response.usage is not None else {},
-                latency_ms=response.latency_ms,
-                stop_reason=response.stop_reason,
-            )
-            for block in response.content:
-                if isinstance(block, TextBlock):
-                    self._store.append_message(role="assistant", text=block.text)
-                elif isinstance(block, ToolUseBlock):
-                    self._store.append_tool_use(block.id, block.name, block.input)
-
-        tool_use_blocks = [b for b in response.content if isinstance(b, ToolUseBlock)]
-        if len(tool_use_blocks) != 1:
-            raise AgentError(
-                f"expected exactly 1 tool_use block, got {len(tool_use_blocks)} "
-                f"(stop_reason={response.stop_reason!r}, "
-                f"total content blocks={len(response.content)})"
-            )
-        block = tool_use_blocks[0]
-        if block.name != _TOOL_NAME:
-            raise AgentError(f"expected tool_use name={_TOOL_NAME!r}, got {block.name!r}")
-
-        parsed = _SkimToolInput.model_validate(block.input)
-        if self._store is not None:
-            self._store.append_schema_validation(success=True)
+        parsed = validated.parsed
 
         meta = parsed.meta
         if meta.arxiv_id is not None:
@@ -165,7 +143,8 @@ class SkimAgent:
         result = SkimResult(meta=meta, skeleton=parsed.skeleton)
         return SkimRun(
             result=result,
-            response=response,
+            response=validated.response,
+            responses=validated.responses,
             request_messages=messages,
             request_tools=tools,
         )

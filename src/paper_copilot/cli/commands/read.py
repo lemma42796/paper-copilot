@@ -49,7 +49,10 @@ def read(
         ),
     ] = "en",
 ) -> None:
-    """Read a PDF end-to-end (skim → deep → related); write report.md and index fields + embeddings."""
+    """Read a PDF end-to-end.
+
+    Runs skim, deep, and related; writes report.md and updates indexes.
+    """
     if lang not in ("en", "zh"):
         raise typer.BadParameter(f"unsupported language: {lang!r}; use 'en' or 'zh'")
     asyncio.run(_read_async(pdf_path, force, cast("Literal['en', 'zh']", lang)))
