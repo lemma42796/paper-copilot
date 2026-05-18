@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -30,6 +30,7 @@ from paper_copilot.agents.loop import (
 from paper_copilot.knowledge.compare import build_compare_payload
 from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore, PaperRow, available_fields
+from paper_copilot.knowledge.graph_store import graph_path
 from paper_copilot.knowledge.hybrid_search import ContainsFilter, SearchResult, search
 from paper_copilot.session import SessionStore
 from paper_copilot.session.paths import compute_paper_id, paper_dir
@@ -49,6 +50,7 @@ _AGENT_NAME = "ResearchAgent"
 _MAX_LIST_LIMIT = 20
 _MAX_SEARCH_K = 10
 _MAX_INSPECT_ITEMS = 8
+_MAX_RELATED_K = 10
 _REPORT_FALLBACK = (
     "## Incomplete\n\n"
     "The research loop stopped before producing a final synthesis report. "
@@ -163,6 +165,13 @@ class _ComparePapersInput(BaseModel):
         if value == info.data.get("paper_id_a"):
             raise ValueError("paper_id_a and paper_id_b must differ")
         return value
+
+
+class _FindRelatedPapersInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    paper_id: str = Field(min_length=1)
+    k: int = Field(default=5, ge=1, le=_MAX_RELATED_K)
 
 
 class _ReadPaperInput(BaseModel):
@@ -305,6 +314,16 @@ def research_tools() -> list[dict[str, Any]]:
             ),
             _ComparePapersInput,
         ),
+        _tool_schema(
+            "find_related_papers",
+            (
+                "Find papers already linked to an indexed paper by RelatedAgent. "
+                "Reads the local cross-paper link graph and fields index without "
+                "calling an LLM. Use this to expand from one relevant paper to "
+                "nearby candidates before inspecting or comparing them."
+            ),
+            _FindRelatedPapersInput,
+        ),
     ]
 
 
@@ -329,6 +348,9 @@ def dispatch_research_tool(req: ToolUseRequest, context: ResearchToolContext) ->
             case "compare_papers":
                 compare_args = _ComparePapersInput.model_validate(req.input)
                 return _ok(_compare_papers(compare_args, context))
+            case "find_related_papers":
+                related_args = _FindRelatedPapersInput.model_validate(req.input)
+                return _ok(_find_related_papers(related_args, context))
             case _:
                 return _err(f"unknown research tool: {req.name}")
     except (KnowledgeError, ValidationError, ValueError) as exc:
@@ -460,6 +482,176 @@ def _compare_papers(args: _ComparePapersInput, context: ResearchToolContext) -> 
     return payload
 
 
+def _find_related_papers(
+    args: _FindRelatedPapersInput,
+    context: ResearchToolContext,
+) -> dict[str, Any]:
+    target = context.fields_store.get(args.paper_id)
+    if target is None:
+        raise KnowledgeError(f"paper_id not found: {args.paper_id}")
+
+    rows_by_id = {row.paper_id: row for row in context.fields_store.list_all()}
+    rows_by_id[target.paper_id] = target
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for relation in _graph_relation_candidates(target.paper_id, rows_by_id, context.root):
+        _add_related_candidate(candidates, seen, relation, rows_by_id)
+    for relation in _field_relation_candidates(target, rows_by_id):
+        _add_related_candidate(candidates, seen, relation, rows_by_id)
+
+    selected = candidates[: args.k]
+    _reserve_papers(
+        context,
+        [target.paper_id, *(candidate["candidate_paper_id"] for candidate in selected)],
+    )
+    return {
+        "paper_id": target.paper_id,
+        "title": _row_title(target),
+        "count": len(candidates),
+        "returned": len(selected),
+        "related_papers": selected,
+        "paper_budget": _paper_budget_payload(context),
+    }
+
+
+def _graph_relation_candidates(
+    paper_id: str,
+    rows_by_id: dict[str, PaperRow],
+    root: Path | None,
+) -> list[dict[str, Any]]:
+    if root is None:
+        return []
+    relations: list[dict[str, Any]] = []
+    for link in _latest_graph_links(root):
+        source_id = _text_value(link.get("paper_id"))
+        linked_id = _text_value(link.get("related_paper_id"))
+        if source_id == paper_id:
+            candidate_id = linked_id
+            direction = "outgoing"
+        elif linked_id == paper_id:
+            candidate_id = source_id
+            direction = "incoming"
+        else:
+            continue
+        relations.append(
+            _relation_payload(
+                candidate_id=candidate_id,
+                direction=direction,
+                source_id=source_id,
+                link=link,
+                rows_by_id=rows_by_id,
+                link_source="graph",
+            )
+        )
+    return relations
+
+
+def _latest_graph_links(root: Path) -> list[dict[str, Any]]:
+    path = graph_path(root)
+    if not path.exists():
+        return []
+    latest_by_pair: dict[tuple[str, str], dict[str, Any]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        raw_row = json.loads(line)
+        if not isinstance(raw_row, dict):
+            raise KnowledgeError(f"invalid graph link row in {path}")
+        link = cast(dict[str, Any], raw_row)
+        source_id = _text_value(link.get("paper_id"))
+        linked_id = _text_value(link.get("related_paper_id"))
+        if not source_id or not linked_id:
+            raise KnowledgeError(f"invalid graph link row in {path}")
+        latest_by_pair[(source_id, linked_id)] = link
+    return list(reversed(list(latest_by_pair.values())))
+
+
+def _field_relation_candidates(
+    target: PaperRow,
+    rows_by_id: dict[str, PaperRow],
+) -> list[dict[str, Any]]:
+    relations: list[dict[str, Any]] = []
+    for link in _row_links(target):
+        candidate_id = _text_value(link.get("related_paper_id"))
+        relations.append(
+            _relation_payload(
+                candidate_id=candidate_id,
+                direction="outgoing",
+                source_id=target.paper_id,
+                link=link,
+                rows_by_id=rows_by_id,
+                link_source="fields",
+            )
+        )
+
+    for row in rows_by_id.values():
+        if row.paper_id == target.paper_id:
+            continue
+        for link in _row_links(row):
+            if _text_value(link.get("related_paper_id")) != target.paper_id:
+                continue
+            relations.append(
+                _relation_payload(
+                    candidate_id=row.paper_id,
+                    direction="incoming",
+                    source_id=row.paper_id,
+                    link=link,
+                    rows_by_id=rows_by_id,
+                    link_source="fields",
+                )
+            )
+    return relations
+
+
+def _row_links(row: PaperRow) -> list[dict[str, Any]]:
+    links = row.data.get("cross_paper_links", []) or []
+    return [link for link in links if isinstance(link, dict)]
+
+
+def _relation_payload(
+    *,
+    candidate_id: str,
+    direction: str,
+    source_id: str,
+    link: dict[str, Any],
+    rows_by_id: dict[str, PaperRow],
+    link_source: str,
+) -> dict[str, Any]:
+    candidate = rows_by_id.get(candidate_id)
+    candidate_meta = candidate.data.get("meta", {}) if candidate is not None else {}
+    source = rows_by_id.get(source_id)
+    return {
+        "candidate_paper_id": candidate_id,
+        "candidate_title": candidate_meta.get("title") or _text_value(link.get("related_title")),
+        "candidate_year": candidate_meta.get("year", 0),
+        "candidate_venue": candidate_meta.get("venue"),
+        "indexed": candidate is not None,
+        "direction": direction,
+        "source_paper_id": source_id,
+        "source_title": _row_title(source) if source is not None else "",
+        "relation_type": _text_value(link.get("relation_type")),
+        "explanation": _text_value(link.get("explanation")),
+        "indexed_at": link.get("indexed_at"),
+        "link_source": link_source,
+    }
+
+
+def _add_related_candidate(
+    candidates: list[dict[str, Any]],
+    seen: set[str],
+    relation: dict[str, Any],
+    rows_by_id: dict[str, PaperRow],
+) -> None:
+    candidate_id = _text_value(relation.get("candidate_paper_id"))
+    if not candidate_id or candidate_id in seen:
+        return
+    if candidate_id not in rows_by_id:
+        relation["indexed"] = False
+    candidates.append(relation)
+    seen.add(candidate_id)
+
+
 def _reserve_papers(context: ResearchToolContext, paper_ids: list[str]) -> None:
     if context.max_papers <= 0:
         raise KnowledgeError("max_papers must be positive")
@@ -538,6 +730,13 @@ def _paper_brief(row: PaperRow) -> dict[str, Any]:
     }
 
 
+def _row_title(row: PaperRow | None) -> str:
+    if row is None:
+        return ""
+    title = row.data.get("meta", {}).get("title", "")
+    return title if isinstance(title, str) else ""
+
+
 def _search_result_payload(result: SearchResult) -> dict[str, Any]:
     chunk = result.best_chunk
     return {
@@ -584,3 +783,7 @@ def _research_session_id(topic: str) -> str:
 def _truncate(text: str, n: int) -> str:
     flat = " ".join(text.split())
     return flat if len(flat) <= n else flat[: n - 1].rstrip() + "…"
+
+
+def _text_value(value: Any) -> str:
+    return value if isinstance(value, str) else ""

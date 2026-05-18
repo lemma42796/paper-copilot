@@ -17,6 +17,8 @@ from paper_copilot.agents.research import (
 )
 from paper_copilot.knowledge.embeddings_store import ChunkRow, EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
+from paper_copilot.knowledge.graph_store import append_links
+from paper_copilot.schemas import CrossPaperLink
 from paper_copilot.session import FinalOutput, SessionStore, ToolResult, ToolUse
 
 DIM = 4
@@ -26,6 +28,7 @@ def _payload(
     title: str = "Paper A",
     year: int = 2024,
     method_name: str = "Sparse Attention",
+    cross_paper_links: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "meta": {
@@ -53,7 +56,7 @@ def _payload(
         ],
         "experiments": [],
         "limitations": [],
-        "cross_paper_links": [],
+        "cross_paper_links": cross_paper_links or [],
     }
 
 
@@ -140,6 +143,80 @@ def test_dispatch_compare_papers_returns_structured_alignment(tmp_path: Path) ->
     assert data["methods_aligned"][0]["a"]["name"] == "Shared Method"
     assert data["methods_aligned"][0]["b"]["name"] == "Shared Method"
     assert data["paper_budget"]["touched_count"] == 2
+
+
+def test_dispatch_find_related_papers_uses_field_links(tmp_path: Path) -> None:
+    link_to_b = {
+        "related_paper_id": "paperB",
+        "related_title": "Paper B",
+        "relation_type": "builds_on",
+        "explanation": "extends the sparse attention mechanism",
+    }
+    link_to_a = {
+        "related_paper_id": "paperA",
+        "related_title": "Paper A",
+        "relation_type": "compares_against",
+        "explanation": "uses Paper A as the prior sparse-attention baseline",
+    }
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        now = datetime.now(UTC).isoformat()
+        fs.upsert("paperA", _payload("Paper A", cross_paper_links=[link_to_b]), now)
+        fs.upsert("paperB", _payload("Paper B", 2023), now)
+        fs.upsert("paperC", _payload("Paper C", 2022, cross_paper_links=[link_to_a]), now)
+        context = ResearchToolContext(fields_store=fs, max_papers=3)
+        result = dispatch_research_tool(
+            ToolUseRequest(
+                id="t1",
+                name="find_related_papers",
+                input={"paper_id": "paperA", "k": 5},
+            ),
+            context,
+        )
+
+    data = json.loads(result.output)
+    assert result.is_error is False
+    assert data["paper_id"] == "paperA"
+    assert data["returned"] == 2
+    assert [p["candidate_paper_id"] for p in data["related_papers"]] == ["paperB", "paperC"]
+    assert [p["direction"] for p in data["related_papers"]] == ["outgoing", "incoming"]
+    assert data["related_papers"][0]["link_source"] == "fields"
+    assert data["paper_budget"]["touched_paper_ids"] == ["paperA", "paperB", "paperC"]
+
+
+def test_dispatch_find_related_papers_reads_graph_log(tmp_path: Path) -> None:
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        now = datetime.now(UTC).isoformat()
+        fs.upsert("paperA", _payload("Paper A"), now)
+        fs.upsert("paperB", _payload("Paper B", 2023), now)
+        append_links(
+            "paperA",
+            [
+                CrossPaperLink(
+                    related_paper_id="paperB",
+                    related_title="Paper B from graph",
+                    relation_type="shares_method",
+                    explanation="both use local sparse attention",
+                )
+            ],
+            root=tmp_path,
+            clock=lambda: "2026-05-18T00:00:00+00:00",
+        )
+        context = ResearchToolContext(fields_store=fs, root=tmp_path, max_papers=2)
+        result = dispatch_research_tool(
+            ToolUseRequest(
+                id="t1",
+                name="find_related_papers",
+                input={"paper_id": "paperA", "k": 1},
+            ),
+            context,
+        )
+
+    data = json.loads(result.output)
+    assert result.is_error is False
+    assert data["related_papers"][0]["candidate_paper_id"] == "paperB"
+    assert data["related_papers"][0]["relation_type"] == "shares_method"
+    assert data["related_papers"][0]["link_source"] == "graph"
+    assert data["related_papers"][0]["indexed_at"] == "2026-05-18T00:00:00+00:00"
 
 
 def test_dispatch_enforces_max_papers_across_inspect_and_compare(tmp_path: Path) -> None:

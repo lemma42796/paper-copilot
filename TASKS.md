@@ -49,19 +49,18 @@
 - **M17-min 进展**(2026-05-18):新增 `paper-copilot research "<topic>"`
   的最小 bounded tool loop 骨架。当前只包装本地库工具:`list_papers` /
   `list_pdfs` / `read_paper`(占位,不自动跑 MainAgent) / `search_library`
-  / `inspect_paper` / `compare_papers`,带 max_turns / budget / max_papers /
-  termination summary / session trace / research-report.md。它不会自动读新
-  论文、不会联网找论文、不做 RAG 升级;完整 M17 DoD 仍未满足。
-- **本轮提交待 push**:`ce68e02` schema retry;`b4e4d79` bounded research
-  loop;`c79e3d4` compare_papers tool;`4b4f912` max_papers;`0de542a`
-  read_paper 占位;`15fa7d5` termination summary。验证策略按用户要求改为
-  **最小化**:M17 后续改动只跑相关 `ruff` / `mypy` / `tests/agents/test_research.py`,
-  不跑全量 pytest,除非用户明确要求。全量三件套在 `b4e4d79` 前跑过一次,
-  之后未再全量跑。
+  / `inspect_paper` / `compare_papers` / `find_related_papers`,带 max_turns /
+  budget / max_papers / termination summary / session trace /
+  research-report.md。`find_related_papers` 是 0-LLM tool:优先读
+  `graph/cross-paper-links.jsonl`,再用 fields.db 里的 `cross_paper_links`
+  补充。它不会自动读新论文、不会联网找论文、不做 RAG 升级;完整 M17 DoD
+  仍未满足。
+- **当前验证策略**:M17 后续改动只跑相关 `ruff` / `mypy` /
+  `tests/agents/test_research.py`,不跑全量 pytest,除非用户明确要求。全量
+  三件套在 `b4e4d79` 前跑过一次,之后未再全量跑。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
-  M19 Composer / M20 UI。候选下一步:补 `find_related_papers` 0-LLM tool
-  (读 fields.db 的 `cross_paper_links` 和/或现有 related metadata),或做一次
-  人工本地 `research` 试跑验收。不要自动开工,等明确指令。
+  M19 Composer / M20 UI。候选下一步:做一次人工本地 `research` 试跑验收,
+  或把 `read_paper` 占位升级成受控自动 read。不要自动开工,等明确指令。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
@@ -938,8 +937,8 @@ paper-copilot research "compare attention mechanisms for vision-language models"
 **DoD**：
 
 - [ ] `paper-copilot research "<topic>" --pdf-dir <dir>` 能端到端跑通
-      (M17-min 已有 CLI + bounded loop + 本地库工具骨架;尚未做人类验收
-      和自动 read_paper)
+      (M17-min 已有 CLI + bounded loop + 本地库工具骨架 + find_related_papers;
+      尚未做人类验收和自动 read_paper)
 - [ ] 至少 3 个固定研究任务有人工验收记录
 - [ ] session trace 能还原每一步工具调用和决策
 - [ ] max_turns / max_budget / max_papers 都能触发并给出清晰终止原因
