@@ -233,6 +233,10 @@
   “开始”按钮并提示先启动 `paper-copilot serve`;提交运行时报告区显示
   loading 状态。已跑 `npm run typecheck` + `npm run build`;未跑真实
   `/chat` / LLM。
+- **前端控制项精简 v1**(2026-05-18):按用户反馈,删除主界面的“预算”和
+  “轮数”输入;前端不再向 `/chat` 传 `budget_cny` / `max_turns`,由后端默认
+  harness 边界决定。界面只保留“论文数”作为用户可理解的范围控制。已跑
+  `npm run typecheck` + `npm run build`;未跑真实 `/chat` / LLM。
 - **下一个编码建议**:停止继续打磨前端细节。若时间允许,下一步要么做一次
   真实低预算 `/chat` 联调,要么转入 M18 evidence-grounded RAG 设计/实现。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录

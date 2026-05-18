@@ -359,7 +359,7 @@ input {
 
 .composer-actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(80px, 120px)) minmax(90px, auto);
+  grid-template-columns: minmax(96px, 140px) minmax(180px, 1fr);
   gap: 10px;
   align-items: end;
 }
@@ -721,7 +721,7 @@ dd {
   }
 
   .composer-actions {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: 1fr;
   }
 
   .primary-button {

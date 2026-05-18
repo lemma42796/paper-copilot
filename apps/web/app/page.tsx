@@ -64,8 +64,6 @@ export default function Home() {
   const [message, setMessage] = useState(DEFAULT_PROMPT);
   const [pdfDir, setPdfDir] = useState("");
   const [maxPapers, setMaxPapers] = useState(5);
-  const [budgetCny, setBudgetCny] = useState(2);
-  const [maxTurns, setMaxTurns] = useState(16);
   const [health, setHealth] = useState<HealthState>("checking");
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -132,8 +130,6 @@ export default function Home() {
       const payload = {
         message: message.trim(),
         pdf_dir: pdfDir.trim().length > 0 ? pdfDir.trim() : null,
-        max_turns: maxTurns,
-        budget_cny: budgetCny,
         max_papers: maxPapers
       };
       let response: Response;
@@ -266,27 +262,6 @@ export default function Home() {
                     onChange={(event) => setMaxPapers(Number(event.target.value))}
                     type="number"
                     value={maxPapers}
-                  />
-                </div>
-                <div className="field-row compact">
-                  <label htmlFor="budget">预算</label>
-                  <input
-                    id="budget"
-                    min={0.01}
-                    onChange={(event) => setBudgetCny(Number(event.target.value))}
-                    step={0.01}
-                    type="number"
-                    value={budgetCny}
-                  />
-                </div>
-                <div className="field-row compact">
-                  <label htmlFor="turns">轮数</label>
-                  <input
-                    id="turns"
-                    min={1}
-                    onChange={(event) => setMaxTurns(Number(event.target.value))}
-                    type="number"
-                    value={maxTurns}
                   />
                 </div>
                 <button className="primary-button" disabled={!canSubmit} type="submit">
