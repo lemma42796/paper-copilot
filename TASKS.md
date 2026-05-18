@@ -58,9 +58,17 @@
 - **当前验证策略**:M17 后续改动只跑相关 `ruff` / `mypy` /
   `tests/agents/test_research.py`,不跑全量 pytest,除非用户明确要求。全量
   三件套在 `b4e4d79` 前跑过一次,之后未再全量跑。
+- **M17 人工试跑 1/3**(2026-05-18):topic=`compare attention mechanisms
+  across Bahdanau attention, Transformer, and ViT`。`--max-turns 4` 能走
+  list/inspect/compare,但停在 max_turns,只生成一句占位报告,同时暴露过一次
+  planner 把 `inspect_paper.fields` 错填成 `title/year/top_methods/...` 的
+  schema error。重跑 `--max-turns 8 --max-papers 3 --budget-cny 0.2` 成功
+  `end_turn`,cost ¥0.0571,events=17,papers=3/3,report 可读,session:
+  `/Users/a123/.paper-copilot/papers/research-20260518T090546424841Z-6e47b315/session.jsonl`。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
-  M19 Composer / M20 UI。候选下一步:做一次人工本地 `research` 试跑验收,
-  或把 `read_paper` 占位升级成受控自动 read。不要自动开工,等明确指令。
+  M19 Composer / M20 UI。候选下一步:继续做第 2/3 个固定 topic 人工验收,
+  收敛 planner prompt/tool schema,或把 `read_paper` 占位升级成受控自动
+  read。不要自动开工,等明确指令。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
