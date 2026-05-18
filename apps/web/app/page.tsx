@@ -73,6 +73,7 @@ export default function Home() {
   const [history, setHistory] = useState<RunHistoryItem[]>([]);
   const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
 
   const normalizedApiUrl = useMemo(() => apiUrl.replace(/\/+$/, ""), [apiUrl]);
 
@@ -94,17 +95,23 @@ export default function Home() {
     void loadReports();
   }, [normalizedApiUrl]);
 
-  async function loadReports() {
+  async function loadReports(): Promise<boolean> {
     try {
       const response = await fetch(`${normalizedApiUrl}/reports`, { method: "GET" });
       if (!response.ok) {
-        return;
+        return false;
       }
       const payload = (await response.json()) as ReportHistoryResponse;
       setHistory(payload.reports.map(historyItemFromReport));
+      return true;
     } catch {
-      return;
+      return false;
     }
+  }
+
+  async function refreshReports() {
+    const ok = await loadReports();
+    showNotice(ok ? "历史已刷新" : "刷新失败");
   }
 
   async function submitRequest(event: FormEvent<HTMLFormElement>) {
@@ -163,6 +170,16 @@ export default function Home() {
     setMessage(item.request);
     setSelectedReportId(item.id);
     setResult(chatResponseFromHistoryItem(item));
+  }
+
+  async function copyWithNotice(value: string, label: string) {
+    const ok = await copyText(value);
+    showNotice(ok ? `${label}已复制` : "复制失败");
+  }
+
+  function showNotice(text: string) {
+    setCopyNotice(text);
+    window.setTimeout(() => setCopyNotice(null), 1600);
   }
 
   return (
@@ -275,12 +292,27 @@ export default function Home() {
             {error ? <p className="error-strip">{error}</p> : null}
 
             <article className="report-pane">
+              {copyNotice ? <p className="copy-toast">{copyNotice}</p> : null}
               {result ? (
-                <MarkdownReport markdown={result.report_markdown} />
+                <>
+                  <ReportToolbar
+                    onCopy={copyWithNotice}
+                    onRefresh={refreshReports}
+                    result={result}
+                  />
+                  <MarkdownReport markdown={result.report_markdown} />
+                </>
               ) : (
                 <div className="empty-report">
                   <h2>准备就绪</h2>
-                  <p>启动本地 API 后，输入研究问题即可生成报告。</p>
+                  <p>从左侧选择历史报告，或输入新任务。</p>
+                  <button
+                    className="secondary-button"
+                    onClick={() => void refreshReports()}
+                    type="button"
+                  >
+                    刷新历史
+                  </button>
                 </div>
               )}
             </article>
@@ -308,7 +340,7 @@ export default function Home() {
               </div>
             </section>
 
-            <RunMetadata result={result} />
+            <RunMetadata onCopy={copyWithNotice} result={result} />
           </aside>
         </div>
       </section>
@@ -375,7 +407,55 @@ function chatResponseFromHistoryItem(item: RunHistoryItem): ChatResponse {
   };
 }
 
-function RunMetadata({ result }: { result: ChatResponse | null }) {
+function ReportToolbar({
+  onCopy,
+  onRefresh,
+  result
+}: {
+  onCopy: (value: string, label: string) => Promise<void>;
+  onRefresh: () => Promise<void>;
+  result: ChatResponse;
+}) {
+  return (
+    <div className="report-toolbar">
+      <div className="report-toolbar-text">
+        <p className="report-title" title={result.request}>
+          {result.request}
+        </p>
+        <p className="report-subtitle">
+          {formatRoute(result.route.kind ?? "research")} · {formatCost(result.cost_cny)}
+        </p>
+      </div>
+      <div className="report-toolbar-actions">
+        <button className="secondary-button" onClick={() => void onRefresh()} type="button">
+          刷新历史
+        </button>
+        <button
+          className="secondary-button"
+          onClick={() => void onCopy(result.report_path, "报告路径")}
+          type="button"
+        >
+          复制报告路径
+        </button>
+        <button
+          className="secondary-button"
+          onClick={() => void onCopy(result.session_path, "会话路径")}
+          type="button"
+        >
+          复制会话路径
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RunMetadata({
+  onCopy,
+  result
+}: {
+  onCopy: (value: string, label: string) => Promise<void>;
+  result: ChatResponse | null;
+}) {
   if (result === null) {
     return (
       <section className="metadata">
@@ -399,10 +479,20 @@ function RunMetadata({ result }: { result: ChatResponse | null }) {
         <MetaItem label="费用" value={`¥${result.cost_cny.toFixed(4)}`} />
         <MetaItem label="事件数" value={String(result.events_count)} />
         <MetaItem label="论文数" value={formatPaperBudget(result.paper_budget)} />
-        <MetaItem copyable label="会话" value={result.session_path} />
-        <MetaItem copyable label="报告" value={result.report_path} />
-        <MetaItem copyable label="质量记录" value={result.quality_run_path ?? "未记录"} />
-        <MetaItem copyable label="评估报告" value={result.eval_report_path ?? "未更新"} />
+        <MetaItem copyable label="会话" onCopy={onCopy} value={result.session_path} />
+        <MetaItem copyable label="报告" onCopy={onCopy} value={result.report_path} />
+        <MetaItem
+          copyable
+          label="质量记录"
+          onCopy={onCopy}
+          value={result.quality_run_path ?? "未记录"}
+        />
+        <MetaItem
+          copyable
+          label="评估报告"
+          onCopy={onCopy}
+          value={result.eval_report_path ?? "未更新"}
+        />
       </dl>
     </section>
   );
@@ -411,10 +501,12 @@ function RunMetadata({ result }: { result: ChatResponse | null }) {
 function MetaItem({
   copyable = false,
   label,
+  onCopy,
   value
 }: {
   copyable?: boolean;
   label: string;
+  onCopy?: (value: string, label: string) => Promise<void>;
   value: string;
 }) {
   const canCopy = copyable && value !== "未记录" && value !== "未更新";
@@ -427,7 +519,7 @@ function MetaItem({
         {canCopy ? (
           <button
             className="copy-button"
-            onClick={() => void copyText(value)}
+            onClick={() => void (onCopy ? onCopy(value, label) : copyText(value))}
             title={`复制${label}路径`}
             type="button"
           >
@@ -543,14 +635,15 @@ function renderInlineText(text: string): ReactNode[] {
   return parts.length > 0 ? parts : [text];
 }
 
-async function copyText(value: string) {
+async function copyText(value: string): Promise<boolean> {
   if (!navigator.clipboard) {
-    return;
+    return false;
   }
   try {
     await navigator.clipboard.writeText(value);
+    return true;
   } catch {
-    return;
+    return false;
   }
 }
 

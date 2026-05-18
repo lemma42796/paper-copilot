@@ -245,7 +245,8 @@ button {
 }
 
 .ghost-button,
-.primary-button {
+.primary-button,
+.secondary-button {
   min-height: 34px;
   border-radius: 8px;
   padding: 0 14px;
@@ -268,6 +269,17 @@ button {
 .primary-button:disabled {
   cursor: default;
   opacity: 0.62;
+}
+
+.secondary-button {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--text);
+}
+
+.secondary-button:hover {
+  border-color: rgba(35, 105, 216, 0.24);
+  color: var(--accent);
 }
 
 .content-grid {
@@ -365,14 +377,73 @@ input {
 }
 
 .report-pane {
+  position: relative;
   min-height: 0;
   overflow: auto;
   padding: 24px clamp(18px, 4vw, 54px);
   background: rgba(255, 255, 255, 0.7);
 }
 
+.report-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  max-width: 880px;
+  margin: 0 auto 22px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.report-toolbar-text {
+  min-width: 0;
+}
+
+.report-title,
+.report-subtitle {
+  margin: 0;
+}
+
+.report-title {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-subtitle {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.report-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.copy-toast {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  width: fit-content;
+  margin: 0 auto 12px;
+  padding: 7px 12px;
+  border: 1px solid rgba(35, 105, 216, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 12px 24px rgba(28, 39, 54, 0.1);
+}
+
 .empty-report {
   display: grid;
+  gap: 12px;
   place-content: center;
   min-height: 360px;
   color: var(--muted);
@@ -391,6 +462,10 @@ input {
 
 .empty-report p {
   margin-top: 8px;
+}
+
+.empty-report .secondary-button {
+  justify-self: center;
 }
 
 .inspector {
@@ -614,5 +689,17 @@ dd {
 
   .report-pane {
     padding: 18px;
+  }
+
+  .report-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .report-toolbar-actions {
+    justify-content: stretch;
+  }
+
+  .report-toolbar-actions .secondary-button {
+    flex: 1 1 140px;
   }
 }
