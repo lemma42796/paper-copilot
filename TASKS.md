@@ -203,11 +203,18 @@
   要克制,避免 dashboard/营销页/厚重卡片风。Python 侧继续作为本地后端,
   现有 `paper-copilot serve` 暴露 `POST /chat`;Next.js 前端只消费这个 API。
   推荐目录: `apps/web/`。
-- **下一个编码建议**:scaffold `apps/web` Next.js 前端,先做单页 chat shell:
-  左侧会话/报告列表,中间一个自然语言输入框和 Markdown 报告区,右侧/底部
-  轻量 metadata(route、session/report/eval 路径、cost、paper budget)。
-  第一版只连 `POST /chat` 和 `GET /health`,不做登录/云同步/复杂 dashboard。
-  新会话开始实现前,先确认是否允许引入 Node/Next 依赖并创建 package files。
+- **Next.js 前端 shell v1**(2026-05-18):新增 `apps/web`。Next.js App Router
+  单页 shell 已连 `GET /health` 与 `POST /chat`,左侧本地 run history,中间
+  prompt + Markdown 报告区,右侧 connection/run metadata(route、stop、cost、
+  events、paper budget、session/report/eval 路径)。UI 走 macOS 风格轻量
+  侧边栏/工具栏/浅色毛玻璃层次,不做登录/云同步/复杂 dashboard。已跑
+  `npm run typecheck` + `npm run build`;`npm install` 报 2 个 moderate audit
+  项,未自动 `npm audit fix --force`。
+- **下一个编码建议**:做一次真实联调:同时启动
+  `paper-copilot serve --host 127.0.0.1 --port 8765` 和
+  `cd apps/web && npm run dev`,用已有本地库跑一条低预算 `/chat` 请求,观察
+  report/metadata/quality 路径是否在 UI 中稳定展示。之后再补后端支持的历史
+  report 列表,替换当前前端内存 history。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
