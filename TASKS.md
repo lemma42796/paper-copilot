@@ -166,6 +166,11 @@
   session 的 `final_output.quality` 记录成 `research_quality` row。`eval report`
   遇到这些字段时会追加 evidence coverage 与 unsupported claim ratio 两张
   趋势图。已补纯 mock/HTML 断言,按用户要求未运行任何验证命令。
+- **M17 research quality 自动记录**(2026-05-18):`paper-copilot research`
+  现在默认在写 `research-report.md` 后把当前 session 的
+  `final_output.quality` 追加到 eval run-history,终端输出 `quality:` 路径;
+  可用 `--no-record-quality` 跳过。记录失败只 warning,不影响 research
+  report 输出。按用户要求未运行任何验证命令。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
   M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐,planner/schema
   收敛也已快速复跑,`read_paper` 自动读已接入且已有一次最快速验收。

@@ -13,12 +13,13 @@ from rich.markdown import Markdown
 
 from paper_copilot.agents.llm_client import LLMClient
 from paper_copilot.agents.research import ResearchToolContext, run_research
+from paper_copilot.eval.runs import write_research_quality_run
 from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.knowledge.meta import IndexMeta, require_match, write_meta
 from paper_copilot.session.paths import default_root
 from paper_copilot.shared.embedder import EMBEDDING_DIM, MODEL_NAME, Embedder
-from paper_copilot.shared.errors import KnowledgeError
+from paper_copilot.shared.errors import EvalError, KnowledgeError
 
 
 def research(
@@ -43,6 +44,13 @@ def research(
         Path | None,
         typer.Option("--root", help="Override PAPER_COPILOT_HOME root"),
     ] = None,
+    no_record_quality: Annotated[
+        bool,
+        typer.Option(
+            "--no-record-quality",
+            help="Do not append final_output.quality to eval/runs/.",
+        ),
+    ] = False,
 ) -> None:
     """Run a bounded research tool loop over the local library."""
     if pdf_dir is not None:
@@ -55,7 +63,17 @@ def research(
         raise typer.BadParameter("--max-papers must be positive")
     if pdf_dir is not None and not pdf_dir.is_dir():
         raise typer.BadParameter(f"--pdf-dir is not a directory: {pdf_dir}")
-    asyncio.run(_research_async(topic, pdf_dir, max_turns, budget_cny, max_papers, root))
+    asyncio.run(
+        _research_async(
+            topic,
+            pdf_dir,
+            max_turns,
+            budget_cny,
+            max_papers,
+            root,
+            record_quality=not no_record_quality,
+        )
+    )
 
 
 async def _research_async(
@@ -65,6 +83,8 @@ async def _research_async(
     budget_cny: float,
     max_papers: int,
     root: Path | None,
+    *,
+    record_quality: bool,
 ) -> None:
     home = root if root is not None else default_root()
     fields_db = home / "fields.db"
@@ -139,6 +159,12 @@ async def _research_async(
     console.print()
     console.print(f"[dim]session: {run.session_path}[/dim]")
     console.print(f"[dim]report:  {report_path}[/dim]")
+    if record_quality:
+        try:
+            quality_run_path = write_research_quality_run(run.session_path)
+            console.print(f"[dim]quality: {quality_run_path}[/dim]")
+        except EvalError as exc:
+            console.print(f"[yellow]warning:[/yellow] could not record quality: {exc}")
     paper_budget = run.termination_summary.paper_budget
     console.print(
         f"[dim]terminated: {run.termination_reason}; "
