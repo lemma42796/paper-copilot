@@ -16,7 +16,7 @@ from paper_copilot.eval.goldens import (
     mark_from_session,
 )
 from paper_copilot.eval.report import write_report
-from paper_copilot.eval.runs import load_history, write_run
+from paper_copilot.eval.runs import load_history, write_research_quality_run, write_run
 from paper_copilot.eval.suite import (
     SuiteResult,
     load_suite,
@@ -128,6 +128,38 @@ def run(
     raise typer.Exit(code=0 if result.passed else 1)
 
 
+@app.command("record-research")
+def record_research(
+    session_path: Annotated[
+        Path,
+        typer.Argument(help="Path to a ResearchAgent session.jsonl"),
+    ],
+    runs_dir: Annotated[
+        Path | None,
+        typer.Option("--runs-dir", help="Override default eval/runs/ location"),
+    ] = None,
+    suite_name: Annotated[
+        str,
+        typer.Option("--suite-name", help="Suite name to write into run history"),
+    ] = "research",
+) -> None:
+    """Record a ResearchAgent final_output.quality row for eval report trends."""
+    session_path = session_path.expanduser()
+    if not session_path.is_file():
+        raise typer.BadParameter(f"session file not found: {session_path}")
+    try:
+        run_path = write_research_quality_run(
+            session_path,
+            runs_dir=runs_dir,
+            suite_name=suite_name,
+        )
+    except EvalError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1) from e
+
+    Console().print(f"[green]recorded research quality[/green] → {run_path}")
+
+
 @app.command("report")
 def report(
     out: Annotated[
@@ -154,7 +186,8 @@ def report(
     if not rows:
         console.print(
             "[yellow]no run history found[/yellow] — run "
-            "[cyan]paper-copilot eval run <suite.yaml>[/cyan] first."
+            "[cyan]paper-copilot eval run <suite.yaml>[/cyan] or "
+            "[cyan]paper-copilot eval record-research <session.jsonl>[/cyan] first."
         )
     else:
         n_runs = len({r.run_id for r in rows})

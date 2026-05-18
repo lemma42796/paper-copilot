@@ -12,9 +12,11 @@ from paper_copilot.eval.runs import (
     _cache_hit_ratio,
     load_history,
     make_run_id,
+    write_research_quality_run,
     write_run,
 )
 from paper_copilot.eval.suite import FieldResult, PaperResult, SuiteResult
+from paper_copilot.session import SessionStore
 from paper_copilot.shared.cost import CostSnapshot
 from paper_copilot.shared.errors import EvalError
 
@@ -154,5 +156,80 @@ def test_run_row_roundtrip() -> None:
         latency_s=12.5,
         cache_hit_ratio=0.2,
         budget_passed=True,
+        evidence_ref_count=3,
+        findings_claim_count=4,
+        findings_inline_ref_count=1,
+        claims_without_refs_count=1,
+        evidence_coverage_ratio=0.75,
     )
     assert RunRow.from_json(row.to_json()) == row
+
+
+def test_run_row_reads_legacy_json_without_quality_fields() -> None:
+    row = RunRow.from_json(
+        {
+            "run_id": "r1",
+            "suite_name": "s",
+            "git_sha": "g",
+            "paper_id": "p",
+            "field": "methods",
+            "field_passed": True,
+            "field_n_failures": 0,
+            "cost_cny": 0.05,
+            "latency_s": 12.5,
+            "cache_hit_ratio": 0.2,
+            "budget_passed": True,
+        }
+    )
+
+    assert row.evidence_ref_count is None
+    assert row.evidence_coverage_ratio is None
+
+
+def test_write_research_quality_run_records_final_output_quality(tmp_path: Path) -> None:
+    store = SessionStore.create(
+        "research-session",
+        model="qwen",
+        agent="ResearchAgent",
+        root=tmp_path,
+    )
+    store.append_final_output(
+        {
+            "quality": {
+                "evidence_ref_count": 2,
+                "findings_claim_count": 4,
+                "findings_inline_ref_count": 1,
+                "claims_without_refs_count": 1,
+                "evidence_coverage_ratio": 0.5,
+            },
+            "cost": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cache_read_tokens": 30,
+                "cache_creation_tokens": 10,
+                "cost_cny": 0.0123,
+            },
+        }
+    )
+
+    path = write_research_quality_run(
+        store.path,
+        runs_dir=tmp_path / "runs",
+        run_id="research1",
+        git_sha="sha",
+    )
+
+    row = RunRow.from_json(json.loads(path.read_text(encoding="utf-8")))
+    assert row.run_id == "research1"
+    assert row.suite_name == "research"
+    assert row.paper_id == "research"
+    assert row.field == "research_quality"
+    assert row.field_passed is False
+    assert row.field_n_failures == 1
+    assert row.cost_cny == 0.0123
+    assert row.cache_hit_ratio == pytest.approx(30 / 140)
+    assert row.evidence_ref_count == 2
+    assert row.findings_claim_count == 4
+    assert row.findings_inline_ref_count == 1
+    assert row.claims_without_refs_count == 1
+    assert row.evidence_coverage_ratio == 0.5

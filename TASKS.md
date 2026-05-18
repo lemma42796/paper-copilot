@@ -160,6 +160,12 @@
   `evidence_coverage_ratio`。这是粗粒度 heuristic,不是 LLM judge,用于后续
   unsupported claim rate / evidence coverage 的趋势信号。已补 mock 断言,
   按用户要求未运行任何验证命令。
+- **M17 research quality trend 接入**(2026-05-18):eval run-history 的
+  `RunRow` 现在兼容可选 research quality 字段;新增
+  `paper-copilot eval record-research <session.jsonl>` 可把 ResearchAgent
+  session 的 `final_output.quality` 记录成 `research_quality` row。`eval report`
+  遇到这些字段时会追加 evidence coverage 与 unsupported claim ratio 两张
+  趋势图。已补纯 mock/HTML 断言,按用户要求未运行任何验证命令。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
   M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐,planner/schema
   收敛也已快速复跑,`read_paper` 自动读已接入且已有一次最快速验收。

@@ -1,7 +1,7 @@
 """Static HTML trend report from eval run history.
 
-Three hand-rolled SVG line charts (no JS / chart-lib deps) over the
-last N runs:
+Hand-rolled SVG line charts (no JS / chart-lib deps) over the last N
+runs:
 
 1. Per-field PASS rate — answers M14's noise-floor question:
    single-run PASS/FAIL is binary noise, but the line over ≥3 runs
@@ -9,6 +9,8 @@ last N runs:
 2. Per-paper cost (CNY) — catches model/prompt cost regressions.
 3. Per-paper cache-hit ratio — catches M9 cache regressions
    (cache_read / total billed prompt tokens).
+4. Optional ResearchAgent evidence quality — catches unsupported-claim
+   drift when rows include M17 quality payload fields.
 
 Top-of-page markdown summary diffs the most recent run against the
 prior one for the same suite, highlighting fields whose PASS state
@@ -71,6 +73,7 @@ def render_html(rows: list[RunRow], *, title: str = "paper-copilot eval report")
         y_format="{:.2%}",
         y_max=1.0,
     )
+    quality_sections = _quality_sections(groups)
 
     body = "\n".join(
         [
@@ -90,6 +93,7 @@ def render_html(rows: list[RunRow], *, title: str = "paper-copilot eval report")
             "<section class='chart'><h2>Per-paper cache-hit ratio</h2>",
             cache_chart,
             "</section>",
+            quality_sections,
         ]
     )
     return _PAGE_TMPL.format(title=html.escape(title), body=body)
@@ -128,6 +132,13 @@ def _summary_md(groups: list[_RunGroup]) -> str:
         f"{len(fields)} field(s) · "
         f"PASS rate { _pass_rate(latest.rows):.0%}</p>"
     )
+    quality = _run_quality(latest)
+    if quality is not None:
+        coverage, unsupported = quality
+        lines.append(
+            f"<p><b>Research quality</b>: evidence coverage {coverage:.0%} · "
+            f"unsupported claim ratio {unsupported:.0%}</p>"
+        )
 
     if len(groups) < 2:
         lines.append("<p class='hint'>Need ≥2 runs to show a trend diff.</p>")
@@ -225,6 +236,63 @@ def _paper_drifts(
     return drifts
 
 
+def _quality_sections(groups: list[_RunGroup]) -> str:
+    if not any(_has_quality(g.rows) for g in groups):
+        return ""
+
+    coverage_chart = _chart_run_metric(
+        groups,
+        value_fn=lambda r: r.evidence_coverage_ratio,
+        y_format="{:.0%}",
+        y_max=1.0,
+    )
+    unsupported_chart = _chart_run_metric(
+        groups,
+        value_fn=_unsupported_claim_ratio,
+        y_format="{:.0%}",
+        y_max=1.0,
+    )
+    return "\n".join(
+        [
+            "<section class='chart'><h2>Research evidence coverage</h2>",
+            coverage_chart,
+            "</section>",
+            "<section class='chart'><h2>Research unsupported claim ratio</h2>",
+            unsupported_chart,
+            "</section>",
+        ]
+    )
+
+
+def _run_quality(group: _RunGroup) -> tuple[float, float] | None:
+    coverage = _avg_metric(group.rows, lambda r: r.evidence_coverage_ratio)
+    unsupported = _avg_metric(group.rows, _unsupported_claim_ratio)
+    if coverage is None or unsupported is None:
+        return None
+    return coverage, unsupported
+
+
+def _has_quality(rows: tuple[RunRow, ...]) -> bool:
+    return any(r.evidence_coverage_ratio is not None for r in rows)
+
+
+def _unsupported_claim_ratio(row: RunRow) -> float | None:
+    if row.findings_claim_count is None or row.claims_without_refs_count is None:
+        return None
+    if row.findings_claim_count == 0:
+        return 0.0
+    return row.claims_without_refs_count / row.findings_claim_count
+
+
+def _avg_metric(
+    rows: tuple[RunRow, ...], value_fn: Callable[[RunRow], float | None]
+) -> float | None:
+    values = [value for row in rows if (value := value_fn(row)) is not None]
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
 def _per_paper_value(
     rows: tuple[RunRow, ...], value_fn: Callable[[RunRow], float]
 ) -> dict[str, float]:
@@ -270,6 +338,22 @@ def _chart_paper_metric(
     if y_max is None:
         flat = [v for line in series.values() for v in line if v is not None]
         y_max = max(flat) * 1.1 if flat else 1.0
+    return _svg_chart(
+        series=series,
+        run_labels=[_short_label(g.run_id) for g in groups],
+        y_max=y_max,
+        y_format=y_format,
+    )
+
+
+def _chart_run_metric(
+    groups: list[_RunGroup],
+    *,
+    value_fn: Callable[[RunRow], float | None],
+    y_format: str,
+    y_max: float,
+) -> str:
+    series = {"research": [_avg_metric(group.rows, value_fn) for group in groups]}
     return _svg_chart(
         series=series,
         run_labels=[_short_label(g.run_id) for g in groups],
@@ -409,7 +493,8 @@ def _empty_page(title: str) -> str:
     body = (
         f"<h1>{html.escape(title)}</h1>"
         "<p class='hint'>No runs found. Run <code>paper-copilot eval run "
-        "&lt;suite.yaml&gt;</code> at least twice to see a trend.</p>"
+        "&lt;suite.yaml&gt;</code> or <code>paper-copilot eval record-research "
+        "&lt;session.jsonl&gt;</code> at least twice to see a trend.</p>"
     )
     return _PAGE_TMPL.format(title=html.escape(title), body=body)
 

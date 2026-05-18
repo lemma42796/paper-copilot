@@ -22,6 +22,7 @@ from typing import Any
 
 from paper_copilot.eval._paths import default_runs_dir, find_project_root
 from paper_copilot.eval.suite import SuiteResult
+from paper_copilot.session import FinalOutput, SessionHeader, SessionStore
 from paper_copilot.shared.errors import EvalError
 
 
@@ -38,9 +39,14 @@ class RunRow:
     latency_s: float
     cache_hit_ratio: float
     budget_passed: bool
+    evidence_ref_count: int | None = None
+    findings_claim_count: int | None = None
+    findings_inline_ref_count: int | None = None
+    claims_without_refs_count: int | None = None
+    evidence_coverage_ratio: float | None = None
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        raw: dict[str, Any] = {
             "run_id": self.run_id,
             "suite_name": self.suite_name,
             "git_sha": self.git_sha,
@@ -53,6 +59,15 @@ class RunRow:
             "cache_hit_ratio": self.cache_hit_ratio,
             "budget_passed": self.budget_passed,
         }
+        quality = {
+            "evidence_ref_count": self.evidence_ref_count,
+            "findings_claim_count": self.findings_claim_count,
+            "findings_inline_ref_count": self.findings_inline_ref_count,
+            "claims_without_refs_count": self.claims_without_refs_count,
+            "evidence_coverage_ratio": self.evidence_coverage_ratio,
+        }
+        raw.update({key: value for key, value in quality.items() if value is not None})
+        return raw
 
     @classmethod
     def from_json(cls, raw: dict[str, Any]) -> RunRow:
@@ -68,6 +83,11 @@ class RunRow:
             latency_s=raw["latency_s"],
             cache_hit_ratio=raw["cache_hit_ratio"],
             budget_passed=raw["budget_passed"],
+            evidence_ref_count=raw.get("evidence_ref_count"),
+            findings_claim_count=raw.get("findings_claim_count"),
+            findings_inline_ref_count=raw.get("findings_inline_ref_count"),
+            claims_without_refs_count=raw.get("claims_without_refs_count"),
+            evidence_coverage_ratio=raw.get("evidence_coverage_ratio"),
         )
 
 
@@ -144,6 +164,105 @@ def write_run(
             f.write(json.dumps(row.to_json(), ensure_ascii=False))
             f.write("\n")
     return path
+
+
+def write_research_quality_run(
+    session_path: Path,
+    *,
+    runs_dir: Path | None = None,
+    run_id: str | None = None,
+    git_sha: str | None = None,
+    suite_name: str = "research",
+) -> Path:
+    rid = run_id if run_id is not None else make_run_id()
+    sha = git_sha if git_sha is not None else _git_sha()
+    base = runs_dir if runs_dir is not None else default_runs_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / f"{rid}.jsonl"
+    if path.exists():
+        raise EvalError(f"run file already exists: {path}")
+
+    _, final = _read_research_final(session_path)
+    quality = _quality_payload(final)
+    cost = _cost_payload(final)
+    unsupported_count = _int_quality(quality, "claims_without_refs_count")
+    row = RunRow(
+        run_id=rid,
+        suite_name=suite_name,
+        git_sha=sha,
+        paper_id=suite_name,
+        field="research_quality",
+        field_passed=unsupported_count == 0,
+        field_n_failures=unsupported_count,
+        cost_cny=_float_cost(cost, "cost_cny"),
+        latency_s=0.0,
+        cache_hit_ratio=_cache_hit_ratio(
+            _int_cost(cost, "input_tokens"),
+            _int_cost(cost, "cache_read_tokens"),
+            _int_cost(cost, "cache_creation_tokens"),
+        ),
+        budget_passed=True,
+        evidence_ref_count=_int_quality(quality, "evidence_ref_count"),
+        findings_claim_count=_int_quality(quality, "findings_claim_count"),
+        findings_inline_ref_count=_int_quality(quality, "findings_inline_ref_count"),
+        claims_without_refs_count=unsupported_count,
+        evidence_coverage_ratio=_float_quality(quality, "evidence_coverage_ratio"),
+    )
+
+    path.write_text(
+        json.dumps(row.to_json(), ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _read_research_final(session_path: Path) -> tuple[SessionHeader, FinalOutput]:
+    if not session_path.exists():
+        raise EvalError(f"session file not found: {session_path}")
+    entries = SessionStore(session_path, last_id="").read_all()
+    header = next((e for e in entries if isinstance(e, SessionHeader)), None)
+    if header is None:
+        raise EvalError(f"session header not found: {session_path}")
+    final = next((e for e in reversed(entries) if isinstance(e, FinalOutput)), None)
+    if final is None:
+        raise EvalError(f"final_output not found: {session_path}")
+    return header, final
+
+
+def _quality_payload(final: FinalOutput) -> dict[str, Any]:
+    quality = final.payload.get("quality")
+    if not isinstance(quality, dict):
+        raise EvalError("final_output.quality missing; rerun research with M17 quality payload")
+    return quality
+
+
+def _cost_payload(final: FinalOutput) -> dict[str, Any]:
+    cost = final.payload.get("cost")
+    return cost if isinstance(cost, dict) else {}
+
+
+def _int_quality(quality: dict[str, Any], key: str) -> int:
+    value = quality.get(key)
+    if not isinstance(value, int):
+        raise EvalError(f"final_output.quality.{key} missing or not an int")
+    return value
+
+
+def _float_quality(quality: dict[str, Any], key: str) -> float:
+    value = quality.get(key)
+    if not isinstance(value, int | float):
+        raise EvalError(f"final_output.quality.{key} missing or not a number")
+    return float(value)
+
+
+def _int_cost(cost: dict[str, Any], key: str) -> int:
+    value = cost.get(key, 0)
+    return value if isinstance(value, int) else 0
+
+
+def _float_cost(cost: dict[str, Any], key: str) -> float:
+    value = cost.get(key, 0.0)
+    return float(value) if isinstance(value, int | float) else 0.0
 
 
 def load_history(
