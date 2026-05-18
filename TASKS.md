@@ -8,7 +8,7 @@
 
 ## Current Status
 
-> 更新于 2026-05-17。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
+> 更新于 2026-05-18。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
 - **已完成**:M1–M15(Session A + B 全部 done)。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
@@ -45,6 +45,21 @@
 - **下一个编码 milestone**:**M16 候选目标已记录,未开始**。M15 Session B
   后主功能计划完成;下一步若继续打磨,优先做 M16 的工程硬化、阅读质量指标
   和开源可复现性。不要自动开工,等明确指令。
+- **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
+  M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
+  升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
+- **2026-05-18 规划会话交接上下文**:本轮只做规划和文档,不改实现。用户
+  认可后续产品方向:保留 CLI 作为底层工具和开发者入口,普通用户最终只面对
+  一个自然语言输入框;新增功能对外命名为 Research Idea Composer/论文创新
+  方案生成助手,避免"水论文/缝合神器"叙事。RAG 升级优先做 evidence
+  citation、FTS5/BM25 + bge-m3/sqlite-vec + RRF、retrieval eval;暂不换
+  主流向量库,除非规模/并发/ACL/托管需求触发。CCF PDF
+  `/Users/a123/Documents/reid/第七版中国计算机学会推荐国际学术会议和期刊目录（正式版）.pdf`
+  已确认是 2026 版 CCF venue 白名单,主要给 DBLP URL,不是论文库;联网发现
+  只做 DBLP/开放 PDF metadata,付费或缺失 PDF 交给用户补。本路线顺序:
+  M16 harness hardening → M17 chat-first tool harness → M18 evidence-grounded
+  RAG → M19 Research Idea Composer → M20 local web UI。若新会话要继续实现,
+  默认从 M16 开始,不要直接开 M19/M20。
 - **2026-05-17 交接上下文**:当前项目是固定的多 Agent 论文阅读流水线
   (Main → Skim → Deep → Related) + eval harness,不是 Codex / Claude Code /
   OpenClaw 风格的"LLM 自主调工具、观察结果、继续推进直到任务完成"的
