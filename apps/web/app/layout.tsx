@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Paper Copilot",
-  description: "Local-first research copilot"
+  description: "本地优先的论文研究助手"
 };
 
 export default function RootLayout({

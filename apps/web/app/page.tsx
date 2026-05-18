@@ -127,14 +127,14 @@ export default function Home() {
           <span className="brand-mark">PC</span>
           <div>
             <p className="brand-title">Paper Copilot</p>
-            <p className="brand-subtitle">Local Research</p>
+            <p className="brand-subtitle">本地研究助手</p>
           </div>
         </div>
 
-        <nav className="history-list" aria-label="Reports">
-          <p className="nav-label">Reports</p>
+        <nav className="history-list" aria-label="报告列表">
+          <p className="nav-label">报告</p>
           {history.length === 0 ? (
-            <p className="empty-history">No local runs yet.</p>
+            <p className="empty-history">暂无本地运行记录。</p>
           ) : (
             history.map((item) => (
               <button
@@ -145,7 +145,7 @@ export default function Home() {
               >
                 <span>{item.request}</span>
                 <small>
-                  {item.route} · ¥{item.cost.toFixed(4)}
+                  {formatRoute(item.route)} · ¥{item.cost.toFixed(4)}
                 </small>
               </button>
             ))
@@ -156,18 +156,18 @@ export default function Home() {
       <section className="workspace">
         <header className="topbar">
           <div>
-            <h1>Research Desk</h1>
+            <h1>研究工作台</h1>
             <p>{healthLabel(health)}</p>
           </div>
           <button className="ghost-button" onClick={checkHealth} type="button">
-            Check API
+            检查 API
           </button>
         </header>
 
         <div className="content-grid">
-          <section className="main-pane" aria-label="Chat">
+          <section className="main-pane" aria-label="研究输入">
             <form className="composer" onSubmit={submitRequest}>
-              <label htmlFor="message">Prompt</label>
+              <label htmlFor="message">研究问题</label>
               <textarea
                 id="message"
                 onChange={(event) => setMessage(event.target.value)}
@@ -176,7 +176,7 @@ export default function Home() {
               />
               <div className="composer-actions">
                 <div className="field-row compact">
-                  <label htmlFor="max-papers">Papers</label>
+                  <label htmlFor="max-papers">论文数</label>
                   <input
                     id="max-papers"
                     min={1}
@@ -186,7 +186,7 @@ export default function Home() {
                   />
                 </div>
                 <div className="field-row compact">
-                  <label htmlFor="budget">Budget</label>
+                  <label htmlFor="budget">预算</label>
                   <input
                     id="budget"
                     min={0.01}
@@ -197,7 +197,7 @@ export default function Home() {
                   />
                 </div>
                 <div className="field-row compact">
-                  <label htmlFor="turns">Turns</label>
+                  <label htmlFor="turns">轮数</label>
                   <input
                     id="turns"
                     min={1}
@@ -207,7 +207,7 @@ export default function Home() {
                   />
                 </div>
                 <button className="primary-button" disabled={isRunning} type="submit">
-                  {isRunning ? "Running" : "Run"}
+                  {isRunning ? "运行中" : "开始"}
                 </button>
               </div>
             </form>
@@ -219,16 +219,16 @@ export default function Home() {
                 <MarkdownReport markdown={result.report_markdown} />
               ) : (
                 <div className="empty-report">
-                  <h2>Ready</h2>
-                  <p>Start the local API, then run a research prompt.</p>
+                  <h2>准备就绪</h2>
+                  <p>启动本地 API 后，输入研究问题即可生成报告。</p>
                 </div>
               )}
             </article>
           </section>
 
-          <aside className="inspector" aria-label="Run metadata">
+          <aside className="inspector" aria-label="运行信息">
             <section className="settings">
-              <h2>Connection</h2>
+              <h2>连接</h2>
               <div className="field-row">
                 <label htmlFor="api-url">API</label>
                 <input
@@ -238,7 +238,7 @@ export default function Home() {
                 />
               </div>
               <div className="field-row">
-                <label htmlFor="pdf-dir">PDF Dir</label>
+                <label htmlFor="pdf-dir">PDF 目录</label>
                 <input
                   id="pdf-dir"
                   onChange={(event) => setPdfDir(event.target.value)}
@@ -259,11 +259,11 @@ export default function Home() {
 function healthLabel(health: HealthState): string {
   switch (health) {
     case "online":
-      return "API online";
+      return "API 已连接";
     case "offline":
-      return "API offline";
+      return "API 离线";
     case "checking":
-      return "Checking API";
+      return "正在检查 API";
   }
 }
 
@@ -271,11 +271,11 @@ function RunMetadata({ result }: { result: ChatResponse | null }) {
   if (result === null) {
     return (
       <section className="metadata">
-        <h2>Run</h2>
+        <h2>运行</h2>
         <dl>
           <div>
-            <dt>Status</dt>
-            <dd>Idle</dd>
+            <dt>状态</dt>
+            <dd>空闲</dd>
           </div>
         </dl>
       </section>
@@ -284,17 +284,17 @@ function RunMetadata({ result }: { result: ChatResponse | null }) {
 
   return (
     <section className="metadata">
-      <h2>Run</h2>
+      <h2>运行</h2>
       <dl>
-        <MetaItem label="Route" value={result.route.kind ?? "research"} />
-        <MetaItem label="Stop" value={result.termination_reason} />
-        <MetaItem label="Cost" value={`¥${result.cost_cny.toFixed(4)}`} />
-        <MetaItem label="Events" value={String(result.events_count)} />
-        <MetaItem label="Papers" value={formatPaperBudget(result.paper_budget)} />
-        <MetaItem label="Session" value={result.session_path} />
-        <MetaItem label="Report" value={result.report_path} />
-        <MetaItem label="Quality" value={result.quality_run_path ?? "Not recorded"} />
-        <MetaItem label="Eval" value={result.eval_report_path ?? "Not updated"} />
+        <MetaItem label="路由" value={formatRoute(result.route.kind ?? "research")} />
+        <MetaItem label="停止原因" value={formatTermination(result.termination_reason)} />
+        <MetaItem label="费用" value={`¥${result.cost_cny.toFixed(4)}`} />
+        <MetaItem label="事件数" value={String(result.events_count)} />
+        <MetaItem label="论文数" value={formatPaperBudget(result.paper_budget)} />
+        <MetaItem label="会话" value={result.session_path} />
+        <MetaItem label="报告" value={result.report_path} />
+        <MetaItem label="质量记录" value={result.quality_run_path ?? "未记录"} />
+        <MetaItem label="评估报告" value={result.eval_report_path ?? "未更新"} />
       </dl>
     </section>
   );
@@ -315,7 +315,32 @@ function formatPaperBudget(budget: Record<string, unknown>): string {
   if (typeof touched === "number" && typeof max === "number") {
     return `${touched}/${max}`;
   }
-  return "Unavailable";
+  return "不可用";
+}
+
+function formatRoute(route: string): string {
+  switch (route) {
+    case "idea_composer":
+      return "创新方案";
+    case "research":
+      return "研究";
+    default:
+      return route;
+  }
+}
+
+function formatTermination(reason: string): string {
+  switch (reason) {
+    case "end_turn":
+      return "正常结束";
+    case "max_turns":
+      return "达到轮数上限";
+    case "max_budget_usd":
+    case "max_budget_cny":
+      return "达到预算上限";
+    default:
+      return reason;
+  }
 }
 
 function MarkdownReport({ markdown }: { markdown: string }) {
