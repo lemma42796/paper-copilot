@@ -22,6 +22,7 @@ from paper_copilot.agents.loop import (
     LoopConfig,
     Terminated,
     TextBlock,
+    ToolResult,
     ToolResultData,
     ToolUseRequest,
     run_agent_loop,
@@ -37,6 +38,7 @@ from paper_copilot.shared.errors import KnowledgeError
 
 __all__ = [
     "ResearchRun",
+    "ResearchTerminationSummary",
     "ResearchToolContext",
     "dispatch_research_tool",
     "research_tools",
@@ -73,9 +75,19 @@ class ResearchRun:
     topic: str
     report_markdown: str
     termination_reason: str
+    termination_summary: ResearchTerminationSummary
     cost: CostSnapshot
     session_path: Path
     events: tuple[Event, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchTerminationSummary:
+    reason: str
+    cost_cny: float
+    events_count: int
+    paper_budget: dict[str, Any]
+    last_tool_error: dict[str, Any] | None
 
 
 class _ListPapersInput(BaseModel):
@@ -212,6 +224,13 @@ async def run_research(
         elif isinstance(event, Terminated):
             termination_reason = event.reason
 
+    termination_summary = _build_termination_summary(
+        reason=termination_reason,
+        cost=cost.snapshot(),
+        events=events,
+        context=context,
+    )
+
     store.append_final_output(
         {
             "topic": topic,
@@ -219,12 +238,14 @@ async def run_research(
             "report_markdown": report_markdown,
             "cost": asdict(cost.snapshot()),
             "paper_budget": _paper_budget_payload(context),
+            "termination_summary": asdict(termination_summary),
         }
     )
     return ResearchRun(
         topic=topic,
         report_markdown=report_markdown,
         termination_reason=termination_reason,
+        termination_summary=termination_summary,
         cost=cost.snapshot(),
         session_path=store.path,
         events=tuple(events),
@@ -461,6 +482,29 @@ def _paper_budget_payload(context: ResearchToolContext) -> dict[str, Any]:
         "touched_count": len(context.touched_paper_ids),
         "touched_paper_ids": sorted(context.touched_paper_ids),
     }
+
+
+def _build_termination_summary(
+    *,
+    reason: str,
+    cost: CostSnapshot,
+    events: list[Event],
+    context: ResearchToolContext,
+) -> ResearchTerminationSummary:
+    return ResearchTerminationSummary(
+        reason=reason,
+        cost_cny=cost.cost_cny,
+        events_count=len(events),
+        paper_budget=_paper_budget_payload(context),
+        last_tool_error=_last_tool_error(events),
+    )
+
+
+def _last_tool_error(events: list[Event]) -> dict[str, Any] | None:
+    for event in reversed(events):
+        if isinstance(event, ToolResult) and event.is_error:
+            return {"tool_use_id": event.id, "output": event.output}
+    return None
 
 
 def _tool_schema(name: str, description: str, model: type[BaseModel]) -> dict[str, Any]:

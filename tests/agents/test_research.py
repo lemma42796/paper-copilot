@@ -277,6 +277,10 @@ def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
         )
 
     assert run.termination_reason == "end_turn"
+    assert run.termination_summary.reason == "end_turn"
+    assert run.termination_summary.events_count == len(run.events)
+    assert run.termination_summary.paper_budget["touched_paper_ids"] == ["paperA"]
+    assert run.termination_summary.last_tool_error is None
     assert "paperA is relevant" in run.report_markdown
     assert run.cost.input_tokens == 30
 
@@ -287,3 +291,45 @@ def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
     final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
     assert final.payload["topic"] == "sparse attention"
     assert final.payload["termination_reason"] == "end_turn"
+    assert final.payload["termination_summary"]["reason"] == "end_turn"
+    assert final.payload["termination_summary"]["paper_budget"]["touched_count"] == 1
+
+
+def test_run_research_summary_records_last_tool_error(tmp_path: Path) -> None:
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        context = ResearchToolContext(fields_store=fs)
+        llm = MockLLM(
+            [
+                MockResponse(
+                    content=[
+                        ToolUseBlock(
+                            id="missing1",
+                            name="inspect_paper",
+                            input={"paper_id": "missing"},
+                        )
+                    ],
+                    stop_reason="tool_use",
+                    usage={"input_tokens": 10, "output_tokens": 4},
+                ),
+                MockResponse(
+                    content=[TextBlock(text="## Gaps\n\nmissing is not indexed.")],
+                    stop_reason="end_turn",
+                    usage={"input_tokens": 20, "output_tokens": 8},
+                ),
+            ]
+        )
+
+        run = asyncio.run(
+            run_research(
+                topic="missing paper",
+                llm=llm,
+                context=context,
+                root=tmp_path,
+                max_turns=4,
+                max_budget_cny=1.0,
+            )
+        )
+
+    assert run.termination_summary.last_tool_error is not None
+    assert run.termination_summary.last_tool_error["tool_use_id"] == "missing1"
+    assert "paper_id not found" in run.termination_summary.last_tool_error["output"]

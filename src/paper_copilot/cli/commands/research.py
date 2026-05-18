@@ -118,7 +118,9 @@ async def _research_async(
     console.print()
     console.print(f"[dim]session: {run.session_path}[/dim]")
     console.print(f"[dim]report:  {report_path}[/dim]")
+    paper_budget = run.termination_summary.paper_budget
     console.print(
         f"[dim]terminated: {run.termination_reason}; "
-        f"cost: ¥{run.cost.cost_cny:.4f}; turns: {len(run.events)} events[/dim]"
+        f"cost: ¥{run.cost.cost_cny:.4f}; events: {len(run.events)}; "
+        f"papers: {paper_budget['touched_count']}/{paper_budget['max_papers']}[/dim]"
     )
