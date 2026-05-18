@@ -175,6 +175,14 @@
   quality 后默认刷新 repo-local `eval/report.html`,终端输出 `eval report:`
   路径;可用 `--no-update-report` 跳过。`eval/_paths.py` 新增
   `default_report_path()` 统一默认位置。按用户要求未运行任何验证命令。
+- **Chat-first intent router v1**(2026-05-18):新增 `paper_copilot.chat.router`
+  作为后续前端单输入框的后端路由层。ResearchAgent 现在会先把自然语言
+  请求路由为 `research` 或 `idea_composer`;命中"创新点/研究想法/idea/
+  proposal/选题/实验方案"等意图时,final prompt 自动切到 Composer 输出
+  结构:Problem / Prior Evidence / Gap / Idea / Why It Might Work /
+  Experiment Plan / Risks / Evidence。`final_output.request_route` 会落盘,
+  quality 统计也能从 Composer 的 `Idea` section 抽 claim。按用户要求未运行
+  任何验证命令。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
   M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐,planner/schema
   收敛也已快速复跑,`read_paper` 自动读已接入且已有一次最快速验收。

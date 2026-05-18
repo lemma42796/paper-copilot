@@ -37,6 +37,7 @@ from paper_copilot.agents.loop import (
     run_agent_loop,
 )
 from paper_copilot.agents.read_pipeline import ReadPipelineRun, run_read_pipeline
+from paper_copilot.chat.router import ChatRoute, route_chat_request
 from paper_copilot.knowledge.compare import build_compare_payload
 from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore, PaperRow, available_fields
@@ -232,7 +233,8 @@ async def run_research(
         agent=_AGENT_NAME,
         root=root,
     )
-    initial_user_text = _build_initial_user_text(topic, context)
+    route = route_chat_request(topic)
+    initial_user_text = _build_initial_user_text(topic, context, route)
     store.append_message(role="user", text=initial_user_text)
 
     cost = CostTracker(pricing=pricing_for_model(DEFAULT_MODEL))
@@ -284,6 +286,7 @@ async def run_research(
     store.append_final_output(
         {
             "topic": topic,
+            "request_route": route.to_payload(),
             "termination_reason": termination_reason,
             "report_markdown": report_markdown,
             "evidence_refs": evidence_refs,
@@ -1156,7 +1159,7 @@ def _quality_summary(
     report_markdown: str,
     evidence_refs: list[dict[str, str]],
 ) -> dict[str, Any]:
-    findings_text = _markdown_section(report_markdown, "Findings")
+    findings_text = _quality_claim_section(report_markdown)
     findings_claims = _claim_units(findings_text)
     findings_refs = _extract_evidence_refs(findings_text)
     findings_claim_count = len(findings_claims)
@@ -1175,6 +1178,14 @@ def _quality_summary(
         "claims_without_refs_count": max(0, findings_claim_count - evidence_ref_count),
         "evidence_coverage_ratio": coverage_ratio,
     }
+
+
+def _quality_claim_section(report_markdown: str) -> str:
+    for title in ("Findings", "Idea", "Why It Might Work"):
+        section = _markdown_section(report_markdown, title)
+        if section:
+            return section
+    return ""
 
 
 def _markdown_section(markdown: str, title: str) -> str:
@@ -1265,7 +1276,11 @@ def _search_result_payload(result: SearchResult) -> dict[str, Any]:
     }
 
 
-def _build_initial_user_text(topic: str, context: ResearchToolContext) -> str:
+def _build_initial_user_text(
+    topic: str,
+    context: ResearchToolContext,
+    route: ChatRoute,
+) -> str:
     pdf_dir = str(context.pdf_dir) if context.pdf_dir is not None else "(not provided)"
     return (
         "You are Paper Copilot ResearchAgent, a bounded planner/controller. "
@@ -1273,6 +1288,8 @@ def _build_initial_user_text(topic: str, context: ResearchToolContext) -> str:
         "answering. Do not invent citations or claim that an unread PDF was "
         "analyzed. If evidence is missing, say exactly what is missing.\n\n"
         f"Research topic: {topic}\n"
+        f"Request route: {route.kind} ({route.reason})\n"
+        f"Output profile: {route.output_profile}\n"
         f"PDF directory: {pdf_dir}\n\n"
         f"Paper touch limit: at most {context.max_papers} unique paper_ids may be "
         "inspected or compared in this run. Reusing the same paper_id is allowed; "
@@ -1296,20 +1313,43 @@ def _build_initial_user_text(topic: str, context: ResearchToolContext) -> str:
         "expand from an already relevant paper to nearby candidates. "
         "Tool inputs must match the JSON schema exactly; "
         "numbers such as year, k, limit, and max_items must be JSON numbers.\n\n"
-        "When you have enough information, stop calling tools and write a "
-        "concise Markdown report with these sections: Findings, Evidence, "
-        "Gaps, Next Steps. Prefer inspect_paper evidence_summary and "
-        "suggested_citations for final-report claims. In Evidence, each bullet "
-        "must include at least one bracket reference in exact format "
-        "`[paper_id:field]`, for example `[abc123:contributions[0].claim]`; "
-        "use field names from suggested_citations or compare_papers output. "
-        "For concrete Findings claims, either include bracket references inline "
-        "or mirror the claim in Evidence with bracket references. "
-        "Keep every concrete claim tied to a paper_id or explicitly mark it as "
-        "a gap. The final answer must be the report itself; keep the whole "
-        "report under 900 words. "
+        f"{_final_report_guidance(route)} "
         "Do not include process narration such as 'I have inspected...', 'Now I "
         "will...', or 'Let me compile...'."
+    )
+
+
+def _final_report_guidance(route: ChatRoute) -> str:
+    evidence_rule = (
+        "Prefer inspect_paper evidence_summary and suggested_citations for "
+        "final-report claims. In Evidence, each bullet must include at least "
+        "one bracket reference in exact format `[paper_id:field]`, for example "
+        "`[abc123:contributions[0].claim]`; use field names from "
+        "suggested_citations or compare_papers output. Keep every concrete "
+        "claim tied to a paper_id or explicitly mark it as a gap."
+    )
+    if route.output_profile == "idea_composer":
+        return (
+            "Task profile: idea_composer. When you have enough information, "
+            "stop calling tools and write a concise Markdown proposal with "
+            "these sections: Problem, Prior Evidence, Gap, Idea, Why It Might "
+            "Work, Experiment Plan, Risks, Evidence. Produce one focused, "
+            "actionable research idea rather than a survey. Prior Evidence "
+            "should summarize what the local papers already support; Gap "
+            "should name the missing capability or weak assumption; Experiment "
+            "Plan should include dataset/task, baseline, metric, and ablation "
+            "when the evidence supports them. "
+            f"{evidence_rule} The final answer must be the proposal itself; "
+            "keep the whole report under 900 words."
+        )
+
+    return (
+        "When you have enough information, stop calling tools and write a "
+        "concise Markdown report with these sections: Findings, Evidence, "
+        "Gaps, Next Steps. For concrete Findings claims, either include "
+        "bracket references inline or mirror the claim in Evidence with "
+        f"bracket references. {evidence_rule} The final answer must be the "
+        "report itself; keep the whole report under 900 words."
     )
 
 

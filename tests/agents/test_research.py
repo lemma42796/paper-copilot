@@ -398,6 +398,11 @@ def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
     assert any(isinstance(e, ToolResult) and e.is_error is False for e in entries)
     final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
     assert final.payload["topic"] == "sparse attention"
+    assert final.payload["request_route"] == {
+        "kind": "research",
+        "output_profile": "research_report",
+        "reason": "default_research_route",
+    }
     assert final.payload["termination_reason"] == "end_turn"
     assert final.payload["evidence_refs"] == []
     assert final.payload["quality"] == {
@@ -412,11 +417,61 @@ def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
     assert final.payload["termination_summary"]["paper_budget"]["touched_count"] == 1
     initial = next(e for e in entries if isinstance(e, Message) and e.role == "user")
     assert "The final answer must be the report itself" in initial.text
+    assert "Request route: research" in initial.text
     assert "Tool inputs must match the JSON schema exactly" in initial.text
     assert "you may still inspect_paper the same paper_id afterward" in initial.text
     assert "suggested_citations" in initial.text
     assert "do not stop after one inspected paper" in initial.text
     assert "mirror the claim in Evidence" in initial.text
+
+
+def test_run_research_routes_idea_composer_prompt(tmp_path: Path) -> None:
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        fs.upsert("paperA", _payload(), datetime.now(UTC).isoformat())
+        context = ResearchToolContext(fields_store=fs)
+        llm = MockLLM(
+            [
+                MockResponse(
+                    content=[
+                        TextBlock(
+                            text=(
+                                "## Idea\n\n"
+                                "Use diffusion priors for robust segmentation.\n\n"
+                                "## Evidence\n\n"
+                                "- Paper A supports sparse attention [paperA:methods[0]]."
+                            )
+                        )
+                    ],
+                    stop_reason="end_turn",
+                    usage={"input_tokens": 10, "output_tokens": 4},
+                ),
+            ]
+        )
+
+        run = asyncio.run(
+            run_research(
+                topic="基于 diffusion model 和医学图像分割，帮我找一个可做的创新点",
+                llm=llm,
+                context=context,
+                root=tmp_path,
+                max_turns=2,
+                max_budget_cny=1.0,
+            )
+        )
+
+    paper_id = run.session_path.parent.name
+    entries = SessionStore.load(paper_id, root=tmp_path).read_all()
+    initial = next(e for e in entries if isinstance(e, Message) and e.role == "user")
+    final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
+
+    assert "Task profile: idea_composer" in initial.text
+    assert "Problem, Prior Evidence, Gap, Idea" in initial.text
+    assert final.payload["request_route"] == {
+        "kind": "idea_composer",
+        "output_profile": "idea_composer",
+        "reason": "matched_idea_composer_keyword",
+    }
+    assert final.payload["quality"]["findings_claim_count"] == 1
 
 
 def test_run_research_prefers_inspect_after_read_paper(tmp_path: Path) -> None:
