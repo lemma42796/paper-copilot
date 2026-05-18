@@ -10,3 +10,4 @@ def test_research_command_registered() -> None:
     result = CliRunner().invoke(app, ["research", "--help"])
     assert result.exit_code == 0
     assert "Research question or topic" in result.output
+    assert "default: 16" in result.output

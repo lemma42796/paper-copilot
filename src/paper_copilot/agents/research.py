@@ -12,7 +12,15 @@ from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from paper_copilot.agents.llm_client import DEFAULT_MODEL
 from paper_copilot.agents.loop import (
@@ -95,8 +103,11 @@ class ResearchTerminationSummary:
 class _ListPapersInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    year: int | None = Field(default=None, description="Optional exact publication year filter.")
-    limit: int = Field(default=8, ge=1, le=_MAX_LIST_LIMIT)
+    year: StrictInt | None = Field(
+        default=None,
+        description="Optional exact publication year filter.",
+    )
+    limit: StrictInt = Field(default=8, ge=1, le=_MAX_LIST_LIMIT)
 
 
 class _ListPdfsInput(BaseModel):
@@ -106,15 +117,15 @@ class _ListPdfsInput(BaseModel):
         default=None,
         description="Optional case-insensitive substring filter on the PDF filename.",
     )
-    limit: int = Field(default=8, ge=1, le=_MAX_LIST_LIMIT)
+    limit: StrictInt = Field(default=8, ge=1, le=_MAX_LIST_LIMIT)
 
 
 class _SearchLibraryInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str = Field(min_length=1)
-    k: int = Field(default=5, ge=1, le=_MAX_SEARCH_K)
-    year: int | None = None
+    k: StrictInt = Field(default=5, ge=1, le=_MAX_SEARCH_K)
+    year: StrictInt | None = None
     field: str | None = None
     contains: str | None = None
 
@@ -134,7 +145,7 @@ class _InspectPaperInput(BaseModel):
     fields: list[str] = Field(
         default_factory=lambda: ["meta", "contributions", "methods", "experiments", "limitations"]
     )
-    max_items: int = Field(default=5, ge=1, le=_MAX_INSPECT_ITEMS)
+    max_items: StrictInt = Field(default=5, ge=1, le=_MAX_INSPECT_ITEMS)
 
     @field_validator("fields")
     @classmethod
@@ -171,7 +182,7 @@ class _FindRelatedPapersInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     paper_id: str = Field(min_length=1)
-    k: int = Field(default=5, ge=1, le=_MAX_RELATED_K)
+    k: StrictInt = Field(default=5, ge=1, le=_MAX_RELATED_K)
 
 
 class _ReadPaperInput(BaseModel):
@@ -193,7 +204,7 @@ async def run_research(
     llm: LLMClientProtocol,
     context: ResearchToolContext,
     root: Path | None = None,
-    max_turns: int = 12,
+    max_turns: int = 16,
     max_budget_cny: float = 2.0,
 ) -> ResearchRun:
     session_id = _research_session_id(topic)
@@ -267,7 +278,9 @@ def research_tools() -> list[dict[str, Any]]:
             "list_papers",
             (
                 "List papers already indexed in the local library. Use before "
-                "searching when you need to know what is available."
+                "searching when you need to know what is available. Prefer one "
+                "broad call, then inspect returned paper_ids instead of repeating "
+                "many year-filtered calls. `year` must be an integer, not a string."
             ),
             _ListPapersInput,
         ),
@@ -293,7 +306,8 @@ def research_tools() -> list[dict[str, Any]]:
             (
                 "Search the existing local paper library for papers/chunks related "
                 "to a query. Returns paper ids, titles, pages, sections, snippets, "
-                "and vector distance."
+                "and vector distance. Use this when list_papers does not surface "
+                "enough candidate papers."
             ),
             _SearchLibraryInput,
         ),
@@ -301,7 +315,9 @@ def research_tools() -> list[dict[str, Any]]:
             "inspect_paper",
             (
                 "Inspect structured fields for one indexed paper. Use paper_id "
-                "values returned by list_papers or search_library."
+                "values returned by list_papers or search_library. Valid fields "
+                "are meta, contributions, methods, experiments, limitations, and "
+                "cross_paper_links; omit fields to request the default useful set."
             ),
             _InspectPaperInput,
         ),
@@ -310,7 +326,9 @@ def research_tools() -> list[dict[str, Any]]:
             (
                 "Compare two indexed papers using structured fields. Use this "
                 "after identifying two relevant paper_ids to align methods, "
-                "experiments, contributions, limitations, and cross-paper links."
+                "experiments, contributions, limitations, and cross-paper links. "
+                "Use it for direct A/B comparison tasks; avoid spending turns on "
+                "every pair in broad timeline tasks unless the comparison is needed."
             ),
             _ComparePapersInput,
         ),
@@ -320,7 +338,8 @@ def research_tools() -> list[dict[str, Any]]:
                 "Find papers already linked to an indexed paper by RelatedAgent. "
                 "Reads the local cross-paper link graph and fields index without "
                 "calling an LLM. Use this to expand from one relevant paper to "
-                "nearby candidates before inspecting or comparing them."
+                "nearby candidates before inspecting or comparing them; do not use "
+                "it when the user already named a fixed paper set."
             ),
             _FindRelatedPapersInput,
         ),
@@ -763,10 +782,18 @@ def _build_initial_user_text(topic: str, context: ResearchToolContext) -> str:
         f"Paper touch limit: at most {context.max_papers} unique paper_ids may be "
         "inspected or compared in this run. Reusing the same paper_id is allowed; "
         "new paper_ids beyond the limit will return a tool error.\n\n"
+        "Tool-use guidance: call list_papers once at the start unless you need a "
+        "specific filter, then inspect or compare the selected paper_ids. Use "
+        "compare_papers for direct pairwise comparison tasks. Use "
+        "find_related_papers only when you need to expand from an already relevant "
+        "paper to nearby candidates. Tool inputs must match the JSON schema exactly; "
+        "numbers such as year, k, limit, and max_items must be JSON numbers.\n\n"
         "When you have enough information, stop calling tools and write a "
         "concise Markdown report with these sections: Findings, Evidence, "
         "Gaps, Next Steps. Keep every concrete claim tied to a paper_id or "
-        "explicitly mark it as a gap."
+        "explicitly mark it as a gap. The final answer must be the report itself; "
+        "do not include process narration such as 'I have inspected...', 'Now I "
+        "will...', or 'Let me compile...'."
     )
 
 

@@ -19,7 +19,7 @@ from paper_copilot.knowledge.embeddings_store import ChunkRow, EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.knowledge.graph_store import append_links
 from paper_copilot.schemas import CrossPaperLink
-from paper_copilot.session import FinalOutput, SessionStore, ToolResult, ToolUse
+from paper_copilot.session import FinalOutput, Message, SessionStore, ToolResult, ToolUse
 
 DIM = 4
 
@@ -118,6 +118,18 @@ def test_dispatch_research_tools_list_search_and_inspect(tmp_path: Path) -> None
         data = json.loads(inspected.output)
         assert data["meta"]["title"] == "Paper A"
         assert data["methods"][0]["name"] == "Sparse Attention"
+
+
+def test_dispatch_rejects_string_numeric_inputs(tmp_path: Path) -> None:
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        context = ResearchToolContext(fields_store=fs)
+        result = dispatch_research_tool(
+            ToolUseRequest(id="t1", name="list_papers", input={"year": "2017"}),
+            context,
+        )
+
+    assert result.is_error is True
+    assert "valid integer" in json.loads(result.output)["error"]
 
 
 def test_dispatch_compare_papers_returns_structured_alignment(tmp_path: Path) -> None:
@@ -370,6 +382,9 @@ def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
     assert final.payload["termination_reason"] == "end_turn"
     assert final.payload["termination_summary"]["reason"] == "end_turn"
     assert final.payload["termination_summary"]["paper_budget"]["touched_count"] == 1
+    initial = next(e for e in entries if isinstance(e, Message) and e.role == "user")
+    assert "The final answer must be the report itself" in initial.text
+    assert "Tool inputs must match the JSON schema exactly" in initial.text
 
 
 def test_run_research_summary_records_last_tool_error(tmp_path: Path) -> None:

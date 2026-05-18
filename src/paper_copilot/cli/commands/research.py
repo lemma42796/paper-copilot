@@ -30,7 +30,7 @@ def research(
     max_turns: Annotated[
         int,
         typer.Option("--max-turns", help="Maximum planner/tool loop turns."),
-    ] = 12,
+    ] = 16,
     budget_cny: Annotated[
         float,
         typer.Option("--budget-cny", help="Maximum LLM spend for the planner loop."),

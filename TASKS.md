@@ -83,11 +83,16 @@
   find_related。发现的问题:5 篇任务 8 turns 偏紧;planner 会输出过程性话术;
   `list_papers.year` 传过字符串但 Pydantic 容忍转换。session:
   `/Users/a123/.paper-copilot/papers/research-20260518T091657508790Z-495725e7/session.jsonl`。
+- **M17 planner/schema 收敛 1**(2026-05-18):针对 3 次人工试跑的低风险修正
+  已完成:默认 `research --max-turns` 从 12 提到 16;`year/limit/k/max_items`
+  改成 strict int,避免 `"2017"` 这类字符串静默通过;planner prompt 明确最终
+  输出不能带过程性话术,并补充少重复 list、何时用 compare/find_related 的工具
+  选择规则。已跑相关 `ruff` / `mypy` / `tests/agents/test_research.py` +
+  `tests/test_smoke.py`,未跑全量 pytest,也未再做 LLM 实跑。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
   M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐;候选下一步:
-  收敛 planner prompt/tool schema(去过程性话术、降低无谓 list、明确何时用
-  compare/find_related、必要时严格化 tool input),或把 `read_paper` 占位升级
-  成受控自动 read。不要自动开工,等明确指令。
+  对 planner/schema 收敛做一次 LLM 快速复跑,或把 `read_paper` 占位升级成
+  受控自动 read。不要自动开工,等明确指令。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
