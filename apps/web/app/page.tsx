@@ -47,6 +47,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ChatResponse | null>(null);
   const [history, setHistory] = useState<RunHistoryItem[]>([]);
+  const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const normalizedApiUrl = useMemo(() => apiUrl.replace(/\/+$/, ""), [apiUrl]);
 
@@ -121,36 +122,51 @@ export default function Home() {
   }
 
   return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark">PC</span>
-          <div>
-            <p className="brand-title">Paper Copilot</p>
-            <p className="brand-subtitle">本地研究助手</p>
+    <main className={`app-shell${isSidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+      <aside className="sidebar" aria-label="报告侧边栏">
+        <div className="sidebar-header">
+          <div className="brand">
+            <span className="brand-mark">PC</span>
+            {!isSidebarCollapsed ? (
+              <div>
+                <p className="brand-title">Paper Copilot</p>
+                <p className="brand-subtitle">本地研究助手</p>
+              </div>
+            ) : null}
           </div>
+          <button
+            aria-label={isSidebarCollapsed ? "展开侧边栏" : "折叠侧边栏"}
+            className="sidebar-toggle"
+            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+            title={isSidebarCollapsed ? "展开侧边栏" : "折叠侧边栏"}
+            type="button"
+          >
+            <span aria-hidden="true">{isSidebarCollapsed ? "›" : "‹"}</span>
+          </button>
         </div>
 
-        <nav className="history-list" aria-label="报告列表">
-          <p className="nav-label">报告</p>
-          {history.length === 0 ? (
-            <p className="empty-history">暂无本地运行记录。</p>
-          ) : (
-            history.map((item) => (
-              <button
-                className="history-item"
-                key={item.id}
-                onClick={() => setMessage(item.request)}
-                type="button"
-              >
-                <span>{item.request}</span>
-                <small>
-                  {formatRoute(item.route)} · ¥{item.cost.toFixed(4)}
-                </small>
-              </button>
-            ))
-          )}
-        </nav>
+        {!isSidebarCollapsed ? (
+          <nav className="history-list" aria-label="报告列表">
+            <p className="nav-label">报告</p>
+            {history.length === 0 ? (
+              <p className="empty-history">暂无本地运行记录。</p>
+            ) : (
+              history.map((item) => (
+                <button
+                  className="history-item"
+                  key={item.id}
+                  onClick={() => setMessage(item.request)}
+                  type="button"
+                >
+                  <span>{item.request}</span>
+                  <small>
+                    {formatRoute(item.route)} · ¥{item.cost.toFixed(4)}
+                  </small>
+                </button>
+              ))
+            )}
+          </nav>
+        ) : null}
       </aside>
 
       <section className="workspace">
