@@ -24,6 +24,7 @@
 ```
 src/paper_copilot/
 ├── cli/          # 命令行入口（Typer）
+├── chat/         # 单输入框路由与运行时入口
 ├── agents/       # Agent loop + subagents
 ├── schemas/      # Pydantic 模型，结构化输出契约
 ├── session/      # JSONL session tree 读写
@@ -39,6 +40,13 @@ src/paper_copilot/
 用户面。接收命令（`read` / `compare` / `search` / `reindex` / `eval run` /
 `doctor`），把参数组装成 agents 的输入，流式打印结果。不含业务逻辑，
 不直接读写 session 文件。
+
+### `chat/`
+Chat-first 产品入口层。接收裸自然语言请求，做轻量 intent routing
+（如 research vs idea_composer），组装 knowledge stores / agent context，
+调用 agents 的公开 run 入口，并返回前端可直接消费的 `ChatRunResult`
+（route、report、session path、quality/report 路径、cost、paper budget）。
+CLI 只是它的临时外壳；后续前端单输入框也复用这一层。
 
 ### `agents/`
 项目的核心。包含：

@@ -183,6 +183,14 @@
   Experiment Plan / Risks / Evidence。`final_output.request_route` 会落盘,
   quality 统计也能从 Composer 的 `Idea` section 抽 claim。按用户要求未运行
   任何验证命令。
+- **Chat-first runtime API v1**(2026-05-18):新增
+  `paper_copilot.chat.runtime.handle_chat_request()` 作为前端单输入框可复用
+  的后端入口。输入裸自然语言,内部完成 route、ResearchAgent run、
+  `research-report.md` 落盘、quality run 记录、`eval/report.html` 刷新,
+  返回 `ChatRunResult`:`route` / `report_markdown` / `session_path` /
+  `report_path` / `quality_run_path` / `eval_report_path` / cost / paper budget。
+  `paper-copilot research` 现在只是薄 CLI 壳负责参数校验和打印。按用户要求
+  未运行任何验证命令。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
   M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐,planner/schema
   收敛也已快速复跑,`read_paper` 自动读已接入且已有一次最快速验收。
