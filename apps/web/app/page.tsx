@@ -76,6 +76,7 @@ export default function Home() {
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
 
   const normalizedApiUrl = useMemo(() => apiUrl.replace(/\/+$/, ""), [apiUrl]);
+  const canSubmit = health === "online" && !isRunning;
 
   async function checkHealth() {
     setHealth("checking");
@@ -118,6 +119,10 @@ export default function Home() {
     event.preventDefault();
     if (message.trim().length === 0) {
       setError("请输入研究问题。");
+      return;
+    }
+    if (health !== "online") {
+      setError("本地 API 未连接，请先启动 paper-copilot serve。");
       return;
     }
 
@@ -221,7 +226,8 @@ export default function Home() {
                 >
                   <span>{item.request}</span>
                   <small>
-                    {formatRoute(item.route)} · {formatCost(item.cost)}
+                    {formatRoute(item.route)} · {formatCost(item.cost)} ·{" "}
+                    {formatHistoryTime(item.updatedAt)}
                   </small>
                 </button>
               ))
@@ -283,17 +289,22 @@ export default function Home() {
                     value={maxTurns}
                   />
                 </div>
-                <button className="primary-button" disabled={isRunning} type="submit">
+                <button className="primary-button" disabled={!canSubmit} type="submit">
                   {isRunning ? "运行中" : "开始"}
                 </button>
               </div>
+              {health === "offline" ? (
+                <p className="inline-hint">本地 API 未连接，请先启动 paper-copilot serve。</p>
+              ) : null}
             </form>
 
             {error ? <p className="error-strip">{error}</p> : null}
 
             <article className="report-pane">
               {copyNotice ? <p className="copy-toast">{copyNotice}</p> : null}
-              {result ? (
+              {isRunning ? (
+                <LoadingReport />
+              ) : result ? (
                 <>
                   <ReportToolbar
                     onCopy={copyWithNotice}
@@ -345,6 +356,16 @@ export default function Home() {
         </div>
       </section>
     </main>
+  );
+}
+
+function LoadingReport() {
+  return (
+    <div className="loading-report">
+      <div className="loading-spinner" aria-hidden="true" />
+      <h2>正在生成报告</h2>
+      <p>请稍等，本地后端正在处理这次研究任务。</p>
+    </div>
   );
 }
 
@@ -542,6 +563,19 @@ function formatPaperBudget(budget: Record<string, unknown>): string {
 
 function formatCost(cost: number | null): string {
   return cost === null ? "费用未知" : `¥${cost.toFixed(4)}`;
+}
+
+function formatHistoryTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "时间未知";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
 }
 
 function formatRoute(route: string): string {

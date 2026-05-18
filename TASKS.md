@@ -228,9 +228,13 @@
   空状态补“从左侧选择历史报告,或输入新任务”与刷新历史按钮;复制动作增加
   轻提示(已复制/刷新失败等)。已跑 `npm run typecheck` + `npm run build`;
   未跑真实 `/chat` / LLM。
-- **下一个编码建议**:继续前端无 LLM 收敛:做错误/空状态细化和历史列表质量,
-  如历史项时间/截断优化、报告区 loading 状态、API 离线时禁用开始按钮并给
-  清晰提示。真实低预算 `/chat` 联调仍然排在之后。
+- **前端状态收尾 v1**(2026-05-18):按用户“不要在前端浪费太多时间”要求,
+  做最小前端-only 收尾:历史报告标题两行截断并显示更新时间;API 离线时禁用
+  “开始”按钮并提示先启动 `paper-copilot serve`;提交运行时报告区显示
+  loading 状态。已跑 `npm run typecheck` + `npm run build`;未跑真实
+  `/chat` / LLM。
+- **下一个编码建议**:停止继续打磨前端细节。若时间允许,下一步要么做一次
+  真实低预算 `/chat` 联调,要么转入 M18 evidence-grounded RAG 设计/实现。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。

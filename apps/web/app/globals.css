@@ -202,9 +202,10 @@ button {
 
 .history-item span {
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: 13px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .history-item small {
@@ -269,6 +270,12 @@ button {
 .primary-button:disabled {
   cursor: default;
   opacity: 0.62;
+}
+
+.inline-hint {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
 }
 
 .secondary-button {
@@ -466,6 +473,40 @@ input {
 
 .empty-report .secondary-button {
   justify-self: center;
+}
+
+.loading-report {
+  display: grid;
+  gap: 10px;
+  place-items: center;
+  min-height: 360px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.loading-report h2,
+.loading-report p {
+  margin: 0;
+}
+
+.loading-report h2 {
+  color: var(--text);
+  font-size: 20px;
+}
+
+.loading-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid rgba(35, 105, 216, 0.16);
+  border-top-color: var(--accent);
+  border-radius: 999px;
+  animation: spin 850ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .inspector {
