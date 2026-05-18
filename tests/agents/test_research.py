@@ -139,6 +139,44 @@ def test_dispatch_compare_papers_returns_structured_alignment(tmp_path: Path) ->
     assert data["methods_aligned"][0]["key"] == "shared method"
     assert data["methods_aligned"][0]["a"]["name"] == "Shared Method"
     assert data["methods_aligned"][0]["b"]["name"] == "Shared Method"
+    assert data["paper_budget"]["touched_count"] == 2
+
+
+def test_dispatch_enforces_max_papers_across_inspect_and_compare(tmp_path: Path) -> None:
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        now = datetime.now(UTC).isoformat()
+        fs.upsert("paperA", _payload("Paper A"), now)
+        fs.upsert("paperB", _payload("Paper B"), now)
+        fs.upsert("paperC", _payload("Paper C"), now)
+        context = ResearchToolContext(fields_store=fs, max_papers=2)
+
+        first = dispatch_research_tool(
+            ToolUseRequest(id="t1", name="inspect_paper", input={"paper_id": "paperA"}),
+            context,
+        )
+        repeat = dispatch_research_tool(
+            ToolUseRequest(id="t2", name="inspect_paper", input={"paper_id": "paperA"}),
+            context,
+        )
+        second = dispatch_research_tool(
+            ToolUseRequest(
+                id="t3",
+                name="compare_papers",
+                input={"paper_id_a": "paperA", "paper_id_b": "paperB"},
+            ),
+            context,
+        )
+        over_limit = dispatch_research_tool(
+            ToolUseRequest(id="t4", name="inspect_paper", input={"paper_id": "paperC"}),
+            context,
+        )
+
+    assert first.is_error is False
+    assert repeat.is_error is False
+    assert second.is_error is False
+    assert over_limit.is_error is True
+    assert "max_papers exceeded" in json.loads(over_limit.output)["error"]
+    assert context.touched_paper_ids == {"paperA", "paperB"}
 
 
 def test_dispatch_list_pdfs_reports_candidate_ids(tmp_path: Path) -> None:

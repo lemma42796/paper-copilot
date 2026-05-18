@@ -6,6 +6,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -62,6 +63,8 @@ class ResearchToolContext:
     embeddings_store: EmbeddingsStore | None = None
     encode_query: QueryEncoder | None = None
     pdf_dir: Path | None = None
+    max_papers: int = 5
+    touched_paper_ids: set[str] = dataclass_field(default_factory=set)
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +204,7 @@ async def run_research(
             "termination_reason": termination_reason,
             "report_markdown": report_markdown,
             "cost": asdict(cost.snapshot()),
+            "paper_budget": _paper_budget_payload(context),
         }
     )
     return ResearchRun(
@@ -337,7 +341,11 @@ def _inspect_paper(args: _InspectPaperInput, context: ResearchToolContext) -> di
     row = context.fields_store.get(args.paper_id)
     if row is None:
         raise KnowledgeError(f"paper_id not found: {args.paper_id}")
-    payload: dict[str, Any] = {"paper_id": row.paper_id}
+    _reserve_papers(context, [row.paper_id])
+    payload: dict[str, Any] = {
+        "paper_id": row.paper_id,
+        "paper_budget": _paper_budget_payload(context),
+    }
     for field in args.fields:
         value = row.data.get(field)
         if isinstance(value, list):
@@ -358,7 +366,34 @@ def _compare_papers(args: _ComparePapersInput, context: ResearchToolContext) -> 
     if missing:
         raise KnowledgeError(f"paper_id not found: {', '.join(missing)}")
     assert row_a is not None and row_b is not None
-    return build_compare_payload(row_a, row_b)
+    _reserve_papers(context, [row_a.paper_id, row_b.paper_id])
+    payload = build_compare_payload(row_a, row_b)
+    payload["paper_budget"] = _paper_budget_payload(context)
+    return payload
+
+
+def _reserve_papers(context: ResearchToolContext, paper_ids: list[str]) -> None:
+    if context.max_papers <= 0:
+        raise KnowledgeError("max_papers must be positive")
+    proposed = set(context.touched_paper_ids)
+    proposed.update(paper_ids)
+    if len(proposed) > context.max_papers:
+        requested = ", ".join(paper_ids)
+        touched = ", ".join(sorted(context.touched_paper_ids)) or "(none)"
+        raise KnowledgeError(
+            f"max_papers exceeded: requested {requested}; "
+            f"already touched {len(context.touched_paper_ids)}/{context.max_papers} "
+            f"papers: {touched}"
+        )
+    context.touched_paper_ids.update(paper_ids)
+
+
+def _paper_budget_payload(context: ResearchToolContext) -> dict[str, Any]:
+    return {
+        "max_papers": context.max_papers,
+        "touched_count": len(context.touched_paper_ids),
+        "touched_paper_ids": sorted(context.touched_paper_ids),
+    }
 
 
 def _tool_schema(name: str, description: str, model: type[BaseModel]) -> dict[str, Any]:
@@ -415,6 +450,9 @@ def _build_initial_user_text(topic: str, context: ResearchToolContext) -> str:
         "analyzed. If evidence is missing, say exactly what is missing.\n\n"
         f"Research topic: {topic}\n"
         f"PDF directory: {pdf_dir}\n\n"
+        f"Paper touch limit: at most {context.max_papers} unique paper_ids may be "
+        "inspected or compared in this run. Reusing the same paper_id is allowed; "
+        "new paper_ids beyond the limit will return a tool error.\n\n"
         "When you have enough information, stop calling tools and write a "
         "concise Markdown report with these sections: Findings, Evidence, "
         "Gaps, Next Steps. Keep every concrete claim tied to a paper_id or "

@@ -35,6 +35,10 @@ def research(
         float,
         typer.Option("--budget-cny", help="Maximum LLM spend for the planner loop."),
     ] = 2.0,
+    max_papers: Annotated[
+        int,
+        typer.Option("--max-papers", help="Maximum unique papers inspect/compare may touch."),
+    ] = 5,
     root: Annotated[
         Path | None,
         typer.Option("--root", help="Override PAPER_COPILOT_HOME root"),
@@ -45,9 +49,11 @@ def research(
         raise typer.BadParameter("--max-turns must be positive")
     if budget_cny <= 0:
         raise typer.BadParameter("--budget-cny must be positive")
+    if max_papers <= 0:
+        raise typer.BadParameter("--max-papers must be positive")
     if pdf_dir is not None and not pdf_dir.is_dir():
         raise typer.BadParameter(f"--pdf-dir is not a directory: {pdf_dir}")
-    asyncio.run(_research_async(topic, pdf_dir, max_turns, budget_cny, root))
+    asyncio.run(_research_async(topic, pdf_dir, max_turns, budget_cny, max_papers, root))
 
 
 async def _research_async(
@@ -55,6 +61,7 @@ async def _research_async(
     pdf_dir: Path | None,
     max_turns: int,
     budget_cny: float,
+    max_papers: int,
     root: Path | None,
 ) -> None:
     home = root if root is not None else default_root()
@@ -93,6 +100,7 @@ async def _research_async(
                 (lambda query: embedder.encode([query])[0]) if embedder is not None else None
             ),
             pdf_dir=pdf_dir,
+            max_papers=max_papers,
         )
         run = await run_research(
             topic=topic,
