@@ -278,6 +278,53 @@ def test_tool_use_round_trip_preserves_ids_and_error_flag() -> None:
     assert tool_result_err.is_error is True
     assert tool_result_err.output == "boom"
 
+
+def test_tool_use_history_is_serialized_for_next_llm_call() -> None:
+    class CapturingLLM:
+        def __init__(self) -> None:
+            self.calls: list[list[dict[str, object]]] = []
+
+        async def generate(
+            self,
+            messages: list[dict[str, object]],
+            tools: list[dict[str, object]],
+            tool_choice: dict[str, object] | None = None,
+            system: str | list[dict[str, object]] | None = None,
+            max_tokens: int | None = None,
+        ) -> MockResponse:
+            self.calls.append(messages)
+            if len(self.calls) == 1:
+                return MockResponse(
+                    content=[ToolUseBlock(id="t1", name="search", input={"q": "x"})],
+                    stop_reason="tool_use",
+                )
+            return MockResponse(content=[TextBlock(text="done")], stop_reason="end_turn")
+
+    llm = CapturingLLM()
+
+    async def dispatch_tool(req: ToolUseRequest) -> ToolResultData:
+        return ToolResultData(output="ok")
+
+    async def run() -> list[Event]:
+        collected: list[Event] = []
+        async for event in run_agent_loop(
+            messages=[{"role": "user", "content": "go"}],
+            tools=[],
+            config=LoopConfig(max_turns=3, max_budget_cny=10.0),
+            llm=llm,
+            dispatch_tool=dispatch_tool,
+        ):
+            collected.append(event)
+        return collected
+
+    events = asyncio.run(run())
+
+    assistant_turn = llm.calls[1][1]
+    assert assistant_turn["role"] == "assistant"
+    assert assistant_turn["content"] == [
+        {"type": "tool_use", "id": "t1", "name": "search", "input": {"q": "x"}}
+    ]
+
     term = events[-1]
     assert isinstance(term, Terminated)
     assert term.reason == "end_turn"

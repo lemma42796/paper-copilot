@@ -73,6 +73,9 @@ class LLMClientProtocol(Protocol):
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | None = None,
+        system: str | list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse: ...
 
 
@@ -151,6 +154,9 @@ async def run_agent_loop(
     dispatch_tool: Callable[[ToolUseRequest], Awaitable[ToolResultData]],
     cost: CostTracker | None = None,
     store: SessionStore | None = None,
+    agent_name: str = "AgentLoop",
+    model: str | None = None,
+    system: str | list[dict[str, Any]] | None = None,
 ) -> AsyncIterator[Event]:
     """Drive an LLM with tools until it stops or a limit fires.
 
@@ -179,18 +185,29 @@ async def run_agent_loop(
                 yield Terminated(reason="max_budget", cost=cost.snapshot())
                 return
 
-            response = await llm.generate(history, tools)
+            response = await llm.generate(history, tools, system=system)
             if cost is not None and response.usage is not None:
                 cost.record(response.usage)
 
             if store is not None:
+                if model is not None:
+                    usage: UsageLike = response.usage if response.usage is not None else {}
+                    store.append_llm_call(
+                        agent=agent_name,
+                        model=model,
+                        usage=usage,
+                        latency_ms=response.latency_ms,
+                        stop_reason=response.stop_reason,
+                    )
                 for block in response.content:
                     if isinstance(block, TextBlock):
                         store.append_message(role="assistant", text=block.text)
                     elif isinstance(block, ToolUseBlock):
                         store.append_tool_use(block.id, block.name, block.input)
             yield AssistantMessage(content=response.content)
-            history.append({"role": "assistant", "content": response.content})
+            history.append(
+                {"role": "assistant", "content": _content_blocks_to_wire(response.content)}
+            )
             turns += 1
 
             if response.stop_reason == "end_turn":
@@ -225,3 +242,20 @@ async def run_agent_loop(
 
 def _cost_snapshot(cost: CostTracker | None) -> CostSnapshot | None:
     return cost.snapshot() if cost is not None else None
+
+
+def _content_blocks_to_wire(blocks: list[ContentBlock]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for block in blocks:
+        if isinstance(block, TextBlock):
+            out.append({"type": "text", "text": block.text})
+        elif isinstance(block, ToolUseBlock):
+            out.append(
+                {
+                    "type": "tool_use",
+                    "id": block.id,
+                    "name": block.name,
+                    "input": block.input,
+                }
+            )
+    return out

@@ -49,7 +49,12 @@
   Related 的结构化 tool 输出校验失败会自动 retry 一次,失败 trace 写入
   session。
 - **下一个编码 milestone**:等待明确指令。可选择继续补 M16 剩余质量指标/
-  evidence,或进入 M17 chat-first tool harness。不要自动开工。
+  evidence,或继续加深 M17 chat-first tool harness。不要自动开工。
+- **M17-min 进展**(2026-05-18):新增 `paper-copilot research "<topic>"`
+  的最小 bounded tool loop 骨架。当前只包装本地库工具:`list_papers` /
+  `list_pdfs` / `search_library` / `inspect_paper`,带 max_turns / budget /
+  session trace / research-report.md。它不会自动读新论文、不会联网找论文、
+  不做 RAG 升级;完整 M17 DoD 仍未满足。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
@@ -849,7 +854,7 @@ schema_validation error,CLI 最终错误包含 agent / tool / field loc。
 
 ---
 
-### M17: Autonomous Research Loop（候选，未开始）
+### M17: Autonomous Research Loop（候选，M17-min 已开始）
 
 **目标**：把 paper-copilot 从"读一篇论文的固定流水线"升级成"能完成一个
 研究任务的论文研究助理"。用户给研究目标,系统自动分解任务、调用工具 /
@@ -926,6 +931,8 @@ paper-copilot research "compare attention mechanisms for vision-language models"
 **DoD**：
 
 - [ ] `paper-copilot research "<topic>" --pdf-dir <dir>` 能端到端跑通
+      (M17-min 已有 CLI + bounded loop + 本地库工具骨架;尚未做人类验收
+      和自动 read_paper)
 - [ ] 至少 3 个固定研究任务有人工验收记录
 - [ ] session trace 能还原每一步工具调用和决策
 - [ ] max_turns / max_budget / max_papers 都能触发并给出清晰终止原因
