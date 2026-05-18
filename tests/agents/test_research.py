@@ -126,6 +126,8 @@ def test_dispatch_research_tools_list_search_and_inspect(tmp_path: Path) -> None
         assert data["suggested_citations"][0]["field"] == "meta.title"
         assert data["suggested_citations"][1]["paper_id"] == "paperA"
         assert data["suggested_citations"][2]["field"] == "methods[0]"
+        assert data["recommended_followups"][0]["name"] == "find_related_papers"
+        assert data["recommended_followups"][1]["name"] == "search_library"
 
 
 def test_dispatch_rejects_string_numeric_inputs(tmp_path: Path) -> None:
@@ -404,6 +406,7 @@ def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
     assert "Tool inputs must match the JSON schema exactly" in initial.text
     assert "you may still inspect_paper the same paper_id afterward" in initial.text
     assert "suggested_citations" in initial.text
+    assert "do not stop after one inspected paper" in initial.text
 
 
 def test_run_research_prefers_inspect_after_read_paper(tmp_path: Path) -> None:
@@ -478,6 +481,136 @@ def test_run_research_prefers_inspect_after_read_paper(tmp_path: Path) -> None:
     tool_results = [e for e in entries if isinstance(e, ToolResult)]
     assert '"can_inspect_same_paper": true' in tool_results[0].output
     assert "Sparse Attention" in tool_results[1].output
+
+
+def test_run_research_synthesis_path_uses_related_and_compare(tmp_path: Path) -> None:
+    link_to_b = {
+        "related_paper_id": "paperB",
+        "related_title": "Paper B",
+        "relation_type": "shares_method",
+        "explanation": "both use sparse attention variants",
+    }
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        fs.upsert(
+            "paperA",
+            _payload(
+                "Paper A",
+                method_name="Sparse Attention",
+                cross_paper_links=[link_to_b],
+            ),
+            datetime.now(UTC).isoformat(),
+        )
+        fs.upsert(
+            "paperB",
+            _payload("Paper B", method_name="Windowed Sparse Attention"),
+            datetime.now(UTC).isoformat(),
+        )
+        pdir = tmp_path / "papers" / "paperA"
+        pdir.mkdir(parents=True)
+        (pdir / "session.jsonl").write_text("", encoding="utf-8")
+        (pdir / "report.md").write_text("# Paper A", encoding="utf-8")
+        context = ResearchToolContext(fields_store=fs, root=tmp_path, max_papers=2)
+        llm = MockLLM(
+            [
+                MockResponse(
+                    content=[
+                        ToolUseBlock(
+                            id="read1",
+                            name="read_paper",
+                            input={"paper_id": "paperA"},
+                        )
+                    ],
+                    stop_reason="tool_use",
+                    usage={"input_tokens": 10, "output_tokens": 4},
+                ),
+                MockResponse(
+                    content=[
+                        ToolUseBlock(
+                            id="inspect-a",
+                            name="inspect_paper",
+                            input={"paper_id": "paperA"},
+                        )
+                    ],
+                    stop_reason="tool_use",
+                    usage={"input_tokens": 12, "output_tokens": 4},
+                ),
+                MockResponse(
+                    content=[
+                        ToolUseBlock(
+                            id="related1",
+                            name="find_related_papers",
+                            input={"paper_id": "paperA", "k": 1},
+                        )
+                    ],
+                    stop_reason="tool_use",
+                    usage={"input_tokens": 14, "output_tokens": 5},
+                ),
+                MockResponse(
+                    content=[
+                        ToolUseBlock(
+                            id="inspect-b",
+                            name="inspect_paper",
+                            input={"paper_id": "paperB"},
+                        )
+                    ],
+                    stop_reason="tool_use",
+                    usage={"input_tokens": 16, "output_tokens": 5},
+                ),
+                MockResponse(
+                    content=[
+                        ToolUseBlock(
+                            id="compare1",
+                            name="compare_papers",
+                            input={"paper_id_a": "paperA", "paper_id_b": "paperB"},
+                        )
+                    ],
+                    stop_reason="tool_use",
+                    usage={"input_tokens": 18, "output_tokens": 6},
+                ),
+                MockResponse(
+                    content=[
+                        TextBlock(
+                            text=(
+                                "## Findings\n\n"
+                                "`paperA` and `paperB` share sparse-attention evidence."
+                            )
+                        )
+                    ],
+                    stop_reason="end_turn",
+                    usage={"input_tokens": 20, "output_tokens": 8},
+                ),
+            ]
+        )
+
+        run = asyncio.run(
+            run_research(
+                topic="synthesize related sparse attention papers",
+                llm=llm,
+                context=context,
+                root=tmp_path,
+                max_turns=8,
+                max_budget_cny=1.0,
+            )
+        )
+
+    assert run.termination_reason == "end_turn"
+    assert run.termination_summary.paper_budget["touched_paper_ids"] == [
+        "paperA",
+        "paperB",
+    ]
+    paper_id = run.session_path.parent.name
+    entries = SessionStore.load(paper_id, root=tmp_path).read_all()
+    tool_names = [e.name for e in entries if isinstance(e, ToolUse)]
+    assert tool_names == [
+        "read_paper",
+        "inspect_paper",
+        "find_related_papers",
+        "inspect_paper",
+        "compare_papers",
+    ]
+    tool_results = [e for e in entries if isinstance(e, ToolResult)]
+    assert "recommended_followups" in tool_results[1].output
+    assert "methods_aligned" in tool_results[-1].output
 
 
 def test_run_research_summary_records_last_tool_error(tmp_path: Path) -> None:

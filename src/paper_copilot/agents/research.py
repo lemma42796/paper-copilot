@@ -345,7 +345,8 @@ def research_tools() -> list[dict[str, Any]]:
                 "are meta, contributions, methods, experiments, limitations, and "
                 "cross_paper_links; omit fields to request the default useful set. "
                 "The response also includes evidence_summary and suggested_citations "
-                "for concise final-report grounding."
+                "for concise final-report grounding, plus recommended_followups "
+                "for synthesis-oriented next steps."
             ),
             _InspectPaperInput,
         ),
@@ -693,7 +694,62 @@ def _inspect_paper(args: _InspectPaperInput, context: ResearchToolContext) -> di
             payload[field] = value
     payload["evidence_summary"] = _evidence_summary(row, max_items=args.max_items)
     payload["suggested_citations"] = _suggested_citations(row, max_items=args.max_items)
+    payload["recommended_followups"] = _recommended_followups(row, context)
     return payload
+
+
+def _recommended_followups(row: PaperRow, context: ResearchToolContext) -> list[dict[str, Any]]:
+    followups: list[dict[str, Any]] = []
+    if len(context.touched_paper_ids) < context.max_papers:
+        followups.append(
+            {
+                "name": "find_related_papers",
+                "input": {"paper_id": row.paper_id, "k": 3},
+                "when": (
+                    "Use when the task needs synthesis, comparison, or nearby "
+                    "papers beyond this one."
+                ),
+            }
+        )
+        query = _followup_query(row)
+        if query:
+            followups.append(
+                {
+                    "name": "search_library",
+                    "input": {"query": query, "k": 3},
+                    "when": (
+                        "Use when existing links are sparse or you need another "
+                        "candidate from the indexed library."
+                    ),
+                }
+            )
+    if len(context.touched_paper_ids) >= 2:
+        other_ids = sorted(pid for pid in context.touched_paper_ids if pid != row.paper_id)
+        if other_ids:
+            followups.append(
+                {
+                    "name": "compare_papers",
+                    "input": {"paper_id_a": row.paper_id, "paper_id_b": other_ids[0]},
+                    "when": "Use before final synthesis when two relevant papers are touched.",
+                }
+            )
+    return followups
+
+
+def _followup_query(row: PaperRow) -> str:
+    parts: list[str] = []
+    title = _row_title(row)
+    if title:
+        parts.append(title)
+    for item in _dict_items(row.data.get("contributions"), 2):
+        text = _text_value(item.get("claim"))
+        if text:
+            parts.append(text)
+    for item in _dict_items(row.data.get("methods"), 2):
+        name = _text_value(item.get("name"))
+        if name:
+            parts.append(name)
+    return _truncate(". ".join(parts), 360)
 
 
 def _evidence_summary(row: PaperRow, *, max_items: int) -> dict[str, Any]:
@@ -1143,9 +1199,13 @@ def _build_initial_user_text(topic: str, context: ResearchToolContext) -> str:
         "same paper_id before writing the final report so the report can cite "
         "meta, contributions, methods, or experiments. For normal research tasks, "
         "a successful read_paper status of read or already_read should be followed "
-        "by inspect_paper on that same paper_id. Use compare_papers "
-        "for direct pairwise comparison tasks. Use find_related_papers only when "
-        "you need to expand from an already relevant paper to nearby candidates. "
+        "by inspect_paper on that same paper_id. For synthesis or comparison tasks, "
+        "do not stop after one inspected paper when max_papers still allows more: "
+        "use inspect_paper recommended_followups, find_related_papers, or "
+        "search_library to bring in at least one indexed related paper, then "
+        "inspect or compare it before final. Use compare_papers for direct "
+        "pairwise comparison tasks. Use find_related_papers when you need to "
+        "expand from an already relevant paper to nearby candidates. "
         "Tool inputs must match the JSON schema exactly; "
         "numbers such as year, k, limit, and max_items must be JSON numbers.\n\n"
         "When you have enough information, stop calling tools and write a "

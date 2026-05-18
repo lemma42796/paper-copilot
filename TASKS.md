@@ -139,6 +139,14 @@
   top_limitations;citations 每条带 `paper_id` / `field` / `text`,方便 final
   report 稳定引用结构化证据。ResearchAgent 初始指令也改为优先使用这两层
   写 Findings/Evidence。按用户要求,本次不跑任何验证命令。
+- **M17 synthesis path 引导**(2026-05-18):`inspect_paper` 现在还返回
+  `recommended_followups`,当 `max_papers` 还有空间时建议
+  `find_related_papers` / `search_library`,当已触达两篇时建议
+  `compare_papers`。ResearchAgent 初始指令明确:综合/对比任务不要在只
+  inspect 一篇后直接 final,应扩展至少一篇库内相关论文并 inspect/compare
+  后再 synthesis。已补 mock trace 覆盖
+  `read_paper -> inspect_paper -> find_related_papers -> inspect_paper ->
+  compare_papers -> end_turn`;按用户要求未运行任何验证命令。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
   M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐,planner/schema
   收敛也已快速复跑,`read_paper` 自动读已接入且已有一次最快速验收。
