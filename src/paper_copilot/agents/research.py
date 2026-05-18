@@ -72,6 +72,7 @@ _REPORT_FALLBACK = (
 _EVIDENCE_REF_RE = re.compile(
     r"\[(?P<paper_id>[A-Za-z0-9_-]{3,64}):(?P<field>[A-Za-z_][A-Za-z0-9_.\[\]-]*)\]"
 )
+_CLAIM_BOUNDARY_RE = re.compile(r"(?<=[.!?。！？])\s+")
 
 
 type QueryEncoder = Callable[[str], np.ndarray]
@@ -278,6 +279,7 @@ async def run_research(
         context=context,
     )
     evidence_refs = _extract_evidence_refs(report_markdown)
+    quality = _quality_summary(report_markdown, evidence_refs)
 
     store.append_final_output(
         {
@@ -285,6 +287,7 @@ async def run_research(
             "termination_reason": termination_reason,
             "report_markdown": report_markdown,
             "evidence_refs": evidence_refs,
+            "quality": quality,
             "cost": asdict(cost.snapshot()),
             "paper_budget": _paper_budget_payload(context),
             "termination_summary": asdict(termination_summary),
@@ -1149,6 +1152,67 @@ def _extract_evidence_refs(report_markdown: str) -> list[dict[str, str]]:
     return refs
 
 
+def _quality_summary(
+    report_markdown: str,
+    evidence_refs: list[dict[str, str]],
+) -> dict[str, Any]:
+    findings_text = _markdown_section(report_markdown, "Findings")
+    findings_claims = _claim_units(findings_text)
+    findings_refs = _extract_evidence_refs(findings_text)
+    findings_claim_count = len(findings_claims)
+    evidence_ref_count = len(evidence_refs)
+    coverage_ratio = (
+        min(1.0, evidence_ref_count / findings_claim_count)
+        if findings_claim_count
+        else 0.0
+    )
+
+    return {
+        "method": "heuristic_v1",
+        "evidence_ref_count": evidence_ref_count,
+        "findings_claim_count": findings_claim_count,
+        "findings_inline_ref_count": len(findings_refs),
+        "claims_without_refs_count": max(0, findings_claim_count - evidence_ref_count),
+        "evidence_coverage_ratio": coverage_ratio,
+    }
+
+
+def _markdown_section(markdown: str, title: str) -> str:
+    heading = re.search(
+        rf"^##[ \t]+{re.escape(title)}[ \t]*$",
+        markdown,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+    if heading is None:
+        return ""
+
+    start = heading.end()
+    next_heading = re.search(r"^##[ \t]+", markdown[start:], flags=re.MULTILINE)
+    end = start + next_heading.start() if next_heading is not None else len(markdown)
+    return markdown[start:end].strip()
+
+
+def _claim_units(section_text: str) -> list[str]:
+    lines = [line.strip() for line in section_text.splitlines()]
+    bullets = [line for line in lines if re.match(r"^[-*]\s+\S", line)]
+    if bullets:
+        return bullets
+
+    paragraphs = [
+        paragraph.strip()
+        for paragraph in re.split(r"\n\s*\n", section_text)
+        if paragraph.strip()
+    ]
+    claims: list[str] = []
+    for paragraph in paragraphs:
+        claims.extend(
+            sentence.strip()
+            for sentence in _CLAIM_BOUNDARY_RE.split(paragraph)
+            if sentence.strip()
+        )
+    return claims
+
+
 def _tool_schema(name: str, description: str, model: type[BaseModel]) -> dict[str, Any]:
     return {
         "name": name,
@@ -1239,6 +1303,8 @@ def _build_initial_user_text(topic: str, context: ResearchToolContext) -> str:
         "must include at least one bracket reference in exact format "
         "`[paper_id:field]`, for example `[abc123:contributions[0].claim]`; "
         "use field names from suggested_citations or compare_papers output. "
+        "For concrete Findings claims, either include bracket references inline "
+        "or mirror the claim in Evidence with bracket references. "
         "Keep every concrete claim tied to a paper_id or explicitly mark it as "
         "a gap. The final answer must be the report itself; keep the whole "
         "report under 900 words. "

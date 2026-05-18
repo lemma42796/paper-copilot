@@ -400,6 +400,14 @@ def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
     assert final.payload["topic"] == "sparse attention"
     assert final.payload["termination_reason"] == "end_turn"
     assert final.payload["evidence_refs"] == []
+    assert final.payload["quality"] == {
+        "method": "heuristic_v1",
+        "evidence_ref_count": 0,
+        "findings_claim_count": 1,
+        "findings_inline_ref_count": 0,
+        "claims_without_refs_count": 1,
+        "evidence_coverage_ratio": 0.0,
+    }
     assert final.payload["termination_summary"]["reason"] == "end_turn"
     assert final.payload["termination_summary"]["paper_budget"]["touched_count"] == 1
     initial = next(e for e in entries if isinstance(e, Message) and e.role == "user")
@@ -408,6 +416,7 @@ def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
     assert "you may still inspect_paper the same paper_id afterward" in initial.text
     assert "suggested_citations" in initial.text
     assert "do not stop after one inspected paper" in initial.text
+    assert "mirror the claim in Evidence" in initial.text
 
 
 def test_run_research_prefers_inspect_after_read_paper(tmp_path: Path) -> None:
@@ -622,6 +631,14 @@ def test_run_research_synthesis_path_uses_related_and_compare(tmp_path: Path) ->
         {"paper_id": "paperA", "field": "methods[0]", "raw": "[paperA:methods[0]]"},
         {"paper_id": "paperB", "field": "methods[0]", "raw": "[paperB:methods[0]]"},
     ]
+    assert final.payload["quality"] == {
+        "method": "heuristic_v1",
+        "evidence_ref_count": 2,
+        "findings_claim_count": 1,
+        "findings_inline_ref_count": 0,
+        "claims_without_refs_count": 0,
+        "evidence_coverage_ratio": 1.0,
+    }
 
 
 def test_run_research_summary_records_last_tool_error(tmp_path: Path) -> None:

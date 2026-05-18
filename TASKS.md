@@ -153,6 +153,13 @@
   markdown 中抽取引用并写入 session `final_output.evidence_refs`
   (`paper_id` / `field` / `raw`),为后续 unsupported claim rate 统计留接口。
   已补 mock 断言,按用户要求未运行任何验证命令。
+- **M17 final quality payload v1**(2026-05-18):`run_research` 现在基于最终
+  markdown 的 `Findings` 与 evidence refs 写入确定性
+  `final_output.quality`:包含 `evidence_ref_count`、`findings_claim_count`、
+  `findings_inline_ref_count`、`claims_without_refs_count`、
+  `evidence_coverage_ratio`。这是粗粒度 heuristic,不是 LLM judge,用于后续
+  unsupported claim rate / evidence coverage 的趋势信号。已补 mock 断言,
+  按用户要求未运行任何验证命令。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
   M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐,planner/schema
   收敛也已快速复跑,`read_paper` 自动读已接入且已有一次最快速验收。
