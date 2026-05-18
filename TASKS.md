@@ -44,18 +44,24 @@
   已过,不再阻塞下一个 milestone。
 - **最新编码进展**:**M16-min 已完成**(2026-05-18)。按用户裁剪范围,
   本轮只做门禁全绿 + schema validation retry/failure trace;不做 GitHub
-  Actions(避免 push 邮件噪音),不做可复现 smoke eval。当前
-  `uv run ruff check .` / `uv run mypy` / `uv run pytest` 全绿;Skim/Deep/
-  Related 的结构化 tool 输出校验失败会自动 retry 一次,失败 trace 写入
-  session。
-- **下一个编码 milestone**:等待明确指令。可选择继续补 M16 剩余质量指标/
-  evidence,或继续加深 M17 chat-first tool harness。不要自动开工。
+  Actions(避免 push 邮件噪音),不做可复现 smoke eval。Skim/Deep/Related
+  的结构化 tool 输出校验失败会自动 retry 一次,失败 trace 写入 session。
 - **M17-min 进展**(2026-05-18):新增 `paper-copilot research "<topic>"`
   的最小 bounded tool loop 骨架。当前只包装本地库工具:`list_papers` /
   `list_pdfs` / `read_paper`(占位,不自动跑 MainAgent) / `search_library`
   / `inspect_paper` / `compare_papers`,带 max_turns / budget / max_papers /
   termination summary / session trace / research-report.md。它不会自动读新
   论文、不会联网找论文、不做 RAG 升级;完整 M17 DoD 仍未满足。
+- **本轮提交待 push**:`ce68e02` schema retry;`b4e4d79` bounded research
+  loop;`c79e3d4` compare_papers tool;`4b4f912` max_papers;`0de542a`
+  read_paper 占位;`15fa7d5` termination summary。验证策略按用户要求改为
+  **最小化**:M17 后续改动只跑相关 `ruff` / `mypy` / `tests/agents/test_research.py`,
+  不跑全量 pytest,除非用户明确要求。全量三件套在 `b4e4d79` 前跑过一次,
+  之后未再全量跑。
+- **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
+  M19 Composer / M20 UI。候选下一步:补 `find_related_papers` 0-LLM tool
+  (读 fields.db 的 `cross_paper_links` 和/或现有 related metadata),或做一次
+  人工本地 `research` 试跑验收。不要自动开工,等明确指令。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
