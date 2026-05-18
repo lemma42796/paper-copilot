@@ -25,6 +25,7 @@ from paper_copilot.agents.loop import (
     ToolUseRequest,
     run_agent_loop,
 )
+from paper_copilot.knowledge.compare import build_compare_payload
 from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore, PaperRow, available_fields
 from paper_copilot.knowledge.hybrid_search import ContainsFilter, SearchResult, search
@@ -134,6 +135,20 @@ class _InspectPaperInput(BaseModel):
         return value
 
 
+class _ComparePapersInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    paper_id_a: str = Field(min_length=1)
+    paper_id_b: str = Field(min_length=1)
+
+    @field_validator("paper_id_b")
+    @classmethod
+    def _papers_differ(cls, value: str, info: Any) -> str:
+        if value == info.data.get("paper_id_a"):
+            raise ValueError("paper_id_a and paper_id_b must differ")
+        return value
+
+
 async def run_research(
     *,
     topic: str,
@@ -233,6 +248,15 @@ def research_tools() -> list[dict[str, Any]]:
             ),
             _InspectPaperInput,
         ),
+        _tool_schema(
+            "compare_papers",
+            (
+                "Compare two indexed papers using structured fields. Use this "
+                "after identifying two relevant paper_ids to align methods, "
+                "experiments, contributions, limitations, and cross-paper links."
+            ),
+            _ComparePapersInput,
+        ),
     ]
 
 
@@ -251,6 +275,9 @@ def dispatch_research_tool(req: ToolUseRequest, context: ResearchToolContext) ->
             case "inspect_paper":
                 inspect_args = _InspectPaperInput.model_validate(req.input)
                 return _ok(_inspect_paper(inspect_args, context))
+            case "compare_papers":
+                compare_args = _ComparePapersInput.model_validate(req.input)
+                return _ok(_compare_papers(compare_args, context))
             case _:
                 return _err(f"unknown research tool: {req.name}")
     except (KnowledgeError, ValidationError, ValueError) as exc:
@@ -318,6 +345,20 @@ def _inspect_paper(args: _InspectPaperInput, context: ResearchToolContext) -> di
         else:
             payload[field] = value
     return payload
+
+
+def _compare_papers(args: _ComparePapersInput, context: ResearchToolContext) -> dict[str, Any]:
+    row_a = context.fields_store.get(args.paper_id_a)
+    row_b = context.fields_store.get(args.paper_id_b)
+    missing = [
+        paper_id
+        for paper_id, row in [(args.paper_id_a, row_a), (args.paper_id_b, row_b)]
+        if row is None
+    ]
+    if missing:
+        raise KnowledgeError(f"paper_id not found: {', '.join(missing)}")
+    assert row_a is not None and row_b is not None
+    return build_compare_payload(row_a, row_b)
 
 
 def _tool_schema(name: str, description: str, model: type[BaseModel]) -> dict[str, Any]:

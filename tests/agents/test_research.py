@@ -22,7 +22,11 @@ from paper_copilot.session import FinalOutput, SessionStore, ToolResult, ToolUse
 DIM = 4
 
 
-def _payload(title: str = "Paper A", year: int = 2024) -> dict[str, Any]:
+def _payload(
+    title: str = "Paper A",
+    year: int = 2024,
+    method_name: str = "Sparse Attention",
+) -> dict[str, Any]:
     return {
         "meta": {
             "title": title,
@@ -40,7 +44,7 @@ def _payload(title: str = "Paper A", year: int = 2024) -> dict[str, Any]:
         ],
         "methods": [
             {
-                "name": "Sparse Attention",
+                "name": method_name,
                 "description": "keeps top-k attention edges",
                 "key_formula": None,
                 "novelty_vs_prior": "drops dense softmax attention",
@@ -111,6 +115,30 @@ def test_dispatch_research_tools_list_search_and_inspect(tmp_path: Path) -> None
         data = json.loads(inspected.output)
         assert data["meta"]["title"] == "Paper A"
         assert data["methods"][0]["name"] == "Sparse Attention"
+
+
+def test_dispatch_compare_papers_returns_structured_alignment(tmp_path: Path) -> None:
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        now = datetime.now(UTC).isoformat()
+        fs.upsert("paperA", _payload(method_name="Shared Method"), now)
+        fs.upsert("paperB", _payload("Paper B", 2023, method_name="Shared Method"), now)
+        context = ResearchToolContext(fields_store=fs)
+        result = dispatch_research_tool(
+            ToolUseRequest(
+                id="t1",
+                name="compare_papers",
+                input={"paper_id_a": "paperA", "paper_id_b": "paperB"},
+            ),
+            context,
+        )
+
+    data = json.loads(result.output)
+    assert result.is_error is False
+    assert data["a"]["paper_id"] == "paperA"
+    assert data["b"]["paper_id"] == "paperB"
+    assert data["methods_aligned"][0]["key"] == "shared method"
+    assert data["methods_aligned"][0]["a"]["name"] == "Shared Method"
+    assert data["methods_aligned"][0]["b"]["name"] == "Shared Method"
 
 
 def test_dispatch_list_pdfs_reports_candidate_ids(tmp_path: Path) -> None:

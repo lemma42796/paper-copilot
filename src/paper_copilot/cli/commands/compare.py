@@ -20,6 +20,7 @@ from rich.console import Console
 from rich.table import Table
 
 from paper_copilot.cli.commands._shared import resolve_paper_arg
+from paper_copilot.knowledge.compare import build_compare_payload
 from paper_copilot.knowledge.fields_store import FieldsStore, PaperRow
 from paper_copilot.session.paths import default_root
 
@@ -110,44 +111,7 @@ def _emit_text(row_a: PaperRow, row_b: PaperRow) -> None:
 
 
 def _emit_json(row_a: PaperRow, row_b: PaperRow) -> None:
-    a, b = row_a.data, row_b.data
-    payload: dict[str, Any] = {
-        "a": {"paper_id": row_a.paper_id, "meta": a.get("meta", {})},
-        "b": {"paper_id": row_b.paper_id, "meta": b.get("meta", {})},
-        "contributions": {
-            "a": a.get("contributions", []),
-            "b": b.get("contributions", []),
-        },
-        "methods_aligned": [
-            {
-                "key": k,
-                "a": ai,
-                "b": bi,
-            }
-            for k, ai, bi in _align(
-                a.get("methods", []),
-                b.get("methods", []),
-                lambda m: _norm(m.get("name", "")),
-            )
-        ],
-        "experiments_aligned": [
-            {
-                "key": list(k),
-                "a": ai,
-                "b": bi,
-            }
-            for k, ai, bi in _align(
-                a.get("experiments", []),
-                b.get("experiments", []),
-                lambda e: (_norm(e.get("dataset", "")), _norm(e.get("metric", ""))),
-            )
-        ],
-        "limitations": {
-            "a": a.get("limitations", []),
-            "b": b.get("limitations", []),
-        },
-        "cross_paper_links": _link_records(row_a, row_b),
-    }
+    payload = build_compare_payload(row_a, row_b)
     typer.echo(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
@@ -247,15 +211,6 @@ def _link_lines(row_a: PaperRow, row_b: PaperRow) -> list[str]:
                 rel = link.get("relation_type", "?")
                 expl = link.get("explanation", "")
                 out.append(f"{label}  [bold]{rel}[/bold]  — {expl}")
-    return out
-
-
-def _link_records(row_a: PaperRow, row_b: PaperRow) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for src, dst, direction in [(row_a, row_b, "a_to_b"), (row_b, row_a, "b_to_a")]:
-        for link in src.data.get("cross_paper_links", []) or []:
-            if link.get("related_paper_id") == dst.paper_id:
-                out.append({"direction": direction, **link})
     return out
 
 
