@@ -65,8 +65,16 @@
   schema error。重跑 `--max-turns 8 --max-papers 3 --budget-cny 0.2` 成功
   `end_turn`,cost ¥0.0571,events=17,papers=3/3,report 可读,session:
   `/Users/a123/.paper-copilot/papers/research-20260518T090546424841Z-6e47b315/session.jsonl`。
+- **M17 人工试跑 2/3**(2026-05-18):topic=`compare metric learning and
+  training tricks for face recognition and person re-identification`。
+  `--max-turns 8 --max-papers 3 --budget-cny 0.2` 成功 `end_turn`,cost
+  ¥0.0434,events=14,papers=3/3,last_tool_error=None。Planner 正确选中
+  `FaceNet` / `In Defense of the Triplet Loss` / `Bag of Tricks`,工具路径是
+  `list_papers -> inspect_paper x3 -> final report`,没有触发 compare/find
+  related。report 可读,但开头仍带一句过程性话术。session:
+  `/Users/a123/.paper-copilot/papers/research-20260518T091259404664Z-e96c8456/session.jsonl`。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
-  M19 Composer / M20 UI。候选下一步:继续做第 2/3 个固定 topic 人工验收,
+  M19 Composer / M20 UI。候选下一步:继续做第 3/3 个固定 topic 人工验收,
   收敛 planner prompt/tool schema,或把 `read_paper` 占位升级成受控自动
   read。不要自动开工,等明确指令。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
