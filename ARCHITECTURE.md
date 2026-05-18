@@ -48,6 +48,14 @@ src/paper_copilot/
 CORS/header、错误响应和调用 `chat.runtime.handle_chat_request()`；业务
 编排仍归 `chat/`。
 
+### Planned `apps/web/`
+下一步产品前端采用 Next.js,而不是静态 HTML 原型。普通用户不应接触
+`paper-copilot research`;Next.js 前端调用本地 Python API (`POST /chat`)。
+视觉方向必须是 macOS 风格:原生感、安静、轻量层次、清晰侧边栏/工具栏、
+高可读 Markdown 报告区。第一版只做单输入框 chat shell、route/status、
+session/report/eval 路径和 cost/paper budget 展示;不做营销页、复杂
+dashboard、登录或云同步。
+
 ### `chat/`
 Chat-first 产品入口层。接收裸自然语言请求，做轻量 intent routing
 （如 research vs idea_composer），组装 knowledge stores / agent context，
@@ -632,5 +640,5 @@ cli.reindex
 - **不做 > 500 篇规模的索引优化**（超出个人项目范围）
 - **不做图谱遍历 / 引用链分析**（entity resolution 是另一个领域）
 - 不做 PDF 图表的 CV 理解
-- 不做实时 web UI（HTML 报告够了）
+- 不做云端多用户 web app;本地 Next.js 前端只作为单输入框产品壳
 - 不支持多 embedding 模型共存

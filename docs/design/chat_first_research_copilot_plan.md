@@ -300,17 +300,45 @@ remain for developers and tests, but normal use should be:
 The chat agent should translate natural language into tool calls, not replace
 tools with free-form prompting.
 
+### 2026-05-18 Frontend Decision
+
+The product frontend should be a Next.js app, not a static HTML prototype.
+The CLI remains a developer/debug shell only. Normal users should type a
+natural-language request directly into the web UI, for example:
+
+```text
+基于 diffusion model 和医学图像分割，帮我找一个可做的创新点
+```
+
+The visual style is a hard product requirement: **macOS-style UI**. Keep it
+quiet, native-feeling, and work-focused: a clean sidebar, top/bottom toolbar,
+subtle translucent/light surfaces where useful, sharp typography, restrained
+color, clear focus states, and polished Markdown/report reading. Avoid
+marketing-page composition, dashboard-heavy layouts, oversized hero sections,
+decorative gradients/orbs, and nested card piles.
+
+Use the existing Python backend as the local service:
+
+```text
+GET  /health
+POST /chat
+```
+
+Recommended frontend location: `apps/web/`.
+
 ### Terminal First
 
-First deliver:
+Historical note: the original plan said to prove the flow through a terminal
+chat first:
 
 ```bash
 paper-copilot chat
 ```
 
-This REPL proves the intent router, tool registry, trace, and streaming
-progress before any web UI work. It should reuse the same tool functions that
-CLI commands call.
+That has been superseded by the implemented backend route:
+`paper-copilot serve` + `POST /chat` + `handle_chat_request()`. Do not spend
+more roadmap time designing a new terminal chat product shell unless needed for
+debugging.
 
 ### Tool Surface
 
@@ -330,12 +358,13 @@ surface. Avoid duplicating business logic in command handlers.
 
 ## Backend And Frontend
 
-Do not start by building a large web app. The sequence should be:
+Current sequence after the 2026-05-18 decision:
 
-1. Core tool surface.
-2. Terminal chat.
-3. Local backend.
-4. Single-page chat frontend.
+1. Chat runtime and local HTTP API. Done: `handle_chat_request()` and
+   `paper-copilot serve` expose `POST /chat`.
+2. Next.js single-page chat frontend in `apps/web/`.
+3. Streaming/job progress after the basic UI can submit and render results.
+4. PDF upload/path entry and richer citation/report viewer.
 
 ### Backend Responsibilities
 
@@ -362,6 +391,9 @@ POST /jobs/{job_id}/cancel
 
 Do not introduce a backend framework without an explicit dependency decision.
 FastAPI is a reasonable candidate later, but terminal chat should come first.
+As of 2026-05-18 the local backend exists without FastAPI, using the stdlib HTTP
+server. Revisit framework choice only when streaming, cancellation, or upload
+complexity makes the stdlib boundary too limiting.
 
 ### Frontend Responsibilities
 
@@ -377,6 +409,15 @@ The frontend should stay small and product-focused:
 
 No dashboard-heavy UI in the first version. The product promise is a chat-first
 research workflow, not an analytics console.
+
+Next.js first screen:
+
+- macOS-style local app shell, not a landing page
+- left sidebar for recent sessions/reports
+- central composer plus Markdown report
+- compact metadata surface for route, cost, paper budget, session/report/eval
+  paths
+- no login, cloud sync, multi-user controls, or marketing content
 
 ## Milestone Shape
 
@@ -447,13 +488,14 @@ Goal: same agent, nicer shell.
 Deliver:
 
 - local backend for jobs and streaming
-- single-page chat frontend
+- Next.js single-page chat frontend with macOS-style UI
 - PDF upload/path entry
 - tool trace viewer
 - citation/report viewer
 
-This is presentation polish after the harness works. Do not let frontend work
-pull attention away from evidence, eval, and bounded tools.
+The first M20 slice is no longer mere presentation polish: it is the product
+entry point. Keep scope tight, but start from the Next.js shell now that the
+runtime and HTTP API are available.
 
 ## Interview Story
 

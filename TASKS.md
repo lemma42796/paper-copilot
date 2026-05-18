@@ -197,13 +197,17 @@
   `handle_chat_request()`,返回 JSON 版 `ChatRunResult`。新增
   `paper-copilot serve --host 127.0.0.1 --port 8765` 启动 API,供后续前端单
   输入框直接对接。已补模型序列化断言,按用户要求未运行任何验证命令。
-- **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
-  M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐,planner/schema
-  收敛也已快速复跑,`read_paper` 自动读已接入且已有一次最快速验收。
-  **下一步优先**:做一次稍真实的 research task 验收,要求它 read 1 篇新
-  PDF 后 inspect/compare 既有库论文并产出可用 synthesis;或者先小范围增强
-  最终 research report 的 evidence payload 引用稳定性。不要自动开
-  M18/M19/M20。
+- **前端技术决策**(2026-05-18):用户确认下一步进入前端,选择 Next.js 而不是
+  静态 HTML 原型。最终产品不是 CLI;普通用户只面对一个自然语言输入框。
+  **UI 必须是 macOS 风格**:安静、原生感、侧边栏/工具栏/毛玻璃或浅色层次
+  要克制,避免 dashboard/营销页/厚重卡片风。Python 侧继续作为本地后端,
+  现有 `paper-copilot serve` 暴露 `POST /chat`;Next.js 前端只消费这个 API。
+  推荐目录: `apps/web/`。
+- **下一个编码建议**:scaffold `apps/web` Next.js 前端,先做单页 chat shell:
+  左侧会话/报告列表,中间一个自然语言输入框和 Markdown 报告区,右侧/底部
+  轻量 metadata(route、session/report/eval 路径、cost、paper budget)。
+  第一版只连 `POST /chat` 和 `GET /health`,不做登录/云同步/复杂 dashboard。
+  新会话开始实现前,先确认是否允许引入 Node/Next 依赖并创建 package files。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
@@ -216,9 +220,10 @@
   `/Users/a123/Documents/reid/第七版中国计算机学会推荐国际学术会议和期刊目录（正式版）.pdf`
   已确认是 2026 版 CCF venue 白名单,主要给 DBLP URL,不是论文库;联网发现
   只做 DBLP/开放 PDF metadata,付费或缺失 PDF 交给用户补。本路线顺序:
-  M16 harness hardening → M17 chat-first tool harness → M18 evidence-grounded
-  RAG → M19 Research Idea Composer → M20 local web UI。若新会话要继续实现,
-  默认从 M16 开始,不要直接开 M19/M20。
+  M16 harness hardening → M17 chat-first tool harness → HTTP API → Next.js
+  macOS-style local web UI → M18 evidence-grounded RAG → M19 Research Idea
+  Composer deeper workflows。若新会话要继续实现,默认从 Next.js 前端 shell
+  开始,不要再回到 CLI 入口设计。
 - **2026-05-17 交接上下文**:当前项目是固定的多 Agent 论文阅读流水线
   (Main → Skim → Deep → Related) + eval harness,不是 Codex / Claude Code /
   OpenClaw 风格的"LLM 自主调工具、观察结果、继续推进直到任务完成"的
