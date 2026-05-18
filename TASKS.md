@@ -55,9 +55,10 @@
   `graph/cross-paper-links.jsonl`,再用 fields.db 里的 `cross_paper_links`
   补充。它不会自动读新论文、不会联网找论文、不做 RAG 升级;完整 M17 DoD
   仍未满足。
-- **当前验证策略**:M17 后续改动只跑相关 `ruff` / `mypy` /
-  `tests/agents/test_research.py`,不跑全量 pytest,除非用户明确要求。全量
-  三件套在 `b4e4d79` 前跑过一次,之后未再全量跑。
+- **当前验证策略**:用户最新明确指令(2026-05-18):"不再做测试了"。后续 M17
+  实现任务不要主动跑 pytest / LLM 试跑 / 全量门禁;必要时只做最小静态检查,
+  并在回复里明确标注"未测试"。全量三件套在 `b4e4d79` 前跑过一次,之后未再
+  全量跑。
 - **M17 人工试跑 1/3**(2026-05-18):topic=`compare attention mechanisms
   across Bahdanau attention, Transformer, and ViT`。`--max-turns 4` 能走
   list/inspect/compare,但停在 max_turns,只生成一句占位报告,同时暴露过一次
@@ -102,9 +103,12 @@
   已跑相关 `ruff` / `mypy` / `tests/agents/test_loop.py` +
   `tests/agents/test_research.py` + `tests/test_smoke.py`,未跑全量 pytest。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
-  M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐;候选下一步:
-  把 `read_paper` 占位升级成受控自动 read,或继续做第 4 个不同类型 topic
-  验证 find_related/search_library 路径。不要自动开工,等明确指令。
+  M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐,planner/schema
+  收敛也已快速复跑。**下一步优先**:把 `read_paper` 占位升级成受控自动
+  read。范围建议:只支持本地 `--pdf-dir` 下的 PDF;受 `max_papers` /
+  `budget_cny` 约束;成功后写 session/report 并同步 fields + embeddings;
+  失败时返回清晰 `needs_user_action`/failure payload,不编结论。按用户最新
+  指令,实现后不要主动测试,只说明未测试。不要自动开 M18/M19/M20。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
