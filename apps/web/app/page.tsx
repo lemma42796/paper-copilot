@@ -58,6 +58,7 @@ type RunHistoryItem = {
 
 const DEFAULT_API_URL = "http://127.0.0.1:8765";
 const DEFAULT_PROMPT = "比较 Transformer 和 ViT 的注意力机制演化，给出证据引用。";
+const LIBRARY_DIR_STORAGE_KEY = "paper-copilot.libraryDir";
 
 export default function Home() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
@@ -88,6 +89,17 @@ export default function Home() {
   useEffect(() => {
     void checkHealth();
   }, [normalizedApiUrl]);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(LIBRARY_DIR_STORAGE_KEY);
+      if (saved !== null) {
+        setPdfDir(saved);
+      }
+    } catch {
+      return;
+    }
+  }, []);
 
   useEffect(() => {
     void loadReports();
@@ -169,6 +181,20 @@ export default function Home() {
     setMessage(item.request);
     setSelectedReportId(item.id);
     setResult(chatResponseFromHistoryItem(item));
+  }
+
+  function updateLibraryDir(value: string) {
+    setPdfDir(value);
+    try {
+      const trimmed = value.trim();
+      if (trimmed.length > 0) {
+        window.localStorage.setItem(LIBRARY_DIR_STORAGE_KEY, value);
+      } else {
+        window.localStorage.removeItem(LIBRARY_DIR_STORAGE_KEY);
+      }
+    } catch {
+      return;
+    }
   }
 
   async function copyWithNotice(value: string, label: string) {
@@ -294,22 +320,29 @@ export default function Home() {
 
           <aside className="inspector" aria-label="运行信息">
             <section className="settings">
-              <h2>连接</h2>
+              <h2>资料库</h2>
+              <p className="settings-note">
+                指定本地论文文件夹。之后每次任务都会自动带上这个目录。
+              </p>
+              <div className="field-row">
+                <label htmlFor="pdf-dir">本地论文文件夹</label>
+                <input
+                  id="pdf-dir"
+                  onChange={(event) => updateLibraryDir(event.target.value)}
+                  placeholder="/Users/a123/Documents/papers"
+                  value={pdfDir}
+                />
+              </div>
+            </section>
+
+            <section className="settings">
+              <h2>本地服务</h2>
               <div className="field-row">
                 <label htmlFor="api-url">API</label>
                 <input
                   id="api-url"
                   onChange={(event) => setApiUrl(event.target.value)}
                   value={apiUrl}
-                />
-              </div>
-              <div className="field-row">
-                <label htmlFor="pdf-dir">PDF 目录</label>
-                <input
-                  id="pdf-dir"
-                  onChange={(event) => setPdfDir(event.target.value)}
-                  placeholder="/Users/a123/Documents/papers"
-                  value={pdfDir}
                 />
               </div>
             </section>

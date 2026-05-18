@@ -536,6 +536,13 @@ input {
   font-weight: 760;
 }
 
+.settings-note {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 dl {
   display: flex;
   flex-direction: column;
