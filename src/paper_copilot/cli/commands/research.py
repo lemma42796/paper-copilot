@@ -13,7 +13,9 @@ from rich.markdown import Markdown
 
 from paper_copilot.agents.llm_client import LLMClient
 from paper_copilot.agents.research import ResearchToolContext, run_research
-from paper_copilot.eval.runs import write_research_quality_run
+from paper_copilot.eval._paths import default_report_path
+from paper_copilot.eval.report import write_report
+from paper_copilot.eval.runs import load_history, write_research_quality_run
 from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.knowledge.meta import IndexMeta, require_match, write_meta
@@ -51,6 +53,13 @@ def research(
             help="Do not append final_output.quality to eval/runs/.",
         ),
     ] = False,
+    no_update_report: Annotated[
+        bool,
+        typer.Option(
+            "--no-update-report",
+            help="Do not refresh eval/report.html after recording quality.",
+        ),
+    ] = False,
 ) -> None:
     """Run a bounded research tool loop over the local library."""
     if pdf_dir is not None:
@@ -72,6 +81,7 @@ def research(
             max_papers,
             root,
             record_quality=not no_record_quality,
+            update_report=not no_update_report,
         )
     )
 
@@ -85,6 +95,7 @@ async def _research_async(
     root: Path | None,
     *,
     record_quality: bool,
+    update_report: bool,
 ) -> None:
     home = root if root is not None else default_root()
     fields_db = home / "fields.db"
@@ -163,6 +174,12 @@ async def _research_async(
         try:
             quality_run_path = write_research_quality_run(run.session_path)
             console.print(f"[dim]quality: {quality_run_path}[/dim]")
+            if update_report:
+                report_html_path = write_report(
+                    load_history(suite_name="research"),
+                    default_report_path(),
+                )
+                console.print(f"[dim]eval report: {report_html_path}[/dim]")
         except EvalError as exc:
             console.print(f"[yellow]warning:[/yellow] could not record quality: {exc}")
     paper_budget = run.termination_summary.paper_budget

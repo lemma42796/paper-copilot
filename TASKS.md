@@ -171,6 +171,10 @@
   `final_output.quality` 追加到 eval run-history,终端输出 `quality:` 路径;
   可用 `--no-record-quality` 跳过。记录失败只 warning,不影响 research
   report 输出。按用户要求未运行任何验证命令。
+- **M17 eval report 自动刷新**(2026-05-18):`paper-copilot research` 成功记录
+  quality 后默认刷新 repo-local `eval/report.html`,终端输出 `eval report:`
+  路径;可用 `--no-update-report` 跳过。`eval/_paths.py` 新增
+  `default_report_path()` 统一默认位置。按用户要求未运行任何验证命令。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
   M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐,planner/schema
   收敛也已快速复跑,`read_paper` 自动读已接入且已有一次最快速验收。

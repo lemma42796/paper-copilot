@@ -27,3 +27,7 @@ def default_goldens_dir() -> Path:
 
 def default_runs_dir() -> Path:
     return find_project_root() / "eval" / "runs"
+
+
+def default_report_path() -> Path:
+    return find_project_root() / "eval" / "report.html"
