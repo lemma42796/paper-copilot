@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 from pathlib import Path
+from subprocess import CompletedProcess
 
-from paper_copilot.api.http import ChatHttpRequest, ChatHttpResponse, ChatReportsHttpResponse
+import pytest
+
+from paper_copilot.api import http
+from paper_copilot.api.http import (
+    ChatHttpRequest,
+    ChatHttpResponse,
+    ChatReportsHttpResponse,
+    DirectorySelectionHttpResponse,
+)
 from paper_copilot.chat.history import list_chat_reports
 from paper_copilot.chat.router import ChatRoute
 from paper_copilot.chat.runtime import ChatRunResult
@@ -86,3 +95,43 @@ def test_reports_response_serializes_history(tmp_path: Path) -> None:
     assert response["reports"][0]["report_markdown"] == "# Findings\n\nEvidence."
     assert response["reports"][0]["cost_cny"] == 0.0123
     assert response["reports"][0]["events_count"] == 7
+
+
+def test_directory_selection_response_serializes_selected_path() -> None:
+    response = DirectorySelectionHttpResponse(path="/Users/a123/Documents/papers")
+
+    assert response.model_dump(mode="json") == {
+        "path": "/Users/a123/Documents/papers",
+    }
+
+
+def test_select_directory_macos_returns_none_when_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args: object, **kwargs: object) -> CompletedProcess[str]:
+        return CompletedProcess(
+            args=["osascript"],
+            returncode=1,
+            stdout="",
+            stderr="User canceled.",
+        )
+
+    monkeypatch.setattr(http.subprocess, "run", fake_run)
+
+    assert http._select_directory_macos() is None
+
+
+def test_select_directory_macos_returns_selected_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args: object, **kwargs: object) -> CompletedProcess[str]:
+        return CompletedProcess(
+            args=["osascript"],
+            returncode=0,
+            stdout="/Users/a123/Documents/papers/\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(http.subprocess, "run", fake_run)
+
+    assert http._select_directory_macos() == Path("/Users/a123/Documents/papers")

@@ -36,3 +36,7 @@ class PdfError(PaperCopilotError):
 
 class EvalError(PaperCopilotError):
     pass
+
+
+class ApiError(PaperCopilotError):
+    pass

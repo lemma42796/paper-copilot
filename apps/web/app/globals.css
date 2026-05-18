@@ -289,6 +289,11 @@ button {
   color: var(--accent);
 }
 
+.secondary-button:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
 .content-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
@@ -371,6 +376,18 @@ input {
 
 .field-row.compact input {
   min-width: 0;
+}
+
+.library-dir-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.library-dir-control .secondary-button {
+  min-height: 34px;
+  white-space: nowrap;
 }
 
 .error-strip {

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
+import sys
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -12,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from paper_copilot.chat.history import ChatReportItem, list_chat_reports
 from paper_copilot.chat.runtime import ChatRunResult, handle_chat_request
-from paper_copilot.shared.errors import PaperCopilotError
+from paper_copilot.shared.errors import ApiError, PaperCopilotError
 
 
 class ChatHttpRequest(BaseModel):
@@ -107,6 +109,10 @@ class ChatReportsHttpResponse(BaseModel):
         return cls(reports=[ChatReportHttpItem.from_item(item) for item in items])
 
 
+class DirectorySelectionHttpResponse(BaseModel):
+    path: str | None
+
+
 def serve_http_api(host: str = "127.0.0.1", port: int = 8765) -> None:
     server = ThreadingHTTPServer((host, port), _ChatHandler)
     server.serve_forever()
@@ -137,10 +143,17 @@ class _ChatHandler(BaseHTTPRequestHandler):
         self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"unknown path: {parsed.path}")
 
     def do_POST(self) -> None:
-        if self.path != "/chat":
-            self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"unknown path: {self.path}")
+        parsed = urlparse(self.path)
+        if parsed.path == "/library/select-directory":
+            self._handle_select_directory()
+            return
+        if parsed.path == "/chat":
+            self._handle_chat()
             return
 
+        self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"unknown path: {parsed.path}")
+
+    def _handle_chat(self) -> None:
         try:
             request = ChatHttpRequest.model_validate(self._read_json_body())
         except ValidationError as exc:
@@ -171,6 +184,18 @@ class _ChatHandler(BaseHTTPRequestHandler):
             HTTPStatus.OK,
             ChatHttpResponse.from_result(result).model_dump(mode="json"),
         )
+
+    def _handle_select_directory(self) -> None:
+        try:
+            path = _select_directory()
+        except ApiError as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, exc.__class__.__name__, str(exc))
+            return
+
+        response = DirectorySelectionHttpResponse(
+            path=str(path) if path is not None else None
+        )
+        self._write_json(HTTPStatus.OK, response.model_dump(mode="json"))
 
     def _read_json_body(self) -> dict[str, Any]:
         length_raw = self.headers.get("Content-Length", "0")
@@ -207,3 +232,54 @@ class _ChatHandler(BaseHTTPRequestHandler):
 
 def _single_query_values(query: str) -> dict[str, str]:
     return {key: values[-1] for key, values in parse_qs(query).items() if values}
+
+
+def _select_directory() -> Path | None:
+    if sys.platform == "darwin":
+        return _select_directory_macos()
+    return _select_directory_tk()
+
+
+def _select_directory_macos() -> Path | None:
+    script = 'POSIX path of (choose folder with prompt "选择本地论文文件夹")'
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+    except OSError as exc:
+        raise ApiError(f"macOS directory selector is unavailable: {exc}") from exc
+
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        if "User canceled" in stderr or "用户已取消" in stderr:
+            return None
+        raise ApiError(stderr or "failed to open directory selector")
+
+    selected = result.stdout.strip()
+    return Path(selected) if selected else None
+
+
+def _select_directory_tk() -> Path | None:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+    except ImportError as exc:
+        raise ApiError("directory selector is unavailable on this platform") from exc
+
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:
+        raise ApiError("directory selector cannot open without a desktop session") from exc
+    root.withdraw()
+    try:
+        selected = filedialog.askdirectory(
+            mustexist=True,
+            title="选择本地论文文件夹",
+        )
+    finally:
+        root.destroy()
+
+    return Path(selected) if selected else None

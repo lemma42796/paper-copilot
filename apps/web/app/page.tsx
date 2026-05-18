@@ -28,6 +28,10 @@ type ReportHistoryResponse = {
   reports: ReportHistoryEntry[];
 };
 
+type DirectorySelectionResponse = {
+  path: string | null;
+};
+
 type ReportHistoryEntry = {
   id: string;
   request: string;
@@ -66,6 +70,7 @@ export default function Home() {
   const [pdfDir, setPdfDir] = useState("");
   const [health, setHealth] = useState<HealthState>("checking");
   const [isRunning, setIsRunning] = useState(false);
+  const [isSelectingLibraryDir, setIsSelectingLibraryDir] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ChatResponse | null>(null);
   const [history, setHistory] = useState<RunHistoryItem[]>([]);
@@ -194,6 +199,44 @@ export default function Home() {
       }
     } catch {
       return;
+    }
+  }
+
+  async function selectLibraryDir() {
+    setIsSelectingLibraryDir(true);
+    setError(null);
+    try {
+      let response: Response;
+      try {
+        response = await fetch(`${normalizedApiUrl}/library/select-directory`, {
+          method: "POST"
+        });
+      } catch {
+        setHealth("offline");
+        throw new Error("无法连接本地 API，不能打开目录选择器。");
+      }
+
+      const raw = (await response.json()) as
+        | DirectorySelectionResponse
+        | { error?: { message?: string } };
+      setHealth("online");
+      if (!response.ok) {
+        const messageText =
+          "error" in raw && raw.error?.message ? raw.error.message : "目录选择失败。";
+        throw new Error(messageText);
+      }
+
+      const selectedPath = (raw as DirectorySelectionResponse).path;
+      if (selectedPath === null) {
+        showNotice("未选择目录");
+        return;
+      }
+      updateLibraryDir(selectedPath);
+      showNotice("资料库已选择");
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "目录选择失败。");
+    } finally {
+      setIsSelectingLibraryDir(false);
     }
   }
 
@@ -326,12 +369,22 @@ export default function Home() {
               </p>
               <div className="field-row">
                 <label htmlFor="pdf-dir">本地论文文件夹</label>
-                <input
-                  id="pdf-dir"
-                  onChange={(event) => updateLibraryDir(event.target.value)}
-                  placeholder="/Users/a123/Documents/papers"
-                  value={pdfDir}
-                />
+                <div className="library-dir-control">
+                  <input
+                    id="pdf-dir"
+                    onChange={(event) => updateLibraryDir(event.target.value)}
+                    placeholder="/Users/a123/Documents/papers"
+                    value={pdfDir}
+                  />
+                  <button
+                    className="secondary-button"
+                    disabled={isSelectingLibraryDir}
+                    onClick={() => void selectLibraryDir()}
+                    type="button"
+                  >
+                    {isSelectingLibraryDir ? "选择中" : "选择目录"}
+                  </button>
+                </div>
               </div>
             </section>
 

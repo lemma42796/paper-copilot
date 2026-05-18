@@ -246,6 +246,12 @@
   PDF 上传。右侧配置从“PDF 目录”改成“资料库 / 本地论文文件夹”,路径保存到
   `localStorage`,之后每次 `/chat` 自动带上该目录;API 地址移到“本地服务”。
   已跑 `npm run typecheck` + `npm run build`;未跑真实 `/chat` / LLM。
+- **资料库入口 v2**(2026-05-19):按用户反馈,资料库入口改成点击“选择目录”
+  打开本机目录选择器,而不是只让用户手输路径。前端调用
+  `POST /library/select-directory`,后端在 macOS 上用系统 `choose folder`
+  返回绝对路径,选中后回填并保存到 `localStorage`。已跑 API 单测、
+  touched-file `ruff`/`mypy`、`npm run typecheck` + `npm run build`;
+  未跑真实 `/chat` / LLM。
 - **下一个编码建议**:停止继续打磨前端细节。若时间允许,下一步要么做一次
   真实低预算 `/chat` 联调,要么转入 M18 evidence-grounded RAG 设计/实现。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
