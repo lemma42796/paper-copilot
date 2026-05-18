@@ -123,11 +123,6 @@ export default function Home() {
   return (
     <main className="app-shell">
       <aside className="sidebar">
-        <div className="window-controls" aria-hidden="true">
-          <span className="control control-red" />
-          <span className="control control-yellow" />
-          <span className="control control-green" />
-        </div>
         <div className="brand">
           <span className="brand-mark">PC</span>
           <div>
