@@ -252,6 +252,10 @@
   返回绝对路径,选中后回填并保存到 `localStorage`。已跑 API 单测、
   touched-file `ruff`/`mypy`、`npm run typecheck` + `npm run build`;
   未跑真实 `/chat` / LLM。
+- **Composer 语义校正**(2026-05-19):按用户纠正,Research Idea Composer
+  不是泛泛“缝合论文”,而是 baseline-first workflow:先找可复现 baseline,
+  再找 2-3 个可接入模块/技巧,最后形成可验证的组合改进方案和消融计划。
+  已把 router 关键词、ResearchAgent idea prompt、前端默认示例同步到该语义。
 - **下一个编码建议**:停止继续打磨前端细节。若时间允许,下一步要么做一次
   真实低预算 `/chat` 联调,要么转入 M18 evidence-grounded RAG 设计/实现。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录

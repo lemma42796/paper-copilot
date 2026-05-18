@@ -450,7 +450,7 @@ def test_run_research_routes_idea_composer_prompt(tmp_path: Path) -> None:
 
         run = asyncio.run(
             run_research(
-                topic="基于 diffusion model 和医学图像分割，帮我找一个可做的创新点",
+                topic="基于 diffusion model 和医学图像分割, 帮我找一个可做的创新点",
                 llm=llm,
                 context=context,
                 root=tmp_path,
@@ -465,7 +465,8 @@ def test_run_research_routes_idea_composer_prompt(tmp_path: Path) -> None:
     final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
 
     assert "Task profile: idea_composer" in initial.text
-    assert "Problem, Prior Evidence, Gap, Idea" in initial.text
+    assert "Problem, Baseline, Candidate Modules" in initial.text
+    assert "baseline-first workflow" in initial.text
     assert final.payload["request_route"] == {
         "kind": "idea_composer",
         "output_profile": "idea_composer",

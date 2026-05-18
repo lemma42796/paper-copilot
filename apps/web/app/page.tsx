@@ -61,7 +61,8 @@ type RunHistoryItem = {
 };
 
 const DEFAULT_API_URL = "http://127.0.0.1:8765";
-const DEFAULT_PROMPT = "比较 Transformer 和 ViT 的注意力机制演化，给出证据引用。";
+const DEFAULT_PROMPT =
+  "基于医学图像分割，先找一个可复现 baseline，再找 2-3 个可接入模块，给出实验方案和证据引用。";
 const LIBRARY_DIR_STORAGE_KEY = "paper-copilot.libraryDir";
 
 export default function Home() {
@@ -313,10 +314,11 @@ export default function Home() {
         <div className="content-grid">
           <section className="main-pane" aria-label="研究输入">
             <form className="composer" onSubmit={submitRequest}>
-              <label htmlFor="message">你想研究什么？</label>
+              <label htmlFor="message">研究方向或任务</label>
               <textarea
                 id="message"
                 onChange={(event) => setMessage(event.target.value)}
+                placeholder="例如：先找一个 baseline，再找可接入模块，组合成可验证的改进方案。"
                 rows={4}
                 value={message}
               />

@@ -73,7 +73,7 @@ _REPORT_FALLBACK = (
 _EVIDENCE_REF_RE = re.compile(
     r"\[(?P<paper_id>[A-Za-z0-9_-]{3,64}):(?P<field>[A-Za-z_][A-Za-z0-9_.\[\]-]*)\]"
 )
-_CLAIM_BOUNDARY_RE = re.compile(r"(?<=[.!?。！？])\s+")
+_CLAIM_BOUNDARY_RE = re.compile(r"(?<=[.!?。！？])\s+")  # noqa: RUF001
 
 
 type QueryEncoder = Callable[[str], np.ndarray]
@@ -1181,7 +1181,7 @@ def _quality_summary(
 
 
 def _quality_claim_section(report_markdown: str) -> str:
-    for title in ("Findings", "Idea", "Why It Might Work"):
+    for title in ("Findings", "Proposed Composition", "Idea", "Why It Might Work"):
         section = _markdown_section(report_markdown, title)
         if section:
             return section
@@ -1332,13 +1332,19 @@ def _final_report_guidance(route: ChatRoute) -> str:
         return (
             "Task profile: idea_composer. When you have enough information, "
             "stop calling tools and write a concise Markdown proposal with "
-            "these sections: Problem, Prior Evidence, Gap, Idea, Why It Might "
-            "Work, Experiment Plan, Risks, Evidence. Produce one focused, "
-            "actionable research idea rather than a survey. Prior Evidence "
-            "should summarize what the local papers already support; Gap "
-            "should name the missing capability or weak assumption; Experiment "
-            "Plan should include dataset/task, baseline, metric, and ablation "
-            "when the evidence supports them. "
+            "these sections: Problem, Baseline, Candidate Modules, "
+            "Compatibility, Proposed Composition, Experiment Plan, Risks, "
+            "Evidence. This is a baseline-first workflow: first identify one "
+            "strong, reproducible baseline paper or method from the local "
+            "library, then identify 2-3 compatible modules or tricks from "
+            "other papers, then propose a small composition that can be "
+            "tested. Baseline should explain why it is a good starting point; "
+            "Candidate Modules should name each module, source paper, and "
+            "function; Compatibility should say where each module attaches to "
+            "the baseline and what might conflict; Proposed Composition should "
+            "state the actual modification. Experiment Plan should include "
+            "dataset/task, baseline, metric, and ablations when the evidence "
+            "supports them. "
             f"{evidence_rule} The final answer must be the proposal itself; "
             "keep the whole report under 900 words."
         )

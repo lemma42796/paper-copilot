@@ -7,6 +7,11 @@ ChatKind = Literal["research", "idea_composer"]
 OutputProfile = Literal["research_report", "idea_composer"]
 
 _IDEA_KEYWORDS = (
+    "baseline",
+    "module",
+    "ablation",
+    "基线",
+    "模块",
     "创新点",
     "创新",
     "研究想法",
@@ -18,6 +23,7 @@ _IDEA_KEYWORDS = (
     "选题",
     "课题",
     "实验方案",
+    "改进方案",
     "可做",
     "可发表",
 )
