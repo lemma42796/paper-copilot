@@ -100,6 +100,7 @@ async def _research_async(
                 (lambda query: embedder.encode([query])[0]) if embedder is not None else None
             ),
             pdf_dir=pdf_dir,
+            root=home,
             max_papers=max_papers,
         )
         run = await run_research(

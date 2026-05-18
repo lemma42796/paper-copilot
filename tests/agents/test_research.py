@@ -179,6 +179,49 @@ def test_dispatch_enforces_max_papers_across_inspect_and_compare(tmp_path: Path)
     assert context.touched_paper_ids == {"paperA", "paperB"}
 
 
+def test_dispatch_read_paper_reports_existing_index_entry(tmp_path: Path) -> None:
+    pdir = tmp_path / "papers" / "paperA"
+    pdir.mkdir(parents=True)
+    (pdir / "session.jsonl").write_text("", encoding="utf-8")
+    (pdir / "report.md").write_text("# Report", encoding="utf-8")
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        fs.upsert("paperA", _payload("Paper A"), datetime.now(UTC).isoformat())
+        context = ResearchToolContext(fields_store=fs, root=tmp_path, max_papers=1)
+        result = dispatch_research_tool(
+            ToolUseRequest(id="t1", name="read_paper", input={"paper_id": "paperA"}),
+            context,
+        )
+
+    data = json.loads(result.output)
+    assert result.is_error is False
+    assert data["status"] == "already_read"
+    assert data["paper_id"] == "paperA"
+    assert data["report_exists"] is True
+    assert data["session_exists"] is True
+    assert data["paper_budget"]["touched_paper_ids"] == ["paperA"]
+
+
+def test_dispatch_read_paper_needs_user_action_for_unread_pdf(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF fake")
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        context = ResearchToolContext(fields_store=fs, root=tmp_path, max_papers=1)
+        result = dispatch_research_tool(
+            ToolUseRequest(
+                id="t1",
+                name="read_paper",
+                input={"pdf_path": str(pdf_path)},
+            ),
+            context,
+        )
+
+    data = json.loads(result.output)
+    assert result.is_error is False
+    assert data["status"] == "needs_user_action"
+    assert data["paper_id"] in context.touched_paper_ids
+    assert "paper-copilot read" in data["next_command"]
+
+
 def test_dispatch_list_pdfs_reports_candidate_ids(tmp_path: Path) -> None:
     pdf_dir = tmp_path / "pdfs"
     pdf_dir.mkdir()

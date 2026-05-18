@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from paper_copilot.agents.llm_client import DEFAULT_MODEL
 from paper_copilot.agents.loop import (
@@ -31,7 +31,7 @@ from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore, PaperRow, available_fields
 from paper_copilot.knowledge.hybrid_search import ContainsFilter, SearchResult, search
 from paper_copilot.session import SessionStore
-from paper_copilot.session.paths import compute_paper_id
+from paper_copilot.session.paths import compute_paper_id, paper_dir
 from paper_copilot.shared.cost import CostSnapshot, CostTracker, pricing_for_model
 from paper_copilot.shared.errors import KnowledgeError
 
@@ -63,6 +63,7 @@ class ResearchToolContext:
     embeddings_store: EmbeddingsStore | None = None
     encode_query: QueryEncoder | None = None
     pdf_dir: Path | None = None
+    root: Path | None = None
     max_papers: int = 5
     touched_paper_ids: set[str] = dataclass_field(default_factory=set)
 
@@ -152,6 +153,19 @@ class _ComparePapersInput(BaseModel):
         return value
 
 
+class _ReadPaperInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    paper_id: str | None = Field(default=None, min_length=1)
+    pdf_path: Path | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_identifier(self) -> _ReadPaperInput:
+        if (self.paper_id is None) == (self.pdf_path is None):
+            raise ValueError("provide exactly one of paper_id or pdf_path")
+        return self
+
+
 async def run_research(
     *,
     topic: str,
@@ -236,6 +250,15 @@ def research_tools() -> list[dict[str, Any]]:
             _ListPdfsInput,
         ),
         _tool_schema(
+            "read_paper",
+            (
+                "Check whether a paper has already been read/indexed. If it is "
+                "already in the local library, returns session/report paths. If "
+                "not, returns needs_user_action instead of reading it."
+            ),
+            _ReadPaperInput,
+        ),
+        _tool_schema(
             "search_library",
             (
                 "Search the existing local paper library for papers/chunks related "
@@ -273,6 +296,9 @@ def dispatch_research_tool(req: ToolUseRequest, context: ResearchToolContext) ->
             case "list_pdfs":
                 pdf_args = _ListPdfsInput.model_validate(req.input)
                 return _ok(_list_pdfs(pdf_args, context))
+            case "read_paper":
+                read_args = _ReadPaperInput.model_validate(req.input)
+                return _ok(_read_paper(read_args, context))
             case "search_library":
                 search_args = _SearchLibraryInput.model_validate(req.input)
                 return _ok(_search_library(search_args, context))
@@ -311,6 +337,47 @@ def _list_pdfs(args: _ListPdfsInput, context: ResearchToolContext) -> dict[str, 
         for p in pdfs[: args.limit]
     ]
     return {"count": len(pdfs), "returned": len(rows), "pdfs": rows}
+
+
+def _read_paper(args: _ReadPaperInput, context: ResearchToolContext) -> dict[str, Any]:
+    paper_id = args.paper_id
+    pdf_path = args.pdf_path
+    if pdf_path is not None:
+        if not pdf_path.exists():
+            raise KnowledgeError(f"pdf_path does not exist: {pdf_path}")
+        paper_id = compute_paper_id(pdf_path)
+    assert paper_id is not None
+    _reserve_papers(context, [paper_id])
+
+    row = context.fields_store.get(paper_id)
+    pdir = paper_dir(paper_id, context.root)
+    report_path = pdir / "report.md"
+    session_path = pdir / "session.jsonl"
+    if row is not None:
+        meta = row.data.get("meta", {})
+        return {
+            "status": "already_read",
+            "paper_id": paper_id,
+            "title": meta.get("title", ""),
+            "session_path": str(session_path),
+            "report_path": str(report_path),
+            "session_exists": session_path.exists(),
+            "report_exists": report_path.exists(),
+            "paper_budget": _paper_budget_payload(context),
+        }
+
+    command = (
+        f"paper-copilot read {json.dumps(str(pdf_path))}"
+        if pdf_path is not None
+        else f"paper-copilot read <pdf-for-{paper_id}>"
+    )
+    return {
+        "status": "needs_user_action",
+        "paper_id": paper_id,
+        "reason": "paper is not indexed; this placeholder tool does not run MainAgent",
+        "next_command": command,
+        "paper_budget": _paper_budget_payload(context),
+    }
 
 
 def _search_library(args: _SearchLibraryInput, context: ResearchToolContext) -> dict[str, Any]:

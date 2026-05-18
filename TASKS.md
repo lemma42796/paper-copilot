@@ -52,9 +52,10 @@
   evidence,或继续加深 M17 chat-first tool harness。不要自动开工。
 - **M17-min 进展**(2026-05-18):新增 `paper-copilot research "<topic>"`
   的最小 bounded tool loop 骨架。当前只包装本地库工具:`list_papers` /
-  `list_pdfs` / `search_library` / `inspect_paper` / `compare_papers`,带
-  max_turns / budget / max_papers / session trace / research-report.md。它
-  不会自动读新论文、不会联网找论文、不做 RAG 升级;完整 M17 DoD 仍未满足。
+  `list_pdfs` / `read_paper`(占位,不自动跑 MainAgent) / `search_library`
+  / `inspect_paper` / `compare_papers`,带 max_turns / budget / max_papers /
+  session trace / research-report.md。它不会自动读新论文、不会联网找论文、
+  不做 RAG 升级;完整 M17 DoD 仍未满足。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
