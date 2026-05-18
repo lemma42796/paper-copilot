@@ -237,6 +237,11 @@
   “轮数”输入;前端不再向 `/chat` 传 `budget_cny` / `max_turns`,由后端默认
   harness 边界决定。界面只保留“论文数”作为用户可理解的范围控制。已跑
   `npm run typecheck` + `npm run build`;未跑真实 `/chat` / LLM。
+- **前端控制项精简 v2**(2026-05-19):按用户反馈,继续删除主界面的“论文数”
+  输入,并移除右侧 metadata 的“论文数”展示;前端不再向 `/chat` 传
+  `max_papers`。查多少篇由 agent 任务规划决定,过多时仍由后端 harness 默认
+  上限兜底停下。已跑 `npm run typecheck` + `npm run build`;未跑真实
+  `/chat` / LLM。
 - **下一个编码建议**:停止继续打磨前端细节。若时间允许,下一步要么做一次
   真实低预算 `/chat` 联调,要么转入 M18 evidence-grounded RAG 设计/实现。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录

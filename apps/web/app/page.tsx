@@ -63,7 +63,6 @@ export default function Home() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
   const [message, setMessage] = useState(DEFAULT_PROMPT);
   const [pdfDir, setPdfDir] = useState("");
-  const [maxPapers, setMaxPapers] = useState(5);
   const [health, setHealth] = useState<HealthState>("checking");
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -129,8 +128,7 @@ export default function Home() {
     try {
       const payload = {
         message: message.trim(),
-        pdf_dir: pdfDir.trim().length > 0 ? pdfDir.trim() : null,
-        max_papers: maxPapers
+        pdf_dir: pdfDir.trim().length > 0 ? pdfDir.trim() : null
       };
       let response: Response;
       try {
@@ -254,16 +252,6 @@ export default function Home() {
                 value={message}
               />
               <div className="composer-actions">
-                <div className="field-row compact">
-                  <label htmlFor="max-papers">论文数</label>
-                  <input
-                    id="max-papers"
-                    min={1}
-                    onChange={(event) => setMaxPapers(Number(event.target.value))}
-                    type="number"
-                    value={maxPapers}
-                  />
-                </div>
                 <button className="primary-button" disabled={!canSubmit} type="submit">
                   {isRunning ? "运行中" : "开始"}
                 </button>
@@ -474,7 +462,6 @@ function RunMetadata({
         <MetaItem label="停止原因" value={formatTermination(result.termination_reason)} />
         <MetaItem label="费用" value={`¥${result.cost_cny.toFixed(4)}`} />
         <MetaItem label="事件数" value={String(result.events_count)} />
-        <MetaItem label="论文数" value={formatPaperBudget(result.paper_budget)} />
         <MetaItem copyable label="会话" onCopy={onCopy} value={result.session_path} />
         <MetaItem copyable label="报告" onCopy={onCopy} value={result.report_path} />
         <MetaItem
@@ -525,15 +512,6 @@ function MetaItem({
       </div>
     </div>
   );
-}
-
-function formatPaperBudget(budget: Record<string, unknown>): string {
-  const touched = budget.touched_count;
-  const max = budget.max_papers;
-  if (typeof touched === "number" && typeof max === "number") {
-    return `${touched}/${max}`;
-  }
-  return "不可用";
 }
 
 function formatCost(cost: number | null): string {

@@ -358,10 +358,9 @@ input {
 }
 
 .composer-actions {
-  display: grid;
-  grid-template-columns: minmax(96px, 140px) minmax(180px, 1fr);
+  display: flex;
   gap: 10px;
-  align-items: end;
+  justify-content: flex-end;
 }
 
 .field-row {
@@ -720,12 +719,8 @@ dd {
     grid-template-columns: 1fr;
   }
 
-  .composer-actions {
-    grid-template-columns: 1fr;
-  }
-
   .primary-button {
-    grid-column: 1 / -1;
+    width: 100%;
   }
 
   .report-pane {
