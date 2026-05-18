@@ -147,6 +147,12 @@
   后再 synthesis。已补 mock trace 覆盖
   `read_paper -> inspect_paper -> find_related_papers -> inspect_paper ->
   compare_papers -> end_turn`;按用户要求未运行任何验证命令。
+- **M17 final evidence refs**(2026-05-18):ResearchAgent final report 现在要求
+  Evidence bullets 使用可解析引用格式 `[paper_id:field]`,字段优先来自
+  `suggested_citations` 或 `compare_papers` 输出。`run_research` 会从最终
+  markdown 中抽取引用并写入 session `final_output.evidence_refs`
+  (`paper_id` / `field` / `raw`),为后续 unsupported claim rate 统计留接口。
+  已补 mock 断言,按用户要求未运行任何验证命令。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
   M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐,planner/schema
   收敛也已快速复跑,`read_paper` 自动读已接入且已有一次最快速验收。

@@ -399,6 +399,7 @@ def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
     final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
     assert final.payload["topic"] == "sparse attention"
     assert final.payload["termination_reason"] == "end_turn"
+    assert final.payload["evidence_refs"] == []
     assert final.payload["termination_summary"]["reason"] == "end_turn"
     assert final.payload["termination_summary"]["paper_budget"]["touched_count"] == 1
     initial = next(e for e in entries if isinstance(e, Message) and e.role == "user")
@@ -572,7 +573,12 @@ def test_run_research_synthesis_path_uses_related_and_compare(tmp_path: Path) ->
                         TextBlock(
                             text=(
                                 "## Findings\n\n"
-                                "`paperA` and `paperB` share sparse-attention evidence."
+                                "`paperA` and `paperB` share sparse-attention evidence.\n\n"
+                                "## Evidence\n\n"
+                                "- `paperA` uses Sparse Attention "
+                                "[paperA:methods[0]].\n"
+                                "- `paperB` uses Windowed Sparse Attention "
+                                "[paperB:methods[0]]."
                             )
                         )
                     ],
@@ -611,6 +617,11 @@ def test_run_research_synthesis_path_uses_related_and_compare(tmp_path: Path) ->
     tool_results = [e for e in entries if isinstance(e, ToolResult)]
     assert "recommended_followups" in tool_results[1].output
     assert "methods_aligned" in tool_results[-1].output
+    final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
+    assert final.payload["evidence_refs"] == [
+        {"paper_id": "paperA", "field": "methods[0]", "raw": "[paperA:methods[0]]"},
+        {"paper_id": "paperB", "field": "methods[0]", "raw": "[paperB:methods[0]]"},
+    ]
 
 
 def test_run_research_summary_records_last_tool_error(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from dataclasses import field as dataclass_field
@@ -67,6 +68,9 @@ _REPORT_FALLBACK = (
     "## Incomplete\n\n"
     "The research loop stopped before producing a final synthesis report. "
     "Review the session trace for the last tool call and termination reason."
+)
+_EVIDENCE_REF_RE = re.compile(
+    r"\[(?P<paper_id>[A-Za-z0-9_-]{3,64}):(?P<field>[A-Za-z_][A-Za-z0-9_.\[\]-]*)\]"
 )
 
 
@@ -273,12 +277,14 @@ async def run_research(
         events=events,
         context=context,
     )
+    evidence_refs = _extract_evidence_refs(report_markdown)
 
     store.append_final_output(
         {
             "topic": topic,
             "termination_reason": termination_reason,
             "report_markdown": report_markdown,
+            "evidence_refs": evidence_refs,
             "cost": asdict(cost.snapshot()),
             "paper_budget": _paper_budget_payload(context),
             "termination_summary": asdict(termination_summary),
@@ -1125,6 +1131,24 @@ def _last_tool_error(events: list[Event]) -> dict[str, Any] | None:
     return None
 
 
+def _extract_evidence_refs(report_markdown: str) -> list[dict[str, str]]:
+    refs: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for match in _EVIDENCE_REF_RE.finditer(report_markdown):
+        key = (match.group("paper_id"), match.group("field"))
+        if key in seen:
+            continue
+        seen.add(key)
+        refs.append(
+            {
+                "paper_id": key[0],
+                "field": key[1],
+                "raw": match.group(0),
+            }
+        )
+    return refs
+
+
 def _tool_schema(name: str, description: str, model: type[BaseModel]) -> dict[str, Any]:
     return {
         "name": name,
@@ -1211,9 +1235,13 @@ def _build_initial_user_text(topic: str, context: ResearchToolContext) -> str:
         "When you have enough information, stop calling tools and write a "
         "concise Markdown report with these sections: Findings, Evidence, "
         "Gaps, Next Steps. Prefer inspect_paper evidence_summary and "
-        "suggested_citations for final-report claims. Keep every concrete claim "
-        "tied to a paper_id or explicitly mark it as a gap. The final answer "
-        "must be the report itself; keep the whole report under 900 words. "
+        "suggested_citations for final-report claims. In Evidence, each bullet "
+        "must include at least one bracket reference in exact format "
+        "`[paper_id:field]`, for example `[abc123:contributions[0].claim]`; "
+        "use field names from suggested_citations or compare_papers output. "
+        "Keep every concrete claim tied to a paper_id or explicitly mark it as "
+        "a gap. The final answer must be the report itself; keep the whole "
+        "report under 900 words. "
         "Do not include process narration such as 'I have inspected...', 'Now I "
         "will...', or 'Let me compile...'."
     )
