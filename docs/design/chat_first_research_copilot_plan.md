@@ -366,6 +366,32 @@ Current sequence after the 2026-05-18 decision:
 3. Streaming/job progress after the basic UI can submit and render results.
 4. PDF upload/path entry and richer citation/report viewer.
 
+### Intent Routing
+
+The backend should own coarse intent routing instead of letting a single LLM
+prompt freely decide the product mode. The frontend can show examples, but the
+backend remains the contract.
+
+There are two primary modes:
+
+- **knowledge_qa**: explain a paper, compare multiple papers, summarize a topic
+  from the local library, or answer research questions with evidence. This is
+  currently implemented as the `research` route.
+- **framework_composer**: given a research direction, first choose a strong
+  reproducible baseline, then find 2-3 compatible modules or tricks from local
+  papers, then propose a verifiable model framework with ablations. This is
+  currently implemented as the `idea_composer` route.
+
+Short term, a deterministic keyword router is enough. It should recognize
+explain/compare/summarize/evidence questions as `knowledge_qa`, and recognize
+baseline/module/framework/innovation/ablation requests as
+`framework_composer`. After routing, the LLM can plan tool calls inside the
+selected bounded harness, prompt, output profile, and termination rules.
+
+Longer term, a small LLM classifier may replace keyword matching, but it should
+only classify the mode. It should not be responsible for both deciding the mode
+and executing an unconstrained workflow.
+
 ### Backend Responsibilities
 
 The backend owns long-running work:

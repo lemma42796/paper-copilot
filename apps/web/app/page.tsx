@@ -60,10 +60,36 @@ type RunHistoryItem = {
   paperBudget: Record<string, unknown>;
 };
 
+type UsageTip = {
+  title: string;
+  description: string;
+  examples: string[];
+};
+
 const DEFAULT_API_URL = "http://127.0.0.1:8765";
 const DEFAULT_PROMPT =
   "基于医学图像分割，先找一个可复现 baseline，再找 2-3 个可接入模块，给出实验方案和证据引用。";
 const LIBRARY_DIR_STORAGE_KEY = "paper-copilot.libraryDir";
+const USAGE_TIPS: UsageTip[] = [
+  {
+    title: "知识库问答",
+    description: "解释单篇论文、对比多篇论文，或围绕本地论文库追问研究问题。",
+    examples: [
+      "解释 ViT 论文的核心方法、实验设置和主要局限，并给出证据引用。",
+      "对比 Transformer 和 ViT 的注意力机制演化，列出关键差异和证据引用。",
+      "围绕行人重识别的训练技巧，总结常见方法、适用场景和局限。"
+    ]
+  },
+  {
+    title: "新论文模型框架",
+    description: "根据研究方向先找 baseline，再找可接入模块，组合成可验证方案。",
+    examples: [
+      "基于医学图像分割，先找一个可复现 baseline，再找 2-3 个可接入模块，给出新模型框架、消融实验和证据引用。",
+      "针对行人重识别，先选一个 strong baseline，再从近年论文找可插拔模块，组合成可验证改进方案。",
+      "基于 diffusion model 和医学图像分割，找 baseline、模块、兼容性风险和实验计划。"
+    ]
+  }
+];
 
 export default function Home() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
@@ -76,6 +102,7 @@ export default function Home() {
   const [result, setResult] = useState<ChatResponse | null>(null);
   const [history, setHistory] = useState<RunHistoryItem[]>([]);
   const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [isInspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
 
@@ -311,9 +338,35 @@ export default function Home() {
           </button>
         </header>
 
-        <div className="content-grid">
+        <div className={`content-grid${isInspectorCollapsed ? " inspector-collapsed" : ""}`}>
           <section className="main-pane" aria-label="研究输入">
             <form className="composer" onSubmit={submitRequest}>
+              <section className="usage-guide" aria-label="使用提示">
+                <div className="usage-guide-heading">
+                  <h2>可以这样用</h2>
+                  <p>基于右侧资料库目录，输入自然语言研究任务。</p>
+                </div>
+                <div className="usage-groups">
+                  {USAGE_TIPS.map((tip) => (
+                    <section className="usage-group" key={tip.title}>
+                      <h3>{tip.title}</h3>
+                      <p>{tip.description}</p>
+                      <div className="prompt-examples">
+                        {tip.examples.map((example) => (
+                          <button
+                            className="prompt-example"
+                            key={example}
+                            onClick={() => setMessage(example)}
+                            type="button"
+                          >
+                            {example}
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              </section>
               <label htmlFor="message">研究方向或任务</label>
               <textarea
                 id="message"
@@ -363,46 +416,66 @@ export default function Home() {
             </article>
           </section>
 
-          <aside className="inspector" aria-label="运行信息">
-            <section className="settings">
-              <h2>资料库</h2>
-              <p className="settings-note">
-                指定本地论文文件夹。之后每次任务都会自动带上这个目录。
-              </p>
-              <div className="field-row">
-                <label htmlFor="pdf-dir">本地论文文件夹</label>
-                <div className="library-dir-control">
-                  <input
-                    id="pdf-dir"
-                    onChange={(event) => updateLibraryDir(event.target.value)}
-                    placeholder="/Users/a123/Documents/papers"
-                    value={pdfDir}
-                  />
-                  <button
-                    className="secondary-button"
-                    disabled={isSelectingLibraryDir}
-                    onClick={() => void selectLibraryDir()}
-                    type="button"
-                  >
-                    {isSelectingLibraryDir ? "选择中" : "选择目录"}
-                  </button>
-                </div>
-              </div>
-            </section>
+          <aside
+            className={`inspector${isInspectorCollapsed ? " collapsed" : ""}`}
+            aria-label="运行信息"
+          >
+            <div className="inspector-header">
+              {!isInspectorCollapsed ? <h2>运行信息</h2> : null}
+              <button
+                aria-label={isInspectorCollapsed ? "展开运行信息" : "折叠运行信息"}
+                className="inspector-toggle"
+                onClick={() => setInspectorCollapsed((collapsed) => !collapsed)}
+                title={isInspectorCollapsed ? "展开运行信息" : "折叠运行信息"}
+                type="button"
+              >
+                <span aria-hidden="true">{isInspectorCollapsed ? "‹" : "›"}</span>
+              </button>
+            </div>
 
-            <section className="settings">
-              <h2>本地服务</h2>
-              <div className="field-row">
-                <label htmlFor="api-url">API</label>
-                <input
-                  id="api-url"
-                  onChange={(event) => setApiUrl(event.target.value)}
-                  value={apiUrl}
-                />
-              </div>
-            </section>
+            {!isInspectorCollapsed ? (
+              <>
+                <section className="settings">
+                  <h2>资料库</h2>
+                  <p className="settings-note">
+                    指定本地论文文件夹。之后每次任务都会自动带上这个目录。
+                  </p>
+                  <div className="field-row">
+                    <label htmlFor="pdf-dir">本地论文文件夹</label>
+                    <div className="library-dir-control">
+                      <input
+                        id="pdf-dir"
+                        onChange={(event) => updateLibraryDir(event.target.value)}
+                        placeholder="/Users/a123/Documents/papers"
+                        value={pdfDir}
+                      />
+                      <button
+                        className="secondary-button"
+                        disabled={isSelectingLibraryDir}
+                        onClick={() => void selectLibraryDir()}
+                        type="button"
+                      >
+                        {isSelectingLibraryDir ? "选择中" : "选择目录"}
+                      </button>
+                    </div>
+                  </div>
+                </section>
 
-            <RunMetadata onCopy={copyWithNotice} result={result} />
+                <section className="settings">
+                  <h2>本地服务</h2>
+                  <div className="field-row">
+                    <label htmlFor="api-url">API</label>
+                    <input
+                      id="api-url"
+                      onChange={(event) => setApiUrl(event.target.value)}
+                      value={apiUrl}
+                    />
+                  </div>
+                </section>
+
+                <RunMetadata onCopy={copyWithNotice} result={result} />
+              </>
+            ) : null}
           </aside>
         </div>
       </section>

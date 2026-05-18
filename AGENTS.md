@@ -169,6 +169,9 @@ Reply with a **short** summary:
 **Do not write a marketing pitch.** Do not explain obvious things. The
 human will read the diff.
 
+Do **not** commit or push after every code change by default. Commit/push only
+when the human explicitly asks for it, e.g. "commit", "push", or "保存进度".
+
 ### Commit messages
 
 Format: `<type>: <subject>`, lower case, no period.

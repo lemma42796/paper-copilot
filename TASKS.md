@@ -256,8 +256,24 @@
   不是泛泛“缝合论文”,而是 baseline-first workflow:先找可复现 baseline,
   再找 2-3 个可接入模块/技巧,最后形成可验证的组合改进方案和消融计划。
   已把 router 关键词、ResearchAgent idea prompt、前端默认示例同步到该语义。
+- **主页使用提示与右侧折叠**(2026-05-19):前端主页新增“可以这样用”提示区,
+  分两类入口:知识库问答(解释单篇论文、多篇论文对比、研究问题询问)与
+  新论文模型框架(按研究方向先找 baseline、再找模块、组合可验证方案)。
+  每类各 3 个可点击 prompt 示例。右侧运行信息/资料库/本地服务面板已做成
+  可折叠。已跑 `npm run typecheck` + `npm run build`;未跑真实 `/chat` / LLM。
+- **后端意图分层决策**(2026-05-19):后端应自动识别两种用法,不完全交给
+  LLM 自由决定产品模式。短期用轻量 router 将请求分成 knowledge_qa
+  (当前 `research`) 与 framework_composer(当前 `idea_composer` /
+  baseline-first);识别后再让 LLM 在对应 bounded harness/prompt/tool 策略内
+  自动编排工具。后续可重命名 route,但不要让一个无约束 prompt 同时决定
+  模式和执行。
+- **协作偏好更新**(2026-05-19):不要每次改完代码就自动 commit/push。默认只
+  修改与验证,等用户明确说“commit / push / 保存进度”再提交推送。本次用户
+  明确要求保存进度并 push。
 - **下一个编码建议**:停止继续打磨前端细节。若时间允许,下一步要么做一次
-  真实低预算 `/chat` 联调,要么转入 M18 evidence-grounded RAG 设计/实现。
+  把后端 route 命名/输出 profile 从 `research`/`idea_composer` 收敛为
+  `knowledge_qa`/`framework_composer`,要么转入 M18 evidence-grounded RAG
+  设计/实现。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
