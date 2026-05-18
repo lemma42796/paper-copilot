@@ -12,6 +12,7 @@ from paper_copilot.cli.commands.read import read
 from paper_copilot.cli.commands.reindex import reindex
 from paper_copilot.cli.commands.research import research
 from paper_copilot.cli.commands.search import search_cmd
+from paper_copilot.cli.commands.serve import serve
 
 app = typer.Typer(
     name="paper-copilot",
@@ -31,6 +32,7 @@ app.command()(read)
 app.command()(doctor)
 app.command()(reindex)
 app.command()(research)
+app.command()(serve)
 app.command(name="list")(list_)
 app.command(name="search")(search_cmd)
 app.command()(compare)

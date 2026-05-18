@@ -191,6 +191,12 @@
   `report_path` / `quality_run_path` / `eval_report_path` / cost / paper budget。
   `paper-copilot research` 现在只是薄 CLI 壳负责参数校验和打印。按用户要求
   未运行任何验证命令。
+- **HTTP API 边界 v1**(2026-05-18):新增 `paper_copilot.api.http`。不加新依赖,
+  用 stdlib HTTP server 暴露 `POST /chat` 与 `GET /health`;`/chat` 接收
+  `{message,pdf_dir?,max_turns?,budget_cny?,max_papers?,root?}` 并调用
+  `handle_chat_request()`,返回 JSON 版 `ChatRunResult`。新增
+  `paper-copilot serve --host 127.0.0.1 --port 8765` 启动 API,供后续前端单
+  输入框直接对接。已补模型序列化断言,按用户要求未运行任何验证命令。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
   M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐,planner/schema
   收敛也已快速复跑,`read_paper` 自动读已接入且已有一次最快速验收。

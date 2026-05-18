@@ -24,6 +24,7 @@
 ```
 src/paper_copilot/
 ├── cli/          # 命令行入口（Typer）
+├── api/          # 前端可调用的 HTTP API 边界
 ├── chat/         # 单输入框路由与运行时入口
 ├── agents/       # Agent loop + subagents
 ├── schemas/      # Pydantic 模型，结构化输出契约
@@ -40,6 +41,12 @@ src/paper_copilot/
 用户面。接收命令（`read` / `compare` / `search` / `reindex` / `eval run` /
 `doctor`），把参数组装成 agents 的输入，流式打印结果。不含业务逻辑，
 不直接读写 session 文件。
+
+### `api/`
+前端边界层。当前 v1 用 Python stdlib HTTP server 暴露 `POST /chat` 和
+`GET /health`，不引入 FastAPI 等新依赖。API 层只做 JSON 边界校验、
+CORS/header、错误响应和调用 `chat.runtime.handle_chat_request()`；业务
+编排仍归 `chat/`。
 
 ### `chat/`
 Chat-first 产品入口层。接收裸自然语言请求，做轻量 intent routing
