@@ -6,9 +6,11 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from paper_copilot.chat.history import ChatReportItem, list_chat_reports
 from paper_copilot.chat.runtime import ChatRunResult, handle_chat_request
 from paper_copilot.shared.errors import PaperCopilotError
 
@@ -24,6 +26,13 @@ class ChatHttpRequest(BaseModel):
     root: Path | None = None
     record_quality: bool = True
     update_report: bool = True
+
+
+class ReportsHttpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    root: Path | None = None
+    limit: int = Field(default=20, ge=1, le=100)
 
 
 class ChatHttpResponse(BaseModel):
@@ -60,6 +69,44 @@ class ChatHttpResponse(BaseModel):
         )
 
 
+class ChatReportHttpItem(BaseModel):
+    id: str
+    request: str
+    route: dict[str, str]
+    report_markdown: str
+    session_path: str
+    report_path: str
+    updated_at: str
+    termination_reason: str
+    cost_cny: float | None
+    events_count: int | None
+    paper_budget: dict[str, object]
+
+    @classmethod
+    def from_item(cls, item: ChatReportItem) -> ChatReportHttpItem:
+        return cls(
+            id=item.id,
+            request=item.request,
+            route=item.route,
+            report_markdown=item.report_markdown,
+            session_path=str(item.session_path),
+            report_path=str(item.report_path),
+            updated_at=item.updated_at,
+            termination_reason=item.termination_reason,
+            cost_cny=item.cost_cny,
+            events_count=item.events_count,
+            paper_budget=item.paper_budget,
+        )
+
+
+class ChatReportsHttpResponse(BaseModel):
+    reports: list[ChatReportHttpItem]
+
+    @classmethod
+    def from_items(cls, items: list[ChatReportItem]) -> ChatReportsHttpResponse:
+        return cls(reports=[ChatReportHttpItem.from_item(item) for item in items])
+
+
 def serve_http_api(host: str = "127.0.0.1", port: int = 8765) -> None:
     server = ThreadingHTTPServer((host, port), _ChatHandler)
     server.serve_forever()
@@ -72,10 +119,22 @@ class _ChatHandler(BaseHTTPRequestHandler):
         self._write_json(HTTPStatus.NO_CONTENT, None)
 
     def do_GET(self) -> None:
-        if self.path == "/health":
+        parsed = urlparse(self.path)
+        if parsed.path == "/health":
             self._write_json(HTTPStatus.OK, {"status": "ok"})
             return
-        self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"unknown path: {self.path}")
+        if parsed.path == "/reports":
+            try:
+                request = ReportsHttpRequest.model_validate(_single_query_values(parsed.query))
+                response = ChatReportsHttpResponse.from_items(
+                    list_chat_reports(root=request.root, limit=request.limit)
+                )
+            except ValidationError as exc:
+                self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
+                return
+            self._write_json(HTTPStatus.OK, response.model_dump(mode="json"))
+            return
+        self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"unknown path: {parsed.path}")
 
     def do_POST(self) -> None:
         if self.path != "/chat":
@@ -144,3 +203,7 @@ class _ChatHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         return
+
+
+def _single_query_values(query: str) -> dict[str, str]:
+    return {key: values[-1] for key, values in parse_qs(query).items() if values}

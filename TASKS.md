@@ -210,11 +210,17 @@
   侧边栏/工具栏/浅色毛玻璃层次,不做登录/云同步/复杂 dashboard。已跑
   `npm run typecheck` + `npm run build`;`npm install` 报 2 个 moderate audit
   项,未自动 `npm audit fix --force`。
-- **下一个编码建议**:做一次真实联调:同时启动
-  `paper-copilot serve --host 127.0.0.1 --port 8765` 和
-  `cd apps/web && npm run dev`,用已有本地库跑一条低预算 `/chat` 请求,观察
-  report/metadata/quality 路径是否在 UI 中稳定展示。之后再补后端支持的历史
-  report 列表,替换当前前端内存 history。
+- **历史报告列表 v1**(2026-05-18):按用户“赶时间,不跑真实 `/chat`”的要求,
+  做了无 LLM 调用切片。新增 `GET /reports` 扫描
+  `<root>/papers/*/research-report.md` + 对应 `session.jsonl`,返回 request、
+  route、markdown、session/report path、cost、events、paper_budget。前端左侧
+  report list 启动时读取该接口,点击历史项直接打开已落盘 markdown,不触发
+  新 agent run。已跑 `uv run pytest tests/api/test_http.py`、针对新增 Python
+  文件的 `uv run mypy ...`、`npm run typecheck`、`npm run build`;未跑真实
+  `/chat` / LLM。
+- **下一个编码建议**:修 UI 入口文案,把“研究问题”改成更面向普通用户的
+  “你想研究什么?”,并继续做报告阅读体验:历史报告选中态、报告路径复制、
+  markdown evidence refs 可点击/高亮。真实低预算 `/chat` 联调仍然排在之后。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。

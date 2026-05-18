@@ -24,12 +24,36 @@ type ChatResponse = {
   paper_budget: Record<string, unknown>;
 };
 
+type ReportHistoryResponse = {
+  reports: ReportHistoryEntry[];
+};
+
+type ReportHistoryEntry = {
+  id: string;
+  request: string;
+  route: ChatRoute;
+  report_markdown: string;
+  session_path: string;
+  report_path: string;
+  updated_at: string;
+  termination_reason: string;
+  cost_cny: number | null;
+  events_count: number | null;
+  paper_budget: Record<string, unknown>;
+};
+
 type RunHistoryItem = {
   id: string;
   request: string;
   route: string;
-  cost: number;
+  cost: number | null;
   reportPath: string;
+  sessionPath: string;
+  reportMarkdown: string;
+  updatedAt: string;
+  terminationReason: string;
+  eventsCount: number | null;
+  paperBudget: Record<string, unknown>;
 };
 
 const DEFAULT_API_URL = "http://127.0.0.1:8765";
@@ -64,6 +88,23 @@ export default function Home() {
   useEffect(() => {
     void checkHealth();
   }, [normalizedApiUrl]);
+
+  useEffect(() => {
+    void loadReports();
+  }, [normalizedApiUrl]);
+
+  async function loadReports() {
+    try {
+      const response = await fetch(`${normalizedApiUrl}/reports`, { method: "GET" });
+      if (!response.ok) {
+        return;
+      }
+      const payload = (await response.json()) as ReportHistoryResponse;
+      setHistory(payload.reports.map(historyItemFromReport));
+    } catch {
+      return;
+    }
+  }
 
   async function submitRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -105,13 +146,7 @@ export default function Home() {
       const chatResult = raw as ChatResponse;
       setResult(chatResult);
       setHistory((items) => [
-        {
-          id: chatResult.session_path,
-          request: chatResult.request,
-          route: chatResult.route.kind ?? "research",
-          cost: chatResult.cost_cny,
-          reportPath: chatResult.report_path
-        },
+        historyItemFromChatResult(chatResult),
         ...items.filter((item) => item.id !== chatResult.session_path)
       ]);
     } catch (exc) {
@@ -119,6 +154,12 @@ export default function Home() {
     } finally {
       setIsRunning(false);
     }
+  }
+
+  function selectHistoryItem(item: RunHistoryItem) {
+    setError(null);
+    setMessage(item.request);
+    setResult(chatResponseFromHistoryItem(item));
   }
 
   return (
@@ -149,18 +190,18 @@ export default function Home() {
           <nav className="history-list" aria-label="报告列表">
             <p className="nav-label">报告</p>
             {history.length === 0 ? (
-              <p className="empty-history">暂无本地运行记录。</p>
+              <p className="empty-history">暂无历史报告。</p>
             ) : (
               history.map((item) => (
                 <button
                   className="history-item"
                   key={item.id}
-                  onClick={() => setMessage(item.request)}
+                  onClick={() => selectHistoryItem(item)}
                   type="button"
                 >
                   <span>{item.request}</span>
                   <small>
-                    {formatRoute(item.route)} · ¥{item.cost.toFixed(4)}
+                    {formatRoute(item.route)} · {formatCost(item.cost)}
                   </small>
                 </button>
               ))
@@ -283,6 +324,54 @@ function healthLabel(health: HealthState): string {
   }
 }
 
+function historyItemFromChatResult(result: ChatResponse): RunHistoryItem {
+  return {
+    id: result.session_path,
+    request: result.request,
+    route: result.route.kind ?? "research",
+    cost: result.cost_cny,
+    reportPath: result.report_path,
+    sessionPath: result.session_path,
+    reportMarkdown: result.report_markdown,
+    updatedAt: new Date().toISOString(),
+    terminationReason: result.termination_reason,
+    eventsCount: result.events_count,
+    paperBudget: result.paper_budget
+  };
+}
+
+function historyItemFromReport(entry: ReportHistoryEntry): RunHistoryItem {
+  return {
+    id: entry.id,
+    request: entry.request,
+    route: entry.route.kind ?? "research",
+    cost: entry.cost_cny,
+    reportPath: entry.report_path,
+    sessionPath: entry.session_path,
+    reportMarkdown: entry.report_markdown,
+    updatedAt: entry.updated_at,
+    terminationReason: entry.termination_reason,
+    eventsCount: entry.events_count,
+    paperBudget: entry.paper_budget
+  };
+}
+
+function chatResponseFromHistoryItem(item: RunHistoryItem): ChatResponse {
+  return {
+    request: item.request,
+    route: { kind: item.route },
+    report_markdown: item.reportMarkdown,
+    session_path: item.sessionPath,
+    report_path: item.reportPath,
+    quality_run_path: null,
+    eval_report_path: null,
+    termination_reason: item.terminationReason,
+    cost_cny: item.cost ?? 0,
+    events_count: item.eventsCount ?? 0,
+    paper_budget: item.paperBudget
+  };
+}
+
 function RunMetadata({ result }: { result: ChatResponse | null }) {
   if (result === null) {
     return (
@@ -332,6 +421,10 @@ function formatPaperBudget(budget: Record<string, unknown>): string {
     return `${touched}/${max}`;
   }
   return "不可用";
+}
+
+function formatCost(cost: number | null): string {
+  return cost === null ? "费用未知" : `¥${cost.toFixed(4)}`;
 }
 
 function formatRoute(route: string): string {
