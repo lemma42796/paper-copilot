@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 
 type HealthState = "checking" | "online" | "offline";
 
@@ -72,6 +72,7 @@ export default function Home() {
   const [result, setResult] = useState<ChatResponse | null>(null);
   const [history, setHistory] = useState<RunHistoryItem[]>([]);
   const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
 
   const normalizedApiUrl = useMemo(() => apiUrl.replace(/\/+$/, ""), [apiUrl]);
 
@@ -145,6 +146,7 @@ export default function Home() {
 
       const chatResult = raw as ChatResponse;
       setResult(chatResult);
+      setSelectedReportId(chatResult.session_path);
       setHistory((items) => [
         historyItemFromChatResult(chatResult),
         ...items.filter((item) => item.id !== chatResult.session_path)
@@ -159,6 +161,7 @@ export default function Home() {
   function selectHistoryItem(item: RunHistoryItem) {
     setError(null);
     setMessage(item.request);
+    setSelectedReportId(item.id);
     setResult(chatResponseFromHistoryItem(item));
   }
 
@@ -194,7 +197,7 @@ export default function Home() {
             ) : (
               history.map((item) => (
                 <button
-                  className="history-item"
+                  className={`history-item${item.id === selectedReportId ? " selected" : ""}`}
                   key={item.id}
                   onClick={() => selectHistoryItem(item)}
                   type="button"
@@ -224,7 +227,7 @@ export default function Home() {
         <div className="content-grid">
           <section className="main-pane" aria-label="研究输入">
             <form className="composer" onSubmit={submitRequest}>
-              <label htmlFor="message">研究问题</label>
+              <label htmlFor="message">你想研究什么？</label>
               <textarea
                 id="message"
                 onChange={(event) => setMessage(event.target.value)}
@@ -342,7 +345,7 @@ function historyItemFromChatResult(result: ChatResponse): RunHistoryItem {
 
 function historyItemFromReport(entry: ReportHistoryEntry): RunHistoryItem {
   return {
-    id: entry.id,
+    id: entry.session_path,
     request: entry.request,
     route: entry.route.kind ?? "research",
     cost: entry.cost_cny,
@@ -396,20 +399,42 @@ function RunMetadata({ result }: { result: ChatResponse | null }) {
         <MetaItem label="费用" value={`¥${result.cost_cny.toFixed(4)}`} />
         <MetaItem label="事件数" value={String(result.events_count)} />
         <MetaItem label="论文数" value={formatPaperBudget(result.paper_budget)} />
-        <MetaItem label="会话" value={result.session_path} />
-        <MetaItem label="报告" value={result.report_path} />
-        <MetaItem label="质量记录" value={result.quality_run_path ?? "未记录"} />
-        <MetaItem label="评估报告" value={result.eval_report_path ?? "未更新"} />
+        <MetaItem copyable label="会话" value={result.session_path} />
+        <MetaItem copyable label="报告" value={result.report_path} />
+        <MetaItem copyable label="质量记录" value={result.quality_run_path ?? "未记录"} />
+        <MetaItem copyable label="评估报告" value={result.eval_report_path ?? "未更新"} />
       </dl>
     </section>
   );
 }
 
-function MetaItem({ label, value }: { label: string; value: string }) {
+function MetaItem({
+  copyable = false,
+  label,
+  value
+}: {
+  copyable?: boolean;
+  label: string;
+  value: string;
+}) {
+  const canCopy = copyable && value !== "未记录" && value !== "未更新";
+
   return (
-    <div>
+    <div className="metadata-item">
       <dt>{label}</dt>
-      <dd title={value}>{value}</dd>
+      <div className="metadata-value-row">
+        <dd title={value}>{value}</dd>
+        {canCopy ? (
+          <button
+            className="copy-button"
+            onClick={() => void copyText(value)}
+            title={`复制${label}路径`}
+            type="button"
+          >
+            复制
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -460,17 +485,17 @@ function MarkdownReport({ markdown }: { markdown: string }) {
         switch (block.kind) {
           case "heading":
             return block.level === 1 ? (
-              <h1 key={index}>{block.text}</h1>
+              <h1 key={index}>{renderInlineText(block.text)}</h1>
             ) : block.level === 2 ? (
-              <h2 key={index}>{block.text}</h2>
+              <h2 key={index}>{renderInlineText(block.text)}</h2>
             ) : (
-              <h3 key={index}>{block.text}</h3>
+              <h3 key={index}>{renderInlineText(block.text)}</h3>
             );
           case "list":
             return (
               <ul key={index}>
                 {block.items.map((item, itemIndex) => (
-                  <li key={itemIndex}>{item}</li>
+                  <li key={itemIndex}>{renderInlineText(item)}</li>
                 ))}
               </ul>
             );
@@ -483,11 +508,50 @@ function MarkdownReport({ markdown }: { markdown: string }) {
           case "rule":
             return <hr key={index} />;
           case "paragraph":
-            return <p key={index}>{block.text}</p>;
+            return <p key={index}>{renderInlineText(block.text)}</p>;
         }
       })}
     </div>
   );
+}
+
+function renderInlineText(text: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const refPattern = /(\[[A-Za-z0-9_-]+:[^\]\s][^\]]*\])/g;
+  let lastIndex = 0;
+  for (const match of text.matchAll(refPattern)) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    const ref = match[0];
+    parts.push(
+      <button
+        className="evidence-ref"
+        key={`${ref}-${match.index}`}
+        onClick={() => void copyText(ref)}
+        title="复制证据引用"
+        type="button"
+      >
+        {ref}
+      </button>
+    );
+    lastIndex = match.index + ref.length;
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+  return parts.length > 0 ? parts : [text];
+}
+
+async function copyText(value: string) {
+  if (!navigator.clipboard) {
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    return;
+  }
 }
 
 type MarkdownBlock =

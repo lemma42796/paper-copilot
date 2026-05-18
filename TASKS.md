@@ -218,9 +218,14 @@
   新 agent run。已跑 `uv run pytest tests/api/test_http.py`、针对新增 Python
   文件的 `uv run mypy ...`、`npm run typecheck`、`npm run build`;未跑真实
   `/chat` / LLM。
-- **下一个编码建议**:修 UI 入口文案,把“研究问题”改成更面向普通用户的
-  “你想研究什么?”,并继续做报告阅读体验:历史报告选中态、报告路径复制、
-  markdown evidence refs 可点击/高亮。真实低预算 `/chat` 联调仍然排在之后。
+- **报告阅读体验 v1**(2026-05-18):无 LLM 调用前端切片。入口 label 从
+  “研究问题”改成“你想研究什么?”;历史报告列表增加选中态;右侧 metadata 的
+  session/report/quality/eval 路径提供复制按钮;Markdown 渲染会识别
+  `[paper_id:field]` 格式 evidence refs,高亮为可点击复制的小标签。已跑
+  `npm run typecheck` + `npm run build`;未跑真实 `/chat` / LLM。
+- **下一个编码建议**:继续前端无 LLM 收敛:增加“复制成功”轻提示、报告区
+  顶部工具栏(打开/复制报告路径、刷新历史)、以及更清晰的空状态/错误状态。
+  真实低预算 `/chat` 联调仍然排在之后。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
