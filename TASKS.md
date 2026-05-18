@@ -89,10 +89,22 @@
   输出不能带过程性话术,并补充少重复 list、何时用 compare/find_related 的工具
   选择规则。已跑相关 `ruff` / `mypy` / `tests/agents/test_research.py` +
   `tests/test_smoke.py`,未跑全量 pytest,也未再做 LLM 实跑。
+- **M17 planner/schema 复跑 1**(2026-05-18):复跑视觉架构 topic 时第一次用
+  新默认 16 turns 进入最终报告阶段,但 LLM 返回 `stop_reason=max_tokens`,
+  CLI 抛 `AgentError`,session:
+  `/Users/a123/.paper-copilot/papers/research-20260518T092628989382Z-495725e7/session.jsonl`。
+  随后做最小修正:给 `LoopConfig` 增加可选 `max_tokens`,只让 ResearchAgent
+  传 3000;prompt 同时要求最终 report `< 900 words`。重跑同命令成功
+  `end_turn`,cost ¥0.0879,events=23,papers=5/5,last_tool_error=None,报告
+  直接从 `Findings` 开始,无过程性话术;工具路径为 `list_papers x1` +
+  `inspect_paper`/`compare_papers`,没有无谓 year-filter list。session:
+  `/Users/a123/.paper-copilot/papers/research-20260518T092927821092Z-495725e7/session.jsonl`。
+  已跑相关 `ruff` / `mypy` / `tests/agents/test_loop.py` +
+  `tests/agents/test_research.py` + `tests/test_smoke.py`,未跑全量 pytest。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
   M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐;候选下一步:
-  对 planner/schema 收敛做一次 LLM 快速复跑,或把 `read_paper` 占位升级成
-  受控自动 read。不要自动开工,等明确指令。
+  把 `read_paper` 占位升级成受控自动 read,或继续做第 4 个不同类型 topic
+  验证 find_related/search_library 路径。不要自动开工,等明确指令。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。

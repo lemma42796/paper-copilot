@@ -140,6 +140,7 @@ type Event = AssistantMessage | ToolUse | ToolResult | Terminated
 class LoopConfig:
     max_turns: int
     max_budget_cny: float
+    max_tokens: int | None = None
 
 
 # ---- Main loop -----------------------------------------------------------
@@ -185,7 +186,12 @@ async def run_agent_loop(
                 yield Terminated(reason="max_budget", cost=cost.snapshot())
                 return
 
-            response = await llm.generate(history, tools, system=system)
+            response = await llm.generate(
+                history,
+                tools,
+                system=system,
+                max_tokens=config.max_tokens,
+            )
             if cost is not None and response.usage is not None:
                 cost.record(response.usage)
 

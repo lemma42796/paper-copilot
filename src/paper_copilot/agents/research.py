@@ -59,6 +59,7 @@ _MAX_LIST_LIMIT = 20
 _MAX_SEARCH_K = 10
 _MAX_INSPECT_ITEMS = 8
 _MAX_RELATED_K = 10
+_RESEARCH_MAX_TOKENS = 3000
 _REPORT_FALLBACK = (
     "## Incomplete\n\n"
     "The research loop stopped before producing a final synthesis report. "
@@ -228,7 +229,11 @@ async def run_research(
     async for event in run_agent_loop(
         messages=[{"role": "user", "content": initial_user_text}],
         tools=research_tools(),
-        config=LoopConfig(max_turns=max_turns, max_budget_cny=max_budget_cny),
+        config=LoopConfig(
+            max_turns=max_turns,
+            max_budget_cny=max_budget_cny,
+            max_tokens=_RESEARCH_MAX_TOKENS,
+        ),
         llm=llm,
         dispatch_tool=dispatch,
         cost=cost,
@@ -792,7 +797,8 @@ def _build_initial_user_text(topic: str, context: ResearchToolContext) -> str:
         "concise Markdown report with these sections: Findings, Evidence, "
         "Gaps, Next Steps. Keep every concrete claim tied to a paper_id or "
         "explicitly mark it as a gap. The final answer must be the report itself; "
-        "do not include process narration such as 'I have inspected...', 'Now I "
+        "keep the whole report under 900 words. "
+        "Do not include process narration such as 'I have inspected...', 'Now I "
         "will...', or 'Let me compile...'."
     )
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
+from typing import cast
 
 from paper_copilot.agents.loop import (
     Event,
@@ -183,13 +185,16 @@ def test_cancel_midflight_yields_terminated() -> None:
         return ToolResultData(output="ok")
 
     async def run() -> list[Event]:
-        gen = run_agent_loop(
-            messages=[{"role": "user", "content": "go"}],
-            tools=[],
-            config=cfg,
-            llm=llm,
-            dispatch_tool=dispatch_tool,
-            cost=None,
+        gen = cast(
+            AsyncGenerator[Event, None],
+            run_agent_loop(
+                messages=[{"role": "user", "content": "go"}],
+                tools=[],
+                config=cfg,
+                llm=llm,
+                dispatch_tool=dispatch_tool,
+                cost=None,
+            ),
         )
         collected: list[Event] = []
         collected.append(await gen.__anext__())
@@ -325,6 +330,47 @@ def test_tool_use_history_is_serialized_for_next_llm_call() -> None:
         {"type": "tool_use", "id": "t1", "name": "search", "input": {"q": "x"}}
     ]
 
+    term = events[-1]
+    assert isinstance(term, Terminated)
+    assert term.reason == "end_turn"
+
+
+def test_loop_config_passes_max_tokens_to_llm() -> None:
+    class CapturingLLM:
+        def __init__(self) -> None:
+            self.max_tokens: int | None = None
+
+        async def generate(
+            self,
+            messages: list[dict[str, object]],
+            tools: list[dict[str, object]],
+            tool_choice: dict[str, object] | None = None,
+            system: str | list[dict[str, object]] | None = None,
+            max_tokens: int | None = None,
+        ) -> MockResponse:
+            self.max_tokens = max_tokens
+            return MockResponse(content=[TextBlock(text="done")], stop_reason="end_turn")
+
+    llm = CapturingLLM()
+
+    async def dispatch_tool(req: ToolUseRequest) -> ToolResultData:
+        raise AssertionError("dispatch_tool must not be called on end_turn path")
+
+    async def run() -> list[Event]:
+        collected: list[Event] = []
+        async for event in run_agent_loop(
+            messages=[{"role": "user", "content": "go"}],
+            tools=[],
+            config=LoopConfig(max_turns=3, max_budget_cny=10.0, max_tokens=3000),
+            llm=llm,
+            dispatch_tool=dispatch_tool,
+        ):
+            collected.append(event)
+        return collected
+
+    events = asyncio.run(run())
+
+    assert llm.max_tokens == 3000
     term = events[-1]
     assert isinstance(term, Terminated)
     assert term.reason == "end_turn"
