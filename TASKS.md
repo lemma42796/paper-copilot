@@ -73,10 +73,21 @@
   `list_papers -> inspect_paper x3 -> final report`,没有触发 compare/find
   related。report 可读,但开头仍带一句过程性话术。session:
   `/Users/a123/.paper-copilot/papers/research-20260518T091259404664Z-e96c8456/session.jsonl`。
+- **M17 人工试跑 3/3**(2026-05-18):topic=`compare the evolution of image
+  recognition architectures from LeNet to AlexNet, Inception, ResNet, and ViT`。
+  `--max-turns 8 --max-papers 5 --budget-cny 0.2` 能正确选中 5 篇并调用
+  compare,但停在 max_turns,只生成一句占位报告。重跑 `--max-turns 10
+  --max-papers 5 --budget-cny 0.2` 成功 `end_turn`,cost ¥0.0960,events=29,
+  papers=5/5,last_tool_error=None。Planner 选中 LeNet/AlexNet/Inception/
+  ResNet/ViT,工具路径包含 `list_papers` 多次、`inspect_paper x5`;未触发
+  find_related。发现的问题:5 篇任务 8 turns 偏紧;planner 会输出过程性话术;
+  `list_papers.year` 传过字符串但 Pydantic 容忍转换。session:
+  `/Users/a123/.paper-copilot/papers/research-20260518T091657508790Z-495725e7/session.jsonl`。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
-  M19 Composer / M20 UI。候选下一步:继续做第 3/3 个固定 topic 人工验收,
-  收敛 planner prompt/tool schema,或把 `read_paper` 占位升级成受控自动
-  read。不要自动开工,等明确指令。
+  M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐;候选下一步:
+  收敛 planner prompt/tool schema(去过程性话术、降低无谓 list、明确何时用
+  compare/find_related、必要时严格化 tool input),或把 `read_paper` 占位升级
+  成受控自动 read。不要自动开工,等明确指令。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
