@@ -15,7 +15,7 @@ from paper_copilot.agents.llm_client import LLMClient
 from paper_copilot.agents.research import ResearchToolContext, run_research
 from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
-from paper_copilot.knowledge.meta import require_match
+from paper_copilot.knowledge.meta import IndexMeta, require_match, write_meta
 from paper_copilot.session.paths import default_root
 from paper_copilot.shared.embedder import EMBEDDING_DIM, MODEL_NAME, Embedder
 from paper_copilot.shared.errors import KnowledgeError
@@ -33,7 +33,7 @@ def research(
     ] = 16,
     budget_cny: Annotated[
         float,
-        typer.Option("--budget-cny", help="Maximum LLM spend for the planner loop."),
+        typer.Option("--budget-cny", help="Maximum LLM spend for planner and reads."),
     ] = 2.0,
     max_papers: Annotated[
         int,
@@ -45,6 +45,8 @@ def research(
     ] = None,
 ) -> None:
     """Run a bounded research tool loop over the local library."""
+    if pdf_dir is not None:
+        pdf_dir = pdf_dir.resolve()
     if max_turns <= 0:
         raise typer.BadParameter("--max-turns must be positive")
     if budget_cny <= 0:
@@ -68,7 +70,7 @@ async def _research_async(
     fields_db = home / "fields.db"
     embeddings_db = home / "embeddings.db"
     meta_path = home / "embeddings_meta.json"
-    if not fields_db.exists():
+    if not fields_db.exists() and pdf_dir is None:
         typer.echo(
             f"index missing at {fields_db}. Run `paper-copilot reindex --pdf-dir <dir>` first.",
             err=True,
@@ -80,9 +82,14 @@ async def _research_async(
     with ExitStack() as stack:
         fields_store = stack.enter_context(FieldsStore.open(fields_db))
         embeddings_store: EmbeddingsStore | None = None
-        if embeddings_db.exists():
+        if pdf_dir is not None or embeddings_db.exists():
             try:
-                require_match(meta_path, embedding_model=MODEL_NAME, embedding_dim=EMBEDDING_DIM)
+                if embeddings_db.exists():
+                    require_match(
+                        meta_path,
+                        embedding_model=MODEL_NAME,
+                        embedding_dim=EMBEDDING_DIM,
+                    )
             except KnowledgeError as exc:
                 typer.echo(str(exc), err=True)
                 raise typer.Exit(code=2) from exc
@@ -92,20 +99,34 @@ async def _research_async(
             embeddings_store = stack.enter_context(
                 EmbeddingsStore.open(embeddings_db, dim=EMBEDDING_DIM)
             )
+            if not meta_path.exists():
+                write_meta(
+                    meta_path,
+                    IndexMeta.fresh(
+                        embedding_model=MODEL_NAME,
+                        embedding_dim=EMBEDDING_DIM,
+                    ).with_counts(
+                        n_papers=embeddings_store.count_papers(),
+                        n_chunks=embeddings_store.count_chunks(),
+                    ),
+                )
 
+        client = LLMClient()
         context = ResearchToolContext(
             fields_store=fields_store,
             embeddings_store=embeddings_store,
             encode_query=(
                 (lambda query: embedder.encode([query])[0]) if embedder is not None else None
             ),
+            embedder=embedder,
             pdf_dir=pdf_dir,
             root=home,
             max_papers=max_papers,
         )
         run = await run_research(
             topic=topic,
-            llm=LLMClient(),
+            llm=client,
+            read_llm=client,
             context=context,
             root=home,
             max_turns=max_turns,

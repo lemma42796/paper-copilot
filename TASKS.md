@@ -47,14 +47,16 @@
   Actions(避免 push 邮件噪音),不做可复现 smoke eval。Skim/Deep/Related
   的结构化 tool 输出校验失败会自动 retry 一次,失败 trace 写入 session。
 - **M17-min 进展**(2026-05-18):新增 `paper-copilot research "<topic>"`
-  的最小 bounded tool loop 骨架。当前只包装本地库工具:`list_papers` /
-  `list_pdfs` / `read_paper`(占位,不自动跑 MainAgent) / `search_library`
-  / `inspect_paper` / `compare_papers` / `find_related_papers`,带 max_turns /
-  budget / max_papers / termination summary / session trace /
-  research-report.md。`find_related_papers` 是 0-LLM tool:优先读
+  的最小 bounded tool loop 骨架。当前包装本地库工具:`list_papers` /
+  `list_pdfs` / `read_paper` / `search_library` / `inspect_paper` /
+  `compare_papers` / `find_related_papers`,带 max_turns / budget /
+  max_papers / termination summary / session trace / research-report.md。
+  `read_paper` 已从占位升级为受控自动读:只读取 `--pdf-dir` 下本地 PDF,
+  可由 `pdf_path` 或匹配到本地 PDF 的 `paper_id` 触发,成功后写单篇
+  session/report 并同步 fields + embeddings + graph,worker cost 会计入
+  research 总 budget。`find_related_papers` 是 0-LLM tool:优先读
   `graph/cross-paper-links.jsonl`,再用 fields.db 里的 `cross_paper_links`
-  补充。它不会自动读新论文、不会联网找论文、不做 RAG 升级;完整 M17 DoD
-  仍未满足。
+  补充。它不会联网找论文、不做 RAG 升级;完整 M17 DoD 仍未满足。
 - **当前验证策略**:用户最新明确指令(2026-05-18):"不再做测试了"。后续 M17
   实现任务不要主动跑 pytest / LLM 试跑 / 全量门禁;必要时只做最小静态检查,
   并在回复里明确标注"未测试"。全量三件套在 `b4e4d79` 前跑过一次,之后未再
@@ -102,13 +104,48 @@
   `/Users/a123/.paper-copilot/papers/research-20260518T092927821092Z-495725e7/session.jsonl`。
   已跑相关 `ruff` / `mypy` / `tests/agents/test_loop.py` +
   `tests/agents/test_research.py` + `tests/test_smoke.py`,未跑全量 pytest。
+- **M17 read_paper 自动读实现**(2026-05-18):公共 read pipeline 已抽到
+  `agents/read_pipeline.py`,`paper-copilot read` 与 ResearchAgent tool 共用。
+  ResearchAgent 的 `read_paper` 在 async dispatch 中会校验 PDF 位于
+  `--pdf-dir` 下、受 `max_papers` 限制、复用同一个 `LLMClient`,并把
+  Skim/Deep/Related worker cost 合进 research 总 cost;若没有本地 PDF /
+  session 目录已存在但未入库 / embedding handles 不可用,返回
+  `needs_user_action` 而不是编结论。按用户最新指令,本次没有跑 pytest /
+  全量门禁;只跑了 touched-file ruff。
+- **M17 `--pdf-dir` 快速验收 1**(2026-05-18):用户要求"最快速跑"后,
+  用最小真论文 PDF
+  `/Users/a123/Documents/reid/顶刊顶会参考文献/Eliminating_Background-Bias_for_CVPR_2018_paper.pdf`
+  跑 `research`。参数:`--max-turns 4 --max-papers 1 --budget-cny 0.25`。
+  结果成功 `end_turn`,cost ¥0.1147,events=11,papers=1/1。`read_paper`
+  返回 `status=read`,paper_id=`1f65cbc78943`,indexed chunks=92,report
+  只汇报 read 成功。RelatedAgent 触发过一次 temporal directional link
+  drop warning(2017 新论文指向 2019 候选的 `compares_against` 被丢掉),
+  属于预期防错。session:
+  `/Users/a123/.paper-copilot/papers/research-20260518T113724081683Z-426259ec/session.jsonl`。
+- **M17 read→inspect 提示修正**(2026-05-18):快速验收后发现 planner/report
+  容易把 `max_papers=1` 误解成 read 后不能再 inspect 同一篇。已补
+  `read_paper` payload:`can_inspect_same_paper=true` + `recommended_next_tool`
+  指向 `inspect_paper`,并在 ResearchAgent 初始指令里明确:限制的是唯一
+  paper_id,同一 paper_id 的 inspect 不消耗新的 slot。
+- **M17 read→inspect 默认路径收敛**(2026-05-18):ResearchAgent tool schema
+  和初始指令进一步明确:正常 research task 中 `read_paper` 返回
+  `read`/`already_read` 后,默认下一步应 `inspect_paper` 同一 paper_id,
+  再写 final report,以便 report 引用 meta/contributions/methods/experiments
+  而不只是汇报 read 成功。已补 mock tool-loop 测试覆盖
+  `read_paper -> inspect_paper -> end_turn`,未跑 pytest/LLM。
+- **M17 inspect evidence payload**(2026-05-18):`inspect_paper` 保留原始字段,
+  同时新增 `evidence_summary` 与 `suggested_citations`。summary 直接给
+  title/year/venue、top_contributions、top_methods、key_experiments、
+  top_limitations;citations 每条带 `paper_id` / `field` / `text`,方便 final
+  report 稳定引用结构化证据。ResearchAgent 初始指令也改为优先使用这两层
+  写 Findings/Evidence。按用户要求,本次不跑任何验证命令。
 - **下一个编码建议**:继续 M17 tool harness 的小步增强,不要开 M18 RAG /
   M19 Composer / M20 UI。3 个固定 topic 人工验收已补齐,planner/schema
-  收敛也已快速复跑。**下一步优先**:把 `read_paper` 占位升级成受控自动
-  read。范围建议:只支持本地 `--pdf-dir` 下的 PDF;受 `max_papers` /
-  `budget_cny` 约束;成功后写 session/report 并同步 fields + embeddings;
-  失败时返回清晰 `needs_user_action`/failure payload,不编结论。按用户最新
-  指令,实现后不要主动测试,只说明未测试。不要自动开 M18/M19/M20。
+  收敛也已快速复跑,`read_paper` 自动读已接入且已有一次最快速验收。
+  **下一步优先**:做一次稍真实的 research task 验收,要求它 read 1 篇新
+  PDF 后 inspect/compare 既有库论文并产出可用 synthesis;或者先小范围增强
+  最终 research report 的 evidence payload 引用稳定性。不要自动开
+  M18/M19/M20。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
@@ -986,7 +1023,7 @@ paper-copilot research "compare attention mechanisms for vision-language models"
 
 - [ ] `paper-copilot research "<topic>" --pdf-dir <dir>` 能端到端跑通
       (M17-min 已有 CLI + bounded loop + 本地库工具骨架 + find_related_papers;
-      尚未做人类验收和自动 read_paper)
+      `read_paper` 自动读已接入,尚未做人类端到端验收)
 - [ ] 至少 3 个固定研究任务有人工验收记录
 - [ ] session trace 能还原每一步工具调用和决策
 - [ ] max_turns / max_budget / max_papers 都能触发并给出清晰终止原因

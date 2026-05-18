@@ -118,6 +118,14 @@ def test_dispatch_research_tools_list_search_and_inspect(tmp_path: Path) -> None
         data = json.loads(inspected.output)
         assert data["meta"]["title"] == "Paper A"
         assert data["methods"][0]["name"] == "Sparse Attention"
+        assert data["evidence_summary"]["title"] == "Paper A"
+        assert data["evidence_summary"]["top_contributions"][0]["text"] == (
+            "introduces sparse attention"
+        )
+        assert data["evidence_summary"]["top_methods"][0]["name"] == "Sparse Attention"
+        assert data["suggested_citations"][0]["field"] == "meta.title"
+        assert data["suggested_citations"][1]["paper_id"] == "paperA"
+        assert data["suggested_citations"][2]["field"] == "methods[0]"
 
 
 def test_dispatch_rejects_string_numeric_inputs(tmp_path: Path) -> None:
@@ -287,6 +295,9 @@ def test_dispatch_read_paper_reports_existing_index_entry(tmp_path: Path) -> Non
     assert data["paper_id"] == "paperA"
     assert data["report_exists"] is True
     assert data["session_exists"] is True
+    assert data["can_inspect_same_paper"] is True
+    assert data["recommended_next_tool"]["name"] == "inspect_paper"
+    assert data["recommended_next_tool"]["input"]["paper_id"] == "paperA"
     assert data["paper_budget"]["touched_paper_ids"] == ["paperA"]
 
 
@@ -294,7 +305,12 @@ def test_dispatch_read_paper_needs_user_action_for_unread_pdf(tmp_path: Path) ->
     pdf_path = tmp_path / "paper.pdf"
     pdf_path.write_bytes(b"%PDF fake")
     with FieldsStore.open(tmp_path / "fields.db") as fs:
-        context = ResearchToolContext(fields_store=fs, root=tmp_path, max_papers=1)
+        context = ResearchToolContext(
+            fields_store=fs,
+            pdf_dir=tmp_path,
+            root=tmp_path,
+            max_papers=1,
+        )
         result = dispatch_research_tool(
             ToolUseRequest(
                 id="t1",
@@ -307,6 +323,7 @@ def test_dispatch_read_paper_needs_user_action_for_unread_pdf(tmp_path: Path) ->
     data = json.loads(result.output)
     assert result.is_error is False
     assert data["status"] == "needs_user_action"
+    assert data["can_inspect_same_paper"] is False
     assert data["paper_id"] in context.touched_paper_ids
     assert "paper-copilot read" in data["next_command"]
 
@@ -385,6 +402,82 @@ def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
     initial = next(e for e in entries if isinstance(e, Message) and e.role == "user")
     assert "The final answer must be the report itself" in initial.text
     assert "Tool inputs must match the JSON schema exactly" in initial.text
+    assert "you may still inspect_paper the same paper_id afterward" in initial.text
+    assert "suggested_citations" in initial.text
+
+
+def test_run_research_prefers_inspect_after_read_paper(tmp_path: Path) -> None:
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        fs.upsert("paperA", _payload(), datetime.now(UTC).isoformat())
+        pdir = tmp_path / "papers" / "paperA"
+        pdir.mkdir(parents=True)
+        (pdir / "session.jsonl").write_text("", encoding="utf-8")
+        (pdir / "report.md").write_text("# Paper A", encoding="utf-8")
+        context = ResearchToolContext(fields_store=fs, root=tmp_path, max_papers=1)
+        llm = MockLLM(
+            [
+                MockResponse(
+                    content=[
+                        ToolUseBlock(
+                            id="read1",
+                            name="read_paper",
+                            input={"paper_id": "paperA"},
+                        )
+                    ],
+                    stop_reason="tool_use",
+                    usage={"input_tokens": 10, "output_tokens": 4},
+                ),
+                MockResponse(
+                    content=[
+                        ToolUseBlock(
+                            id="inspect1",
+                            name="inspect_paper",
+                            input={
+                                "paper_id": "paperA",
+                                "fields": ["meta", "contributions", "methods"],
+                            },
+                        )
+                    ],
+                    stop_reason="tool_use",
+                    usage={"input_tokens": 12, "output_tokens": 4},
+                ),
+                MockResponse(
+                    content=[
+                        TextBlock(
+                            text=(
+                                "## Findings\n\n"
+                                "`paperA` is Paper A and uses Sparse Attention."
+                            )
+                        )
+                    ],
+                    stop_reason="end_turn",
+                    usage={"input_tokens": 20, "output_tokens": 8},
+                ),
+            ]
+        )
+
+        run = asyncio.run(
+            run_research(
+                topic="read then inspect",
+                llm=llm,
+                context=context,
+                root=tmp_path,
+                max_turns=4,
+                max_budget_cny=1.0,
+            )
+        )
+
+    assert run.termination_reason == "end_turn"
+    assert "Sparse Attention" in run.report_markdown
+    assert run.termination_summary.paper_budget["touched_paper_ids"] == ["paperA"]
+
+    paper_id = run.session_path.parent.name
+    entries = SessionStore.load(paper_id, root=tmp_path).read_all()
+    tool_names = [e.name for e in entries if isinstance(e, ToolUse)]
+    assert tool_names == ["read_paper", "inspect_paper"]
+    tool_results = [e for e in entries if isinstance(e, ToolResult)]
+    assert '"can_inspect_same_paper": true' in tool_results[0].output
+    assert "Sparse Attention" in tool_results[1].output
 
 
 def test_run_research_summary_records_last_tool_error(tmp_path: Path) -> None:

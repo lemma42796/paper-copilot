@@ -22,7 +22,7 @@ from pydantic import (
     model_validator,
 )
 
-from paper_copilot.agents.llm_client import DEFAULT_MODEL
+from paper_copilot.agents.llm_client import DEFAULT_MODEL, LLMClient
 from paper_copilot.agents.loop import (
     AssistantMessage,
     Event,
@@ -35,6 +35,7 @@ from paper_copilot.agents.loop import (
     ToolUseRequest,
     run_agent_loop,
 )
+from paper_copilot.agents.read_pipeline import ReadPipelineRun, run_read_pipeline
 from paper_copilot.knowledge.compare import build_compare_payload
 from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore, PaperRow, available_fields
@@ -43,13 +44,15 @@ from paper_copilot.knowledge.hybrid_search import ContainsFilter, SearchResult, 
 from paper_copilot.session import SessionStore
 from paper_copilot.session.paths import compute_paper_id, paper_dir
 from paper_copilot.shared.cost import CostSnapshot, CostTracker, pricing_for_model
-from paper_copilot.shared.errors import KnowledgeError
+from paper_copilot.shared.embedder import Embedder
+from paper_copilot.shared.errors import KnowledgeError, PaperCopilotError
 
 __all__ = [
     "ResearchRun",
     "ResearchTerminationSummary",
     "ResearchToolContext",
     "dispatch_research_tool",
+    "dispatch_research_tool_async",
     "research_tools",
     "run_research",
 ]
@@ -75,10 +78,12 @@ class ResearchToolContext:
     fields_store: FieldsStore
     embeddings_store: EmbeddingsStore | None = None
     encode_query: QueryEncoder | None = None
+    embedder: Embedder | None = None
     pdf_dir: Path | None = None
     root: Path | None = None
     max_papers: int = 5
     touched_paper_ids: set[str] = dataclass_field(default_factory=set)
+    worker_costs: list[CostSnapshot] = dataclass_field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +204,12 @@ class _ReadPaperInput(BaseModel):
         return self
 
 
+@dataclass(frozen=True, slots=True)
+class _ReadTarget:
+    paper_id: str
+    pdf_path: Path | None
+
+
 async def run_research(
     *,
     topic: str,
@@ -207,6 +218,7 @@ async def run_research(
     root: Path | None = None,
     max_turns: int = 16,
     max_budget_cny: float = 2.0,
+    read_llm: LLMClient | None = None,
 ) -> ResearchRun:
     session_id = _research_session_id(topic)
     store = SessionStore.create(
@@ -224,7 +236,13 @@ async def run_research(
     report_markdown = _REPORT_FALLBACK
 
     async def dispatch(req: ToolUseRequest) -> ToolResultData:
-        return dispatch_research_tool(req, context)
+        return await dispatch_research_tool_async(
+            req,
+            context,
+            read_llm=read_llm,
+            cost=cost,
+            max_budget_cny=max_budget_cny,
+        )
 
     async for event in run_agent_loop(
         messages=[{"role": "user", "content": initial_user_text}],
@@ -300,9 +318,12 @@ def research_tools() -> list[dict[str, Any]]:
         _tool_schema(
             "read_paper",
             (
-                "Check whether a paper has already been read/indexed. If it is "
-                "already in the local library, returns session/report paths. If "
-                "not, returns needs_user_action instead of reading it."
+                "Read and index one local PDF under --pdf-dir, or report an "
+                "already-indexed paper. Counts toward max_papers and consumes "
+                "the shared run budget. If a paper_id cannot be mapped to a "
+                "local PDF, returns needs_user_action instead of inventing. "
+                "When status is read or already_read, normally call inspect_paper "
+                "next on the same paper_id; it does not consume another paper slot."
             ),
             _ReadPaperInput,
         ),
@@ -322,7 +343,9 @@ def research_tools() -> list[dict[str, Any]]:
                 "Inspect structured fields for one indexed paper. Use paper_id "
                 "values returned by list_papers or search_library. Valid fields "
                 "are meta, contributions, methods, experiments, limitations, and "
-                "cross_paper_links; omit fields to request the default useful set."
+                "cross_paper_links; omit fields to request the default useful set. "
+                "The response also includes evidence_summary and suggested_citations "
+                "for concise final-report grounding."
             ),
             _InspectPaperInput,
         ),
@@ -377,7 +400,31 @@ def dispatch_research_tool(req: ToolUseRequest, context: ResearchToolContext) ->
                 return _ok(_find_related_papers(related_args, context))
             case _:
                 return _err(f"unknown research tool: {req.name}")
-    except (KnowledgeError, ValidationError, ValueError) as exc:
+    except (PaperCopilotError, ValidationError, ValueError) as exc:
+        return _err(str(exc))
+
+
+async def dispatch_research_tool_async(
+    req: ToolUseRequest,
+    context: ResearchToolContext,
+    *,
+    read_llm: LLMClient | None,
+    cost: CostTracker,
+    max_budget_cny: float,
+) -> ToolResultData:
+    if req.name != "read_paper":
+        return dispatch_research_tool(req, context)
+    try:
+        read_args = _ReadPaperInput.model_validate(req.input)
+        payload = await _read_paper_async(
+            read_args,
+            context,
+            read_llm=read_llm,
+            cost=cost,
+            max_budget_cny=max_budget_cny,
+        )
+        return _ok(payload)
+    except (PaperCopilotError, ValidationError, ValueError) as exc:
         return _err(str(exc))
 
 
@@ -406,33 +453,78 @@ def _list_pdfs(args: _ListPdfsInput, context: ResearchToolContext) -> dict[str, 
     return {"count": len(pdfs), "returned": len(rows), "pdfs": rows}
 
 
-def _read_paper(args: _ReadPaperInput, context: ResearchToolContext) -> dict[str, Any]:
-    paper_id = args.paper_id
-    pdf_path = args.pdf_path
-    if pdf_path is not None:
-        if not pdf_path.exists():
-            raise KnowledgeError(f"pdf_path does not exist: {pdf_path}")
-        paper_id = compute_paper_id(pdf_path)
-    assert paper_id is not None
-    _reserve_papers(context, [paper_id])
+def _resolve_read_target(args: _ReadPaperInput, context: ResearchToolContext) -> _ReadTarget:
+    if args.pdf_path is not None:
+        pdf_path = _resolve_pdf_path(args.pdf_path, context)
+        return _ReadTarget(paper_id=compute_paper_id(pdf_path), pdf_path=pdf_path)
 
-    row = context.fields_store.get(paper_id)
-    pdir = paper_dir(paper_id, context.root)
+    assert args.paper_id is not None
+    if context.fields_store.get(args.paper_id) is not None:
+        return _ReadTarget(paper_id=args.paper_id, pdf_path=None)
+    return _ReadTarget(
+        paper_id=args.paper_id,
+        pdf_path=_find_pdf_by_id(args.paper_id, context),
+    )
+
+
+def _resolve_pdf_path(path: Path, context: ResearchToolContext) -> Path:
+    if context.pdf_dir is None:
+        raise KnowledgeError("read_paper requires --pdf-dir for pdf_path inputs")
+    pdf_dir = context.pdf_dir.resolve()
+    candidate = path.expanduser()
+    if not candidate.is_absolute():
+        candidate = pdf_dir / candidate
+    candidate = candidate.resolve()
+    if not candidate.exists():
+        raise KnowledgeError(f"pdf_path does not exist: {candidate}")
+    if candidate.suffix.lower() != ".pdf":
+        raise KnowledgeError(f"pdf_path is not a PDF: {candidate}")
+    try:
+        candidate.relative_to(pdf_dir)
+    except ValueError as exc:
+        raise KnowledgeError(
+            f"read_paper only reads PDFs under --pdf-dir ({pdf_dir}): {candidate}"
+        ) from exc
+    return candidate
+
+
+def _find_pdf_by_id(paper_id: str, context: ResearchToolContext) -> Path | None:
+    if context.pdf_dir is None or not context.pdf_dir.exists():
+        return None
+    for path in sorted(context.pdf_dir.iterdir()):
+        if path.suffix.lower() != ".pdf":
+            continue
+        if compute_paper_id(path) == paper_id:
+            return path.resolve()
+    return None
+
+
+def _already_read_payload(row: PaperRow, context: ResearchToolContext) -> dict[str, Any]:
+    pdir = paper_dir(row.paper_id, context.root)
     report_path = pdir / "report.md"
     session_path = pdir / "session.jsonl"
-    if row is not None:
-        meta = row.data.get("meta", {})
-        return {
-            "status": "already_read",
-            "paper_id": paper_id,
-            "title": meta.get("title", ""),
-            "session_path": str(session_path),
-            "report_path": str(report_path),
-            "session_exists": session_path.exists(),
-            "report_exists": report_path.exists(),
-            "paper_budget": _paper_budget_payload(context),
-        }
+    meta = row.data.get("meta", {})
+    return {
+        "status": "already_read",
+        "paper_id": row.paper_id,
+        "title": meta.get("title", ""),
+        "session_path": str(session_path),
+        "report_path": str(report_path),
+        "session_exists": session_path.exists(),
+        "report_exists": report_path.exists(),
+        "can_inspect_same_paper": True,
+        "recommended_next_tool": _inspect_next_tool(row.paper_id),
+        "paper_budget": _paper_budget_payload(context),
+    }
 
+
+def _needs_user_action_payload(
+    paper_id: str,
+    *,
+    reason: str,
+    context: ResearchToolContext,
+    pdf_path: Path | None = None,
+) -> dict[str, Any]:
     command = (
         f"paper-copilot read {json.dumps(str(pdf_path))}"
         if pdf_path is not None
@@ -441,8 +533,121 @@ def _read_paper(args: _ReadPaperInput, context: ResearchToolContext) -> dict[str
     return {
         "status": "needs_user_action",
         "paper_id": paper_id,
-        "reason": "paper is not indexed; this placeholder tool does not run MainAgent",
+        "reason": reason,
         "next_command": command,
+        "can_inspect_same_paper": False,
+        "paper_budget": _paper_budget_payload(context),
+    }
+
+
+def _record_read_cost(cost: CostTracker, read_run: ReadPipelineRun) -> None:
+    for response in read_run.llm_responses:
+        if response.usage is not None:
+            cost.record(response.usage)
+
+
+def _read_paper(args: _ReadPaperInput, context: ResearchToolContext) -> dict[str, Any]:
+    target = _resolve_read_target(args, context)
+    _reserve_papers(context, [target.paper_id])
+
+    row = context.fields_store.get(target.paper_id)
+    if row is not None:
+        return _already_read_payload(row, context)
+
+    command = (
+        f"paper-copilot read {json.dumps(str(target.pdf_path))}"
+        if target.pdf_path is not None
+        else f"paper-copilot read <pdf-for-{target.paper_id}>"
+    )
+    return {
+        "status": "needs_user_action",
+        "paper_id": target.paper_id,
+        "reason": "paper is not indexed; automatic read is unavailable in sync dispatch",
+        "next_command": command,
+        "can_inspect_same_paper": False,
+        "paper_budget": _paper_budget_payload(context),
+    }
+
+
+async def _read_paper_async(
+    args: _ReadPaperInput,
+    context: ResearchToolContext,
+    *,
+    read_llm: LLMClient | None,
+    cost: CostTracker,
+    max_budget_cny: float,
+) -> dict[str, Any]:
+    target = _resolve_read_target(args, context)
+    _reserve_papers(context, [target.paper_id])
+
+    row = context.fields_store.get(target.paper_id)
+    if row is not None:
+        return _already_read_payload(row, context)
+    if target.pdf_path is None:
+        return _needs_user_action_payload(
+            target.paper_id,
+            reason="paper is not indexed and no matching PDF was found under --pdf-dir",
+            context=context,
+        )
+    if read_llm is None:
+        return _needs_user_action_payload(
+            target.paper_id,
+            reason="paper is not indexed and automatic read is not configured",
+            context=context,
+            pdf_path=target.pdf_path,
+        )
+    if context.embedder is None or context.embeddings_store is None:
+        return _needs_user_action_payload(
+            target.paper_id,
+            reason="paper is not indexed and embedding index handles are unavailable",
+            context=context,
+            pdf_path=target.pdf_path,
+        )
+    if cost.total_cost_cny >= max_budget_cny:
+        return {
+            "status": "budget_exhausted",
+            "paper_id": target.paper_id,
+            "reason": "run budget is already exhausted before read_paper",
+            "cost_cny": cost.total_cost_cny,
+            "max_budget_cny": max_budget_cny,
+            "can_inspect_same_paper": False,
+            "paper_budget": _paper_budget_payload(context),
+        }
+
+    pdir = paper_dir(target.paper_id, context.root)
+    if pdir.exists():
+        return _needs_user_action_payload(
+            target.paper_id,
+            reason=(
+                "session directory exists but paper is not indexed; rerun "
+                "`paper-copilot read --force` manually after checking the old artifact"
+            ),
+            context=context,
+            pdf_path=target.pdf_path,
+        )
+
+    read_run = await run_read_pipeline(
+        target.pdf_path,
+        client=read_llm,
+        fields_store=context.fields_store,
+        embeddings_store=context.embeddings_store,
+        embedder=context.embedder,
+        root=context.root,
+        language="en",
+    )
+    _record_read_cost(cost, read_run)
+    context.worker_costs.append(read_run.cost)
+    return {
+        "status": "read",
+        "paper_id": read_run.paper_id,
+        "title": read_run.title,
+        "session_path": str(read_run.session_path),
+        "report_path": str(read_run.report_path),
+        "chunks_indexed": read_run.chunks_indexed,
+        "cost_cny": read_run.cost.cost_cny,
+        "budget_exceeded_after_read": cost.total_cost_cny >= max_budget_cny,
+        "can_inspect_same_paper": True,
+        "recommended_next_tool": _inspect_next_tool(read_run.paper_id),
         "paper_budget": _paper_budget_payload(context),
     }
 
@@ -486,7 +691,136 @@ def _inspect_paper(args: _InspectPaperInput, context: ResearchToolContext) -> di
             payload[field] = value[: args.max_items]
         else:
             payload[field] = value
+    payload["evidence_summary"] = _evidence_summary(row, max_items=args.max_items)
+    payload["suggested_citations"] = _suggested_citations(row, max_items=args.max_items)
     return payload
+
+
+def _evidence_summary(row: PaperRow, *, max_items: int) -> dict[str, Any]:
+    data = row.data
+    meta = data.get("meta", {})
+    return {
+        "paper_id": row.paper_id,
+        "title": _text_value(meta.get("title")),
+        "year": meta.get("year"),
+        "venue": meta.get("venue"),
+        "top_contributions": [
+            {
+                "field": f"contributions[{i}].claim",
+                "text": _truncate(_text_value(item.get("claim")), 240),
+                "type": item.get("type"),
+                "evidence_type": item.get("evidence_type"),
+            }
+            for i, item in enumerate(_dict_items(data.get("contributions"), max_items))
+        ],
+        "top_methods": [
+            {
+                "field": f"methods[{i}]",
+                "name": _truncate(_text_value(item.get("name")), 120),
+                "description": _truncate(_text_value(item.get("description")), 240),
+                "novelty_vs_prior": _truncate(
+                    _text_value(item.get("novelty_vs_prior")), 240
+                ),
+            }
+            for i, item in enumerate(_dict_items(data.get("methods"), max_items))
+        ],
+        "key_experiments": [
+            {
+                "field": f"experiments[{i}]",
+                "dataset": item.get("dataset"),
+                "metric": item.get("metric"),
+                "value": item.get("value"),
+                "unit": item.get("unit"),
+                "comparison_baseline": item.get("comparison_baseline"),
+                "raw": _truncate(_text_value(item.get("raw")), 240),
+            }
+            for i, item in enumerate(_dict_items(data.get("experiments"), max_items))
+        ],
+        "top_limitations": [
+            {
+                "field": f"limitations[{i}].description",
+                "type": item.get("type"),
+                "text": _truncate(_text_value(item.get("description")), 240),
+            }
+            for i, item in enumerate(_dict_items(data.get("limitations"), max_items))
+        ],
+    }
+
+
+def _suggested_citations(row: PaperRow, *, max_items: int) -> list[dict[str, Any]]:
+    data = row.data
+    citations: list[dict[str, Any]] = []
+    meta = data.get("meta", {})
+    title = _text_value(meta.get("title"))
+    if title:
+        citations.append(
+            {
+                "paper_id": row.paper_id,
+                "field": "meta.title",
+                "text": title,
+            }
+        )
+
+    for i, item in enumerate(_dict_items(data.get("contributions"), max_items)):
+        text = _text_value(item.get("claim"))
+        if text:
+            citations.append(
+                {
+                    "paper_id": row.paper_id,
+                    "field": f"contributions[{i}].claim",
+                    "text": _truncate(text, 240),
+                }
+            )
+
+    for i, item in enumerate(_dict_items(data.get("methods"), max_items)):
+        name = _text_value(item.get("name"))
+        description = _text_value(item.get("description"))
+        text = " — ".join(part for part in [name, description] if part)
+        if text:
+            citations.append(
+                {
+                    "paper_id": row.paper_id,
+                    "field": f"methods[{i}]",
+                    "text": _truncate(text, 240),
+                }
+            )
+
+    for i, item in enumerate(_dict_items(data.get("experiments"), max_items)):
+        text = _experiment_text(item)
+        if text:
+            citations.append(
+                {
+                    "paper_id": row.paper_id,
+                    "field": f"experiments[{i}]",
+                    "text": _truncate(text, 240),
+                }
+            )
+    return citations
+
+
+def _dict_items(value: Any, max_items: int) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value[:max_items] if isinstance(item, dict)]
+
+
+def _experiment_text(item: dict[str, Any]) -> str:
+    dataset = _text_value(item.get("dataset"))
+    metric = _text_value(item.get("metric"))
+    baseline = _text_value(item.get("comparison_baseline"))
+    value = item.get("value")
+    unit = _text_value(item.get("unit"))
+    raw = _text_value(item.get("raw"))
+    parts: list[str] = []
+    if dataset or metric:
+        parts.append(" / ".join(part for part in [dataset, metric] if part))
+    if value is not None:
+        parts.append(f"{value}{unit}")
+    if baseline:
+        parts.append(f"vs {baseline}")
+    if raw:
+        parts.append(raw)
+    return "; ".join(parts)
 
 
 def _compare_papers(args: _ComparePapersInput, context: ResearchToolContext) -> dict[str, Any]:
@@ -697,6 +1031,18 @@ def _paper_budget_payload(context: ResearchToolContext) -> dict[str, Any]:
         "max_papers": context.max_papers,
         "touched_count": len(context.touched_paper_ids),
         "touched_paper_ids": sorted(context.touched_paper_ids),
+        "worker_cost_cny": sum(c.cost_cny for c in context.worker_costs),
+    }
+
+
+def _inspect_next_tool(paper_id: str) -> dict[str, Any]:
+    return {
+        "name": "inspect_paper",
+        "input": {
+            "paper_id": paper_id,
+            "fields": ["meta", "contributions", "methods", "experiments", "limitations"],
+        },
+        "note": "Reusing this paper_id does not consume another max_papers slot.",
     }
 
 
@@ -786,18 +1132,28 @@ def _build_initial_user_text(topic: str, context: ResearchToolContext) -> str:
         f"PDF directory: {pdf_dir}\n\n"
         f"Paper touch limit: at most {context.max_papers} unique paper_ids may be "
         "inspected or compared in this run. Reusing the same paper_id is allowed; "
-        "new paper_ids beyond the limit will return a tool error.\n\n"
+        "new paper_ids beyond the limit will return a tool error. A successful "
+        "read_paper call touches that paper_id, but you may still inspect_paper "
+        "the same paper_id afterward; do not describe the one-paper limit as "
+        "exhausted for same-paper follow-up.\n\n"
         "Tool-use guidance: call list_papers once at the start unless you need a "
-        "specific filter, then inspect or compare the selected paper_ids. Use "
-        "compare_papers for direct pairwise comparison tasks. Use "
-        "find_related_papers only when you need to expand from an already relevant "
-        "paper to nearby candidates. Tool inputs must match the JSON schema exactly; "
+        "specific filter, then inspect or compare the selected paper_ids. If a "
+        "relevant PDF is only present in PDF directory results, call read_paper "
+        "with the list_pdfs path before making claims about it, then inspect the "
+        "same paper_id before writing the final report so the report can cite "
+        "meta, contributions, methods, or experiments. For normal research tasks, "
+        "a successful read_paper status of read or already_read should be followed "
+        "by inspect_paper on that same paper_id. Use compare_papers "
+        "for direct pairwise comparison tasks. Use find_related_papers only when "
+        "you need to expand from an already relevant paper to nearby candidates. "
+        "Tool inputs must match the JSON schema exactly; "
         "numbers such as year, k, limit, and max_items must be JSON numbers.\n\n"
         "When you have enough information, stop calling tools and write a "
         "concise Markdown report with these sections: Findings, Evidence, "
-        "Gaps, Next Steps. Keep every concrete claim tied to a paper_id or "
-        "explicitly mark it as a gap. The final answer must be the report itself; "
-        "keep the whole report under 900 words. "
+        "Gaps, Next Steps. Prefer inspect_paper evidence_summary and "
+        "suggested_citations for final-report claims. Keep every concrete claim "
+        "tied to a paper_id or explicitly mark it as a gap. The final answer "
+        "must be the report itself; keep the whole report under 900 words. "
         "Do not include process narration such as 'I have inspected...', 'Now I "
         "will...', or 'Let me compile...'."
     )
