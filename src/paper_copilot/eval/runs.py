@@ -49,9 +49,18 @@ class RunRow:
     retrieval_relevant_count: int | None = None
     retrieval_recall_at_5: float | None = None
     retrieval_recall_at_10: float | None = None
+    retrieval_precision_at_5: float | None = None
+    retrieval_precision_at_10: float | None = None
     retrieval_missed_at_5: tuple[str, ...] | None = None
     retrieval_missed_at_10: tuple[str, ...] | None = None
     retrieval_top_papers: tuple[str, ...] | None = None
+    retrieval_evidence_anchor_count: int | None = None
+    retrieval_evidence_recall_at_5: float | None = None
+    retrieval_evidence_recall_at_10: float | None = None
+    retrieval_evidence_anchor_precision_at_5: float | None = None
+    retrieval_evidence_anchor_precision_at_10: float | None = None
+    retrieval_missed_evidence_at_5: tuple[str, ...] | None = None
+    retrieval_missed_evidence_at_10: tuple[str, ...] | None = None
 
     def to_json(self) -> dict[str, Any]:
         raw: dict[str, Any] = {
@@ -80,9 +89,26 @@ class RunRow:
             "retrieval_relevant_count": self.retrieval_relevant_count,
             "retrieval_recall_at_5": self.retrieval_recall_at_5,
             "retrieval_recall_at_10": self.retrieval_recall_at_10,
+            "retrieval_precision_at_5": self.retrieval_precision_at_5,
+            "retrieval_precision_at_10": self.retrieval_precision_at_10,
             "retrieval_missed_at_5": _list_or_none(self.retrieval_missed_at_5),
             "retrieval_missed_at_10": _list_or_none(self.retrieval_missed_at_10),
             "retrieval_top_papers": _list_or_none(self.retrieval_top_papers),
+            "retrieval_evidence_anchor_count": self.retrieval_evidence_anchor_count,
+            "retrieval_evidence_recall_at_5": self.retrieval_evidence_recall_at_5,
+            "retrieval_evidence_recall_at_10": self.retrieval_evidence_recall_at_10,
+            "retrieval_evidence_anchor_precision_at_5": (
+                self.retrieval_evidence_anchor_precision_at_5
+            ),
+            "retrieval_evidence_anchor_precision_at_10": (
+                self.retrieval_evidence_anchor_precision_at_10
+            ),
+            "retrieval_missed_evidence_at_5": _list_or_none(
+                self.retrieval_missed_evidence_at_5
+            ),
+            "retrieval_missed_evidence_at_10": _list_or_none(
+                self.retrieval_missed_evidence_at_10
+            ),
         }
         raw.update({key: value for key, value in retrieval.items() if value is not None})
         return raw
@@ -110,9 +136,32 @@ class RunRow:
             retrieval_relevant_count=raw.get("retrieval_relevant_count"),
             retrieval_recall_at_5=raw.get("retrieval_recall_at_5"),
             retrieval_recall_at_10=raw.get("retrieval_recall_at_10"),
+            retrieval_precision_at_5=raw.get(
+                "retrieval_precision_at_5",
+                _legacy_retrieval_precision(raw, k=5),
+            ),
+            retrieval_precision_at_10=raw.get(
+                "retrieval_precision_at_10",
+                _legacy_retrieval_precision(raw, k=10),
+            ),
             retrieval_missed_at_5=_tuple_or_none(raw.get("retrieval_missed_at_5")),
             retrieval_missed_at_10=_tuple_or_none(raw.get("retrieval_missed_at_10")),
             retrieval_top_papers=_tuple_or_none(raw.get("retrieval_top_papers")),
+            retrieval_evidence_anchor_count=raw.get("retrieval_evidence_anchor_count"),
+            retrieval_evidence_recall_at_5=raw.get("retrieval_evidence_recall_at_5"),
+            retrieval_evidence_recall_at_10=raw.get("retrieval_evidence_recall_at_10"),
+            retrieval_evidence_anchor_precision_at_5=raw.get(
+                "retrieval_evidence_anchor_precision_at_5"
+            ),
+            retrieval_evidence_anchor_precision_at_10=raw.get(
+                "retrieval_evidence_anchor_precision_at_10"
+            ),
+            retrieval_missed_evidence_at_5=_tuple_or_none(
+                raw.get("retrieval_missed_evidence_at_5")
+            ),
+            retrieval_missed_evidence_at_10=_tuple_or_none(
+                raw.get("retrieval_missed_evidence_at_10")
+            ),
         )
 
 
@@ -258,14 +307,15 @@ def write_retrieval_run(
 
     with path.open("w", encoding="utf-8") as f:
         for query in result.queries:
+            missed_evidence = query.missed_evidence_at_10
             row = RunRow(
                 run_id=rid,
                 suite_name=result.suite_name,
                 git_sha=sha,
                 paper_id=query.query_id,
                 field="retrieval_recall",
-                field_passed=not query.missed_at_10,
-                field_n_failures=len(query.missed_at_10),
+                field_passed=not query.missed_at_10 and not missed_evidence,
+                field_n_failures=len(query.missed_at_10) + len(missed_evidence),
                 cost_cny=0.0,
                 latency_s=0.0,
                 cache_hit_ratio=0.0,
@@ -274,9 +324,22 @@ def write_retrieval_run(
                 retrieval_relevant_count=len(query.relevant_papers),
                 retrieval_recall_at_5=query.recall_at_5,
                 retrieval_recall_at_10=query.recall_at_10,
+                retrieval_precision_at_5=query.precision_at_5,
+                retrieval_precision_at_10=query.precision_at_10,
                 retrieval_missed_at_5=query.missed_at_5,
                 retrieval_missed_at_10=query.missed_at_10,
                 retrieval_top_papers=tuple(hit.paper_id for hit in query.hits),
+                retrieval_evidence_anchor_count=query.evidence_anchor_count,
+                retrieval_evidence_recall_at_5=query.evidence_recall_at_5,
+                retrieval_evidence_recall_at_10=query.evidence_recall_at_10,
+                retrieval_evidence_anchor_precision_at_5=(
+                    query.evidence_anchor_precision_at_5
+                ),
+                retrieval_evidence_anchor_precision_at_10=(
+                    query.evidence_anchor_precision_at_10
+                ),
+                retrieval_missed_evidence_at_5=query.missed_evidence_at_5,
+                retrieval_missed_evidence_at_10=query.missed_evidence_at_10,
             )
             f.write(json.dumps(row.to_json(), ensure_ascii=False))
             f.write("\n")
@@ -344,6 +407,20 @@ def _list_or_none(value: tuple[str, ...] | None) -> list[str] | None:
     if value is None:
         return None
     return list(value)
+
+
+def _legacy_retrieval_precision(raw: dict[str, Any], *, k: int) -> float | None:
+    relevant_count = raw.get("retrieval_relevant_count")
+    missed = raw.get(f"retrieval_missed_at_{k}")
+    top_papers = raw.get("retrieval_top_papers")
+    if not isinstance(relevant_count, int) or not isinstance(missed, list | tuple):
+        return None
+    if not isinstance(top_papers, list | tuple):
+        return None
+    denominator = min(k, len(top_papers))
+    if denominator == 0:
+        return 0.0
+    return (relevant_count - len(missed)) / denominator
 
 
 def load_history(

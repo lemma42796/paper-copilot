@@ -11,7 +11,7 @@ runs:
    (cache_read / total billed prompt tokens).
 4. Optional ResearchAgent evidence quality — catches unsupported-claim
    drift when rows include M17 quality payload fields.
-5. Optional retrieval recall — catches evidence index/search regressions
+5. Optional retrieval recall — catches paper/evidence index search regressions
    when rows include M18 retrieval eval payload fields.
 
 Top-of-page markdown summary diffs the most recent run against the
@@ -229,12 +229,37 @@ def _retrieval_summary_md(groups: list[_RunGroup]) -> str:
     if latest_stats is None:
         return "<p class='hint'>No retrieval rows found in latest run.</p>"
 
-    query_count, recall_at_5, recall_at_10 = latest_stats
+    (
+        query_count,
+        recall_at_5,
+        recall_at_10,
+        precision_at_5,
+        precision_at_10,
+        evidence_query_count,
+        evidence_at_5,
+        evidence_at_10,
+        evidence_precision_at_5,
+        evidence_precision_at_10,
+    ) = latest_stats
     lines = [
         f"<p><b>Latest retrieval run</b>: {query_count} query(s) · "
         f"mean recall@5 {recall_at_5:.1%} · "
-        f"mean recall@10 {recall_at_10:.1%}</p>"
+        f"mean recall@10 {recall_at_10:.1%} · "
+        f"mean precision@5 {precision_at_5:.1%} · "
+        f"mean precision@10 {precision_at_10:.1%}</p>"
     ]
+    if evidence_at_5 is not None and evidence_at_10 is not None:
+        lines.append(
+            f"<p><b>Latest evidence recall</b>: {evidence_query_count} labeled "
+            f"query(s) · evidence@5 {evidence_at_5:.1%} · "
+            f"evidence@10 {evidence_at_10:.1%}</p>"
+        )
+    if evidence_precision_at_5 is not None and evidence_precision_at_10 is not None:
+        lines.append(
+            f"<p><b>Latest evidence anchor precision</b>: "
+            f"precision@5 {evidence_precision_at_5:.1%} · "
+            f"precision@10 {evidence_precision_at_10:.1%}</p>"
+        )
 
     prior = _previous_retrieval_group(groups)
     if prior is None:
@@ -246,13 +271,50 @@ def _retrieval_summary_md(groups: list[_RunGroup]) -> str:
         lines.append("<p class='hint'>No comparable prior retrieval run found.</p>")
         return "\n".join(lines)
 
-    _, prior_at_5, prior_at_10 = prior_stats
+    (
+        _,
+        prior_at_5,
+        prior_at_10,
+        prior_precision_at_5,
+        prior_precision_at_10,
+        _prior_evidence_count,
+        prior_evidence_at_5,
+        prior_evidence_at_10,
+        prior_evidence_precision_at_5,
+        prior_evidence_precision_at_10,
+    ) = prior_stats
     lines.append(
         f"<p><b>vs prior retrieval</b> ({html.escape(prior.run_id)}, "
         f"{html.escape(prior.git_sha)}): "
         f"recall@5 {_format_pp(recall_at_5 - prior_at_5)} · "
-        f"recall@10 {_format_pp(recall_at_10 - prior_at_10)}</p>"
+        f"recall@10 {_format_pp(recall_at_10 - prior_at_10)} · "
+        f"precision@5 {_format_pp(precision_at_5 - prior_precision_at_5)} · "
+        f"precision@10 {_format_pp(precision_at_10 - prior_precision_at_10)}</p>"
     )
+    if (
+        evidence_at_5 is not None
+        and evidence_at_10 is not None
+        and prior_evidence_at_5 is not None
+        and prior_evidence_at_10 is not None
+    ):
+        lines.append(
+            f"<p><b>vs prior evidence</b>: "
+            f"evidence@5 {_format_pp(evidence_at_5 - prior_evidence_at_5)} · "
+            f"evidence@10 {_format_pp(evidence_at_10 - prior_evidence_at_10)}</p>"
+        )
+    if (
+        evidence_precision_at_5 is not None
+        and evidence_precision_at_10 is not None
+        and prior_evidence_precision_at_5 is not None
+        and prior_evidence_precision_at_10 is not None
+    ):
+        lines.append(
+            f"<p><b>vs prior evidence precision</b>: "
+            f"precision@5 "
+            f"{_format_pp(evidence_precision_at_5 - prior_evidence_precision_at_5)} · "
+            f"precision@10 "
+            f"{_format_pp(evidence_precision_at_10 - prior_evidence_precision_at_10)}</p>"
+        )
     return "\n".join(lines)
 
 
@@ -342,7 +404,7 @@ def _retrieval_sections(groups: list[_RunGroup]) -> str:
     detail_table = _retrieval_detail_table(retrieval_groups[-1])
     return "\n".join(
         [
-            "<section class='chart'><h2>Retrieval mean recall</h2>",
+            "<section class='chart'><h2>Retrieval mean recall and precision</h2>",
             recall_chart,
             "</section>",
             "<section class='chart'><h2>Latest retrieval query detail</h2>",
@@ -362,6 +424,18 @@ def _retrieval_detail_table(group: _RunGroup) -> str:
             row.retrieval_recall_at_10
             if row.retrieval_recall_at_10 is not None
             else 0.0,
+            row.retrieval_precision_at_5
+            if row.retrieval_precision_at_5 is not None
+            else 0.0,
+            row.retrieval_precision_at_10
+            if row.retrieval_precision_at_10 is not None
+            else 0.0,
+            row.retrieval_evidence_recall_at_5
+            if row.retrieval_evidence_recall_at_5 is not None
+            else 1.0,
+            row.retrieval_evidence_recall_at_10
+            if row.retrieval_evidence_recall_at_10 is not None
+            else 1.0,
             row.paper_id,
         ),
     )
@@ -373,8 +447,18 @@ def _retrieval_detail_table(group: _RunGroup) -> str:
             f"<td>{html.escape(row.retrieval_query or '')}</td>"
             f"<td class='num'>{_format_pct(row.retrieval_recall_at_5)}</td>"
             f"<td class='num'>{_format_pct(row.retrieval_recall_at_10)}</td>"
+            f"<td class='num'>{_format_pct(row.retrieval_precision_at_5)}</td>"
+            f"<td class='num'>{_format_pct(row.retrieval_precision_at_10)}</td>"
+            f"<td class='num'>{_format_int(row.retrieval_evidence_anchor_count)}</td>"
+            f"<td class='num'>{_format_pct(row.retrieval_evidence_recall_at_5)}</td>"
+            f"<td class='num'>{_format_pct(row.retrieval_evidence_recall_at_10)}</td>"
+            f"<td class='num'>"
+            f"{_format_pct(row.retrieval_evidence_anchor_precision_at_5)}</td>"
+            f"<td class='num'>"
+            f"{_format_pct(row.retrieval_evidence_anchor_precision_at_10)}</td>"
             f"<td>{_format_ids(row.retrieval_missed_at_5)}</td>"
             f"<td>{_format_ids(row.retrieval_missed_at_10)}</td>"
+            f"<td>{_format_ids(row.retrieval_missed_evidence_at_10)}</td>"
             f"<td>{_format_ids(_first_n(row.retrieval_top_papers, 5))}</td>"
             "</tr>"
         )
@@ -387,8 +471,16 @@ def _retrieval_detail_table(group: _RunGroup) -> str:
             "<th>text</th>",
             "<th>recall@5</th>",
             "<th>recall@10</th>",
+            "<th>precision@5</th>",
+            "<th>precision@10</th>",
+            "<th>anchors</th>",
+            "<th>evidence@5</th>",
+            "<th>evidence@10</th>",
+            "<th>ev precision@5</th>",
+            "<th>ev precision@10</th>",
             "<th>missed@5</th>",
             "<th>missed@10</th>",
+            "<th>missed evidence@10</th>",
             "<th>top 5 papers</th>",
             "</tr></thead>",
             f"<tbody>{''.join(body_rows)}</tbody>",
@@ -401,6 +493,12 @@ def _format_pct(value: float | None) -> str:
     if value is None:
         return "-"
     return f"{value:.1%}"
+
+
+def _format_int(value: int | None) -> str:
+    if value is None:
+        return "-"
+    return str(value)
 
 
 def _format_ids(values: tuple[str, ...] | None) -> str:
@@ -417,14 +515,54 @@ def _first_n(values: tuple[str, ...] | None, n: int) -> tuple[str, ...] | None:
 
 def _chart_retrieval_recall(groups: list[_RunGroup]) -> str:
     series = {
-        "recall@5": [
+        "paper@5": [
             _avg_metric(group.rows, lambda r: r.retrieval_recall_at_5)
             for group in groups
         ],
-        "recall@10": [
+        "paper@10": [
             _avg_metric(group.rows, lambda r: r.retrieval_recall_at_10) for group in groups
         ],
+        "paper precision@5": [
+            _avg_metric(group.rows, lambda r: r.retrieval_precision_at_5)
+            for group in groups
+        ],
+        "paper precision@10": [
+            _avg_metric(group.rows, lambda r: r.retrieval_precision_at_10)
+            for group in groups
+        ],
     }
+    has_evidence = any(
+        row.retrieval_evidence_recall_at_10 is not None
+        for group in groups
+        for row in group.rows
+    )
+    if has_evidence:
+        series["evidence@5"] = [
+            _avg_metric(group.rows, lambda r: r.retrieval_evidence_recall_at_5)
+            for group in groups
+        ]
+        series["evidence@10"] = [
+            _avg_metric(group.rows, lambda r: r.retrieval_evidence_recall_at_10)
+            for group in groups
+        ]
+    has_evidence_precision = any(
+        row.retrieval_evidence_anchor_precision_at_10 is not None
+        for group in groups
+        for row in group.rows
+    )
+    if has_evidence_precision:
+        series["evidence precision@5"] = [
+            _avg_metric(
+                group.rows, lambda r: r.retrieval_evidence_anchor_precision_at_5
+            )
+            for group in groups
+        ]
+        series["evidence precision@10"] = [
+            _avg_metric(
+                group.rows, lambda r: r.retrieval_evidence_anchor_precision_at_10
+            )
+            for group in groups
+        ]
     return _svg_chart(
         series=series,
         run_labels=[_short_label(g.run_id) for g in groups],
@@ -448,15 +586,61 @@ def _previous_retrieval_group(groups: list[_RunGroup]) -> _RunGroup | None:
     return None
 
 
-def _run_retrieval(group: _RunGroup) -> tuple[int, float, float] | None:
+def _run_retrieval(
+    group: _RunGroup,
+) -> tuple[
+    int,
+    float,
+    float,
+    float,
+    float,
+    int,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+] | None:
     rows = [row for row in group.rows if _is_retrieval(row)]
     if not rows:
         return None
     recall_at_5 = _avg_metric(tuple(rows), lambda r: r.retrieval_recall_at_5)
     recall_at_10 = _avg_metric(tuple(rows), lambda r: r.retrieval_recall_at_10)
-    if recall_at_5 is None or recall_at_10 is None:
+    precision_at_5 = _avg_metric(tuple(rows), lambda r: r.retrieval_precision_at_5)
+    precision_at_10 = _avg_metric(tuple(rows), lambda r: r.retrieval_precision_at_10)
+    if (
+        recall_at_5 is None
+        or recall_at_10 is None
+        or precision_at_5 is None
+        or precision_at_10 is None
+    ):
         return None
-    return len(rows), recall_at_5, recall_at_10
+    evidence_rows = tuple(
+        row for row in rows if row.retrieval_evidence_recall_at_10 is not None
+    )
+    evidence_at_5 = _avg_metric(
+        evidence_rows, lambda r: r.retrieval_evidence_recall_at_5
+    )
+    evidence_at_10 = _avg_metric(
+        evidence_rows, lambda r: r.retrieval_evidence_recall_at_10
+    )
+    evidence_precision_at_5 = _avg_metric(
+        evidence_rows, lambda r: r.retrieval_evidence_anchor_precision_at_5
+    )
+    evidence_precision_at_10 = _avg_metric(
+        evidence_rows, lambda r: r.retrieval_evidence_anchor_precision_at_10
+    )
+    return (
+        len(rows),
+        recall_at_5,
+        recall_at_10,
+        precision_at_5,
+        precision_at_10,
+        len(evidence_rows),
+        evidence_at_5,
+        evidence_at_10,
+        evidence_precision_at_5,
+        evidence_precision_at_10,
+    )
 
 
 def _run_quality(group: _RunGroup) -> tuple[float, float] | None:

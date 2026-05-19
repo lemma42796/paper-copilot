@@ -48,9 +48,18 @@ def _retrieval_row(run_id: str, *, query_id: str, recall_5: float, recall_10: fl
         retrieval_relevant_count=1,
         retrieval_recall_at_5=recall_5,
         retrieval_recall_at_10=recall_10,
+        retrieval_precision_at_5=recall_5 / 5,
+        retrieval_precision_at_10=recall_10 / 10,
         retrieval_missed_at_5=(),
         retrieval_missed_at_10=(),
         retrieval_top_papers=("p1",),
+        retrieval_evidence_anchor_count=1,
+        retrieval_evidence_recall_at_5=recall_5,
+        retrieval_evidence_recall_at_10=recall_10,
+        retrieval_evidence_anchor_precision_at_5=recall_5 / 3,
+        retrieval_evidence_anchor_precision_at_10=recall_10 / 3,
+        retrieval_missed_evidence_at_5=(),
+        retrieval_missed_evidence_at_10=(),
     )
 
 
@@ -80,7 +89,12 @@ def test_report_renders_retrieval_recall_charts() -> None:
     )
 
     assert "Latest retrieval run" in html
+    assert "Latest evidence recall" in html
     assert "mean recall@5 100.0%" in html
     assert "mean recall@10 100.0%" in html
-    assert "Retrieval mean recall" in html
+    assert "mean precision@5 20.0%" in html
+    assert "mean precision@10 10.0%" in html
+    assert "evidence@10 100.0%" in html
+    assert "Latest evidence anchor precision" in html
+    assert "Retrieval mean recall and precision" in html
     assert "PASS rate per field" not in html

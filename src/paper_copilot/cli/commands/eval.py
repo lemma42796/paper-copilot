@@ -297,16 +297,32 @@ def _render_retrieval(console: Console, result: RetrievalEvalResult) -> None:
     table.add_column("query")
     table.add_column("recall@5", justify="right")
     table.add_column("recall@10", justify="right")
+    table.add_column("prec@5", justify="right")
+    table.add_column("prec@10", justify="right")
+    table.add_column("evidence@5", justify="right")
+    table.add_column("evidence@10", justify="right")
+    table.add_column("ev prec@5", justify="right")
+    table.add_column("ev prec@10", justify="right")
     table.add_column("top papers")
     table.add_column("missed@10")
+    table.add_column("missed evidence@10")
 
     for query in result.queries:
         table.add_row(
             query.query_id,
             f"{query.recall_at_5:.1%}",
             f"{query.recall_at_10:.1%}",
+            f"{query.precision_at_5:.1%}",
+            f"{query.precision_at_10:.1%}",
+            _format_optional_pct(query.evidence_recall_at_5),
+            _format_optional_pct(query.evidence_recall_at_10),
+            _format_optional_pct(query.evidence_anchor_precision_at_5),
+            _format_optional_pct(query.evidence_anchor_precision_at_10),
             _format_hits(query),
             ", ".join(query.missed_at_10) if query.missed_at_10 else "-",
+            ", ".join(query.missed_evidence_at_10)
+            if query.missed_evidence_at_10
+            else "-",
         )
 
     console.print(table)
@@ -316,6 +332,33 @@ def _render_retrieval(console: Console, result: RetrievalEvalResult) -> None:
         f"@5={result.mean_recall_at_5:.1%}  "
         f"@10={result.mean_recall_at_10:.1%}"
     )
+    console.print(
+        "mean precision: "
+        f"@5={result.mean_precision_at_5:.1%}  "
+        f"@10={result.mean_precision_at_10:.1%}"
+    )
+    evidence_at_5 = result.mean_evidence_recall_at_5
+    evidence_at_10 = result.mean_evidence_recall_at_10
+    if evidence_at_5 is not None and evidence_at_10 is not None:
+        console.print(
+            "mean evidence recall: "
+            f"@5={evidence_at_5:.1%}  "
+            f"@10={evidence_at_10:.1%}"
+        )
+    evidence_precision_at_5 = result.mean_evidence_anchor_precision_at_5
+    evidence_precision_at_10 = result.mean_evidence_anchor_precision_at_10
+    if evidence_precision_at_5 is not None and evidence_precision_at_10 is not None:
+        console.print(
+            "mean evidence anchor precision: "
+            f"@5={evidence_precision_at_5:.1%}  "
+            f"@10={evidence_precision_at_10:.1%}"
+        )
+
+
+def _format_optional_pct(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.1%}"
 
 
 def _format_hits(query: RetrievalQueryResult) -> str:

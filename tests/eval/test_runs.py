@@ -171,9 +171,18 @@ def test_run_row_roundtrip() -> None:
         retrieval_relevant_count=2,
         retrieval_recall_at_5=0.5,
         retrieval_recall_at_10=1.0,
+        retrieval_precision_at_5=0.5,
+        retrieval_precision_at_10=0.2,
         retrieval_missed_at_5=("p2",),
         retrieval_missed_at_10=(),
         retrieval_top_papers=("p1", "p2"),
+        retrieval_evidence_anchor_count=2,
+        retrieval_evidence_recall_at_5=0.5,
+        retrieval_evidence_recall_at_10=1.0,
+        retrieval_evidence_anchor_precision_at_5=0.25,
+        retrieval_evidence_anchor_precision_at_10=0.2,
+        retrieval_missed_evidence_at_5=("p2:anchor",),
+        retrieval_missed_evidence_at_10=(),
     )
     assert RunRow.from_json(row.to_json()) == row
 
@@ -198,6 +207,8 @@ def test_run_row_reads_legacy_json_without_quality_fields() -> None:
     assert row.evidence_ref_count is None
     assert row.evidence_coverage_ratio is None
     assert row.retrieval_recall_at_10 is None
+    assert row.retrieval_precision_at_10 is None
+    assert row.retrieval_evidence_recall_at_10 is None
 
 
 def test_write_research_quality_run_records_final_output_quality(tmp_path: Path) -> None:
@@ -281,8 +292,17 @@ def test_write_retrieval_run_records_one_row_per_query(tmp_path: Path) -> None:
                 ),
                 recall_at_5=0.5,
                 recall_at_10=1.0,
+                precision_at_5=0.5,
+                precision_at_10=0.2,
                 missed_at_5=("p2",),
                 missed_at_10=(),
+                evidence_anchor_count=2,
+                evidence_recall_at_5=0.5,
+                evidence_recall_at_10=1.0,
+                evidence_anchor_precision_at_5=0.25,
+                evidence_anchor_precision_at_10=0.2,
+                missed_evidence_at_5=("p2:anchor",),
+                missed_evidence_at_10=(),
             ),
         ),
     )
@@ -300,6 +320,15 @@ def test_write_retrieval_run_records_one_row_per_query(tmp_path: Path) -> None:
     assert row.retrieval_relevant_count == 2
     assert row.retrieval_recall_at_5 == 0.5
     assert row.retrieval_recall_at_10 == 1.0
+    assert row.retrieval_precision_at_5 == 0.5
+    assert row.retrieval_precision_at_10 == 0.2
     assert row.retrieval_missed_at_5 == ("p2",)
     assert row.retrieval_missed_at_10 == ()
     assert row.retrieval_top_papers == ("p1", "p2")
+    assert row.retrieval_evidence_anchor_count == 2
+    assert row.retrieval_evidence_recall_at_5 == 0.5
+    assert row.retrieval_evidence_recall_at_10 == 1.0
+    assert row.retrieval_evidence_anchor_precision_at_5 == 0.25
+    assert row.retrieval_evidence_anchor_precision_at_10 == 0.2
+    assert row.retrieval_missed_evidence_at_5 == ("p2:anchor",)
+    assert row.retrieval_missed_evidence_at_10 == ()

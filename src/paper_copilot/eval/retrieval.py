@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,7 +9,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
+from paper_copilot.knowledge.embeddings_store import ChunkHit, EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.knowledge.hybrid_search import SearchResult, search
 from paper_copilot.knowledge.meta import require_match
@@ -24,6 +25,13 @@ class RelevantPaper(BaseModel):
     reason: str = Field(min_length=1)
 
 
+class EvidenceAnchor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    paper_id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+
 class RetrievalQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -31,6 +39,7 @@ class RetrievalQuery(BaseModel):
     query: str = Field(min_length=1)
     intent: str = Field(min_length=1)
     relevant_papers: list[RelevantPaper] = Field(min_length=1)
+    evidence_anchors: list[EvidenceAnchor] = Field(default_factory=list)
     snippet_hints: list[str] = Field(default_factory=list)
 
 
@@ -61,8 +70,17 @@ class RetrievalQueryResult:
     hits: tuple[RetrievalHit, ...]
     recall_at_5: float
     recall_at_10: float
+    precision_at_5: float
+    precision_at_10: float
     missed_at_5: tuple[str, ...]
     missed_at_10: tuple[str, ...]
+    evidence_anchor_count: int = 0
+    evidence_recall_at_5: float | None = None
+    evidence_recall_at_10: float | None = None
+    evidence_anchor_precision_at_5: float | None = None
+    evidence_anchor_precision_at_10: float | None = None
+    missed_evidence_at_5: tuple[str, ...] = ()
+    missed_evidence_at_10: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +95,30 @@ class RetrievalEvalResult:
     @property
     def mean_recall_at_10(self) -> float:
         return _mean(q.recall_at_10 for q in self.queries)
+
+    @property
+    def mean_precision_at_5(self) -> float:
+        return _mean(q.precision_at_5 for q in self.queries)
+
+    @property
+    def mean_precision_at_10(self) -> float:
+        return _mean(q.precision_at_10 for q in self.queries)
+
+    @property
+    def mean_evidence_recall_at_5(self) -> float | None:
+        return _mean_optional(q.evidence_recall_at_5 for q in self.queries)
+
+    @property
+    def mean_evidence_recall_at_10(self) -> float | None:
+        return _mean_optional(q.evidence_recall_at_10 for q in self.queries)
+
+    @property
+    def mean_evidence_anchor_precision_at_5(self) -> float | None:
+        return _mean_optional(q.evidence_anchor_precision_at_5 for q in self.queries)
+
+    @property
+    def mean_evidence_anchor_precision_at_10(self) -> float | None:
+        return _mean_optional(q.evidence_anchor_precision_at_10 for q in self.queries)
 
 
 def load_retrieval_suite(path: Path) -> RetrievalSuite:
@@ -135,6 +177,7 @@ def _score_query(
     hit_rows = tuple(
         _hit_from_result(rank, result) for rank, result in enumerate(hits, start=1)
     )
+    anchors = tuple(query.evidence_anchors)
     return RetrievalQueryResult(
         query_id=query.id,
         query=query.query,
@@ -142,8 +185,17 @@ def _score_query(
         hits=hit_rows,
         recall_at_5=_recall(relevant, hit_rows[:5]),
         recall_at_10=_recall(relevant, hit_rows[:10]),
+        precision_at_5=_precision(relevant, hit_rows[:5]),
+        precision_at_10=_precision(relevant, hit_rows[:10]),
         missed_at_5=_missed(relevant, hit_rows[:5]),
         missed_at_10=_missed(relevant, hit_rows[:10]),
+        evidence_anchor_count=len(anchors),
+        evidence_recall_at_5=_evidence_recall(anchors, hits[:5]),
+        evidence_recall_at_10=_evidence_recall(anchors, hits[:10]),
+        evidence_anchor_precision_at_5=_evidence_anchor_precision(anchors, hits[:5]),
+        evidence_anchor_precision_at_10=_evidence_anchor_precision(anchors, hits[:10]),
+        missed_evidence_at_5=_missed_evidence(anchors, hits[:5]),
+        missed_evidence_at_10=_missed_evidence(anchors, hits[:10]),
     )
 
 
@@ -167,13 +219,103 @@ def _recall(relevant: tuple[str, ...], hits: tuple[RetrievalHit, ...]) -> float:
     return len(relevant_set & hit_set) / len(relevant_set)
 
 
+def _precision(relevant: tuple[str, ...], hits: tuple[RetrievalHit, ...]) -> float:
+    if not hits:
+        return 0.0
+    relevant_set = set(relevant)
+    hit_set = {hit.paper_id for hit in hits}
+    return len(relevant_set & hit_set) / len(hit_set)
+
+
 def _missed(relevant: tuple[str, ...], hits: tuple[RetrievalHit, ...]) -> tuple[str, ...]:
     hit_set = {hit.paper_id for hit in hits}
     return tuple(paper_id for paper_id in relevant if paper_id not in hit_set)
+
+
+def _evidence_recall(
+    anchors: tuple[EvidenceAnchor, ...],
+    hits: list[SearchResult],
+) -> float | None:
+    if not anchors:
+        return None
+    matched = sum(1 for anchor in anchors if _anchor_hits(anchor, hits))
+    return matched / len(anchors)
+
+
+def _missed_evidence(
+    anchors: tuple[EvidenceAnchor, ...],
+    hits: list[SearchResult],
+) -> tuple[str, ...]:
+    if not anchors:
+        return ()
+    return tuple(_anchor_label(anchor) for anchor in anchors if not _anchor_hits(anchor, hits))
+
+
+def _evidence_anchor_precision(
+    anchors: tuple[EvidenceAnchor, ...],
+    hits: list[SearchResult],
+) -> float | None:
+    if not anchors:
+        return None
+    anchors_by_paper: dict[str, list[EvidenceAnchor]] = {}
+    for anchor in anchors:
+        anchors_by_paper.setdefault(anchor.paper_id, []).append(anchor)
+
+    total = 0
+    matched = 0
+    seen: set[int] = set()
+    for result in hits:
+        paper_anchors = anchors_by_paper.get(result.paper_id)
+        if paper_anchors is None:
+            continue
+        for chunk in _result_chunks(result):
+            if chunk.chunk_id in seen:
+                continue
+            seen.add(chunk.chunk_id)
+            total += 1
+            text = _normalize_text(chunk.text)
+            if any(_normalize_text(anchor.text) in text for anchor in paper_anchors):
+                matched += 1
+    if total == 0:
+        return 0.0
+    return matched / total
+
+
+def _anchor_hits(anchor: EvidenceAnchor, hits: list[SearchResult]) -> bool:
+    needle = _normalize_text(anchor.text)
+    for result in hits:
+        if result.paper_id != anchor.paper_id:
+            continue
+        for chunk in _result_chunks(result):
+            if needle in _normalize_text(chunk.text):
+                return True
+    return False
+
+
+def _result_chunks(result: SearchResult) -> tuple[ChunkHit, ...]:
+    return result.chunks or (result.best_chunk,)
+
+
+def _normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value.casefold()).strip()
+
+
+def _anchor_label(anchor: EvidenceAnchor) -> str:
+    text = _normalize_text(anchor.text)
+    if len(text) > 64:
+        text = f"{text[:61]}..."
+    return f"{anchor.paper_id}:{text}"
 
 
 def _mean(values: Iterable[float]) -> float:
     nums = list(values)
     if not nums:
         return 0.0
+    return sum(nums) / len(nums)
+
+
+def _mean_optional(values: Iterable[float | None]) -> float | None:
+    nums = [value for value in values if value is not None]
+    if not nums:
+        return None
     return sum(nums) / len(nums)

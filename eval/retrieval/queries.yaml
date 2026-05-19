@@ -9,10 +9,12 @@ index:
   indexed_chunks: 2066
 
 notes:
-  - Paper-level labels only. Chunk ids are intentionally not used because they
-    can change after reindex.
+  - Paper-level labels are the stable gate. Chunk ids are intentionally not
+    used because they can change after reindex.
   - relevant_papers is the denominator for paper_recall@k.
-  - snippet_hints are optional anchors for later chunk-level labeling.
+  - evidence_anchors is an optional chunk-level subset using paper_id + stable
+    text anchors; evidence_recall@k is averaged only over queries with anchors.
+  - snippet_hints are legacy human hints kept for label review.
   - Only papers present in the current embeddings.db are used as positive
     labels. Papers in fields.db without matching PDFs are excluded.
 
@@ -127,6 +129,9 @@ queries:
     relevant_papers:
       - paper_id: 268d347e8a55
         reason: Introduces Vision Transformer using sequences of image patches.
+    evidence_anchors:
+      - paper_id: 268d347e8a55
+        text: "linearly embed each of them, add position embeddings, and feed the resulting sequence of vectors"
     snippet_hints:
       - image patches
       - pure transformer
@@ -138,6 +143,9 @@ queries:
     relevant_papers:
       - paper_id: 2c03df8b48bf
         reason: Introduces residual learning and deep residual networks for image recognition.
+    evidence_anchors:
+      - paper_id: 2c03df8b48bf
+        text: "we address the degradation problem by introducing a deep residual learning framework"
     snippet_hints:
       - residual learning
       - shortcut connections
@@ -165,6 +173,9 @@ queries:
     relevant_papers:
       - paper_id: 071b16f25117
         reason: Introduces attention/alignment for neural machine translation.
+    evidence_anchors:
+      - paper_id: 071b16f25117
+        text: "letting the decoder have an attention mechanism, we relieve the encoder from the burden"
     snippet_hints:
       - jointly learning to align and translate
       - attention mechanism
@@ -176,6 +187,9 @@ queries:
     relevant_papers:
       - paper_id: 65a9c7b0800c
         reason: ViLBERT uses two-stream visual-linguistic pretraining with co-attention.
+    evidence_anchors:
+      - paper_id: 65a9c7b0800c
+        text: "separate streams for vision and language processing that communicate through co-attentional transformer layers"
     snippet_hints:
       - vision-and-language
       - co-attentional transformer
@@ -187,6 +201,9 @@ queries:
     relevant_papers:
       - paper_id: 8533b7bdd635
         reason: FaceNet learns face embeddings using triplet loss for recognition and clustering.
+    evidence_anchors:
+      - paper_id: 8533b7bdd635
+        text: "deep CNN followed by L2 normalization, which results in the face embedding. This is followed by the triplet loss during training"
     snippet_hints:
       - face recognition
       - clustering
@@ -211,6 +228,9 @@ queries:
     relevant_papers:
       - paper_id: b350b567b13a
         reason: Proposes a strong ReID baseline with BNNeck and training tricks.
+    evidence_anchors:
+      - paper_id: b350b567b13a
+        text: "add warmup strategy, random eras- ing augmentation, label smoothing, stride change, BNNeck and center loss"
     snippet_hints:
       - BNNeck
       - label smoothing
@@ -330,6 +350,9 @@ queries:
     relevant_papers:
       - paper_id: 0b289f01b521
         reason: TransReID uses overlapping patches, JPM, and side-information embeddings for object ReID.
+    evidence_anchors:
+      - paper_id: 0b289f01b521
+        text: "use a sliding window to generate patches with overlapping pixels"
     snippet_hints:
       - overlapping patches
       - Jigsaw Patch Module
@@ -341,6 +364,9 @@ queries:
     relevant_papers:
       - paper_id: 860e24025c67
         reason: TransFG uses a Part Selection Module for discriminative patch selection in fine-grained recognition.
+    evidence_anchors:
+      - paper_id: 860e24025c67
+        text: "Part Selection Module (PSM) is applied to select tokens that corresponds to the discriminative image patches"
     snippet_hints:
       - fine-grained visual classification
       - Part Selection Module
@@ -354,6 +380,11 @@ queries:
         reason: Identifies background bias and proposes person-region guided pooling.
       - paper_id: a09d4e9a9037
         reason: Suppresses inter-domain background shift with soft-mask images.
+    evidence_anchors:
+      - paper_id: 1f65cbc78943
+        text: "human parsing module and random-background data augmentation are introduced"
+      - paper_id: a09d4e9a9037
+        text: "generate soft-mask images with the BG being suppressed"
     snippet_hints:
       - background-bias
       - person-region guided pooling
@@ -409,6 +440,9 @@ queries:
     relevant_papers:
       - paper_id: c8258c808553
         reason: DiVE generates paired RGB-IR images with diffusion for VI-ReID.
+    evidence_anchors:
+      - paper_id: c8258c808553
+        text: "DiVE can generate substantial RGB-IR paired images for any identities without human effort"
     snippet_hints:
       - Diffusion-based VI-ReID data Expansion
       - Textual Inversion
@@ -457,6 +491,9 @@ queries:
     relevant_papers:
       - paper_id: 3b53aa0674f2
         reason: DeMo uses decoupled features and attention-triggered mixture of experts.
+    evidence_anchors:
+      - paper_id: 3b53aa0674f2
+        text: "DeMo, a novel feature learning framework that adaptively assigns weights to decoupled features with a mixture of experts"
     snippet_hints:
       - Mixture of Experts
       - Hierarchical Decoupling Module
@@ -533,6 +570,13 @@ queries:
         reason: Decouples unimodal-specific, bimodal-shared, and multimodal-interactive features.
       - paper_id: 6e870fa58055
         reason: Extracts modality-specific and modality-shared discriminative knowledge.
+    evidence_anchors:
+      - paper_id: 9e5acb459b0e
+        text: "embed the global information into the fine-grained part features to enhance the expressive ability of each part feature"
+      - paper_id: 3b53aa0674f2
+        text: "decoupling multi-modal features can effectively sep- arates modality-specific information"
+      - paper_id: 6e870fa58055
+        text: "First, we extract modality-specific and modality-shared features using a novel dual-stream net- work"
     snippet_hints:
       - modality-specific representations
       - decoupled features
@@ -568,6 +612,9 @@ queries:
     relevant_papers:
       - paper_id: bf1ea703e53c
         reason: TokenMatcher proposes diverse tokens matching for unsupervised VI-ReID.
+    evidence_anchors:
+      - paper_id: bf1ea703e53c
+        text: "Diverse Tokens Neighbor Learning (DTNL) module, which identifies reliable neighbors. This capability allows the model to effectively capture modality-invariant and discriminative features"
     snippet_hints:
       - Diverse Tokens Matching
       - unsupervised visible-infrared

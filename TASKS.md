@@ -39,7 +39,8 @@
   支持多 tier 计费;跑 plus 候选 vs flash baseline 对比,数据决定继续用 flash
   (2.03x cost / 2.22x latency,0 quality 上行),story 落盘
   `docs/stories/2026-04-27-model-selection-flash-vs-plus.md`。
-- **当前阶段**:**M18 Evidence-grounded RAG v1 可关闭,下次进入 M19 最小闭环**。
+- **当前阶段**:**M18 paper-level RAG gate 已完成,chunk/evidence 级 baseline
+  已补上并暴露缺口;下次先决定是否修 evidence chunk retrieval,再进 M19 最小闭环**。
   截至 2026-05-19,
   chat-first runtime/API 与 macOS-style web shell 已可用;后端 route 已收敛为
   `knowledge_qa` / `framework_composer`,knowledge QA 下有轻量 `task_profile`。
@@ -49,10 +50,67 @@
   `/Users/a123/paper-copilot-test-pdfs` 补齐 text-embedding-v4 索引:当前
   34 papers / 2066 chunks。RAG v1 当前 gate:34 篇 / 36 queries seed eval
   mean `recall@5=98.4%`,`recall@10=100.0%`;不再为 seed eval 继续微调
-  ranking。未做/暂跳过:reranker、paper alias/metadata 检索、retrieval
-  misses/top-k 诊断接前端、unsupported claim 系统人工抽样。下一步用 M19
-  真实"论文创新方案生成"主路径倒逼 RAG 缺口。
-- **最新编码进展**:**retrieval ranking 观察切片已完成**
+  ranking。当前 paper mean `precision@5=32.8%`,`precision@10=16.9%`。
+  chunk/evidence baseline 当前只覆盖 13 条带 anchor 的 query;经
+  anchor 语义收紧为答案型原文短句后,query-mean
+  `evidence_recall@5=53.8%`,`evidence_recall@10=53.8%`,说明
+  已经经常找对论文,但没有把目标 evidence chunk 放进每篇 top evidence。
+  当前 evidence anchor precision 为 `@5=25.6%`,`@10=25.6%`;它只衡量
+  anchor-labeled paper 返回 chunks 中有多少包含人工 anchor,不是完整语义
+  相关性标注。
+  未做/暂跳过:reranker、paper alias/metadata 检索、retrieval misses/top-k
+  诊断接前端、unsupported claim 系统人工抽样。M19 真实"论文创新方案生成"
+  可以继续推进,但要把 evidence chunk recall 作为已知 grounding 风险。
+  下次建议先做 evidence chunk selection v1:top paper 排名不动,每篇内部
+  overfetch 20-50 个候选 chunk,再精选 3-5 个发给 LLM;eval 同时看
+  evidence pool recall、final evidence recall 与 evidence anchor precision。
+- **最新编码进展**:**retrieval precision 指标已接入**
+  (2026-05-19)。`paper-copilot eval retrieval` 现在同时计算/展示/记录
+  paper `precision@5/@10` 与 evidence anchor `precision@5/@10`;run history
+  JSON 兼容旧 retrieval rows,`eval report` 的 retrieval summary、趋势图和
+  detail table 都已展示 precision。定义:paper precision 是 topK 中 relevant
+  papers 占比;evidence anchor precision 是 anchor-labeled paper 返回 chunks
+  中包含人工 anchor 的比例,用于观察"多取 chunk 后是否稀释证据密度",不是
+  未标注 chunk 的完整相关性判断。正式复跑:
+  `eval/runs/2026-05-19T13-13-50Z.jsonl`;`eval/report.html` 刷新为 16 runs /
+  347 rows。当前结果:paper mean `recall@5=98.4%`,`recall@10=100.0%`,
+  `precision@5=32.8%`,`precision@10=16.9%`;13 条 evidence-labeled queries
+  的 query-mean `evidence_recall@5=53.8%`,`evidence_recall@10=53.8%`,
+  `evidence_anchor_precision@5=25.6%`,`evidence_anchor_precision@10=25.6%`。
+  已跑 touched eval 单测:
+  `uv run pytest tests/eval/test_retrieval.py tests/eval/test_runs.py tests/eval/test_report.py`
+  (17 passed,5 warnings),以及 touched-file `ruff check`。
+- **上一编码进展**:**chunk/evidence anchors 已收紧为答案型原文短句**
+  (2026-05-19)。按用户追问,将 `eval/retrieval/queries.yaml` 中
+  `Soft-Mask Images`、`Diverse Tokens Neighbor Learning`、`This is followed
+  by the triplet loss` 等方法名/短词式 anchor 替换为"动作 + 对象/效果"的
+  原文 evidence 短句,例如 q019 改为
+  `generate soft-mask images with the BG being suppressed`,q018 改为
+  `Part Selection Module (PSM) is applied to select tokens...`。只读核查
+  16 个 anchors 均能在对应 paper chunk 中直接命中(`bad=0`)。正式复跑:
+  `eval/runs/2026-05-19T11-00-30Z.jsonl`;`eval/report.html` 刷新为 15 runs /
+  311 rows。结果:paper mean `recall@5=98.4%`,`recall@10=100.0%`;13 条
+  evidence-labeled queries 的 query-mean `evidence_recall@5=53.8%`,
+  `evidence_recall@10=53.8%`。相比上一版 56.4% 小降是标签更严格导致,
+  结论不变:经常找对论文,但 top paper result 携带的 3 条 evidence chunks
+  仍没稳定覆盖人工答案句。按用户验证策略,本轮未运行 `ruff` / `mypy` /
+  `pytest`。
+- **更早编码进展**:**chunk/evidence 级 retrieval recall baseline + label audit 已完成**
+  (2026-05-19)。`eval/retrieval/queries.yaml` 新增可选
+  `evidence_anchors`(`paper_id` + stable text anchor),不使用易漂移的
+  chunk_id;`paper-copilot eval retrieval` 现在同时输出/记录 paper recall 与
+  `evidence_recall@5/@10`,run history 与 `eval report` 也渲染 evidence recall
+  趋势和 latest query detail。首轮未审标签 dogfood 为
+  `evidence_recall@5/@10=44.9%`;随后只读核查发现 q017/q019/q027/q033
+  存在 anchor 文本断词/概括句问题,q023 anchor 语义不够贴近 query,已改为能在
+  对应 paper chunk 中直接命中的稳定原文 anchor。修正后正式记录:
+  `eval/runs/2026-05-19T10-21-13Z.jsonl`;`eval/report.html` 刷新为 14 runs /
+  275 rows。结果:paper mean `recall@5=98.4%`,`recall@10=100.0%`;13 条
+  evidence-labeled queries 的 query-mean `evidence_recall@5=56.4%`,
+  `evidence_recall@10=56.4%`。剩余弱项主要不是找错论文,而是 top paper
+  result 携带的 3 条 evidence chunks 没覆盖人工 anchor。按用户验证策略,本轮
+  未运行 `ruff` / `mypy` / `pytest`。
+- **更早编码进展**:**retrieval ranking 观察切片已完成**
   (2026-05-19)。`eval/retrieval/queries.yaml` 已从 12 篇 / 15 queries 扩到
   当前默认论文库 34 篇 / 36 queries,新增 ReID / VI-ReID / multi-modal /
   token selection / Transformer survey / diffusion / Mamba 等 seed。继
