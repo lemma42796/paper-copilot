@@ -14,7 +14,7 @@ from paper_copilot.eval.runs import load_history, write_research_quality_run
 from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.knowledge.meta import IndexMeta, require_match, write_meta
-from paper_copilot.session.paths import default_root
+from paper_copilot.session.paths import default_pdf_dir, default_root
 from paper_copilot.shared.embedder import EMBEDDING_DIM, MODEL_NAME, Embedder
 from paper_copilot.shared.errors import KnowledgeError
 
@@ -50,10 +50,16 @@ async def handle_chat_request(
     read_llm: LLMClient | None = None,
 ) -> ChatRunResult:
     home = root if root is not None else default_root()
+    library_dir = pdf_dir if pdf_dir is not None else default_pdf_dir()
+    if library_dir is not None:
+        library_dir = library_dir.expanduser().resolve()
+    if library_dir is not None and not library_dir.is_dir():
+        raise KnowledgeError(f"pdf_dir does not exist: {library_dir}")
+
     fields_db = home / "fields.db"
     embeddings_db = home / "embeddings.db"
     meta_path = home / "embeddings_meta.json"
-    if not fields_db.exists() and pdf_dir is None:
+    if not fields_db.exists() and library_dir is None:
         raise KnowledgeError(
             f"index missing at {fields_db}. "
             "Run `paper-copilot reindex --pdf-dir <dir>` first."
@@ -64,7 +70,7 @@ async def handle_chat_request(
     with ExitStack() as stack:
         fields_store = stack.enter_context(FieldsStore.open(fields_db))
         embeddings_store: EmbeddingsStore | None = None
-        if pdf_dir is not None or embeddings_db.exists():
+        if library_dir is not None or embeddings_db.exists():
             if embeddings_db.exists():
                 require_match(
                     meta_path,
@@ -97,7 +103,7 @@ async def handle_chat_request(
                 (lambda query: embedder.encode([query])[0]) if embedder is not None else None
             ),
             embedder=embedder,
-            pdf_dir=pdf_dir,
+            pdf_dir=library_dir,
             root=home,
             max_papers=max_papers,
         )

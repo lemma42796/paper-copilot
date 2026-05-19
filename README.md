@@ -64,6 +64,8 @@ cp .env.example .env
 `.env` 沿当前工作目录向上查找。`ANTHROPIC_API_KEY` shell 环境变量优先级
 更高。`DASHSCOPE_API_KEY` 用于 `text-embedding-v4`;若未设置,本地开发会
 回退使用 `ANTHROPIC_API_KEY`。
+`PAPER_COPILOT_PDF_DIR` 用作 chat/research 的默认本地论文文件夹;当前本机
+默认测试论文库为 `/Users/a123/paper-copilot-test-pdfs`。
 
 ## 使用
 

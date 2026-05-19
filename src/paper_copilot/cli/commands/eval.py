@@ -22,7 +22,12 @@ from paper_copilot.eval.retrieval import (
     load_retrieval_suite,
     run_retrieval_eval,
 )
-from paper_copilot.eval.runs import load_history, write_research_quality_run, write_run
+from paper_copilot.eval.runs import (
+    load_history,
+    write_research_quality_run,
+    write_retrieval_run,
+    write_run,
+)
 from paper_copilot.eval.suite import (
     SuiteResult,
     load_suite,
@@ -144,6 +149,20 @@ def retrieval(
         Path | None,
         typer.Option("--root", help="Override PAPER_COPILOT_HOME root"),
     ] = None,
+    runs_dir: Annotated[
+        Path | None,
+        typer.Option("--runs-dir", help="Override default eval/runs/ location"),
+    ] = None,
+    no_record: Annotated[
+        bool,
+        typer.Option(
+            "--no-record",
+            help=(
+                "Don't append this retrieval run to eval/runs/. For ad-hoc "
+                "debugging; skipping the record means `eval report` won't see it."
+            ),
+        ),
+    ] = False,
     k: Annotated[
         int,
         typer.Option("--k", help="Number of top papers to retrieve; must be >= 10"),
@@ -157,7 +176,14 @@ def retrieval(
         typer.echo(str(e), err=True)
         raise typer.Exit(code=2) from e
 
-    _render_retrieval(Console(), result)
+    console = Console()
+    _render_retrieval(console, result)
+    if not no_record:
+        try:
+            run_path = write_retrieval_run(result, runs_dir=runs_dir)
+            console.print(f"[dim]recorded retrieval run → {run_path}[/dim]")
+        except PaperCopilotError as e:
+            console.print(f"[yellow]warning:[/yellow] could not record run: {e}")
 
 
 @app.command("record-research")
@@ -277,8 +303,8 @@ def _render_retrieval(console: Console, result: RetrievalEvalResult) -> None:
     for query in result.queries:
         table.add_row(
             query.query_id,
-            f"{query.recall_at_5:.2f}",
-            f"{query.recall_at_10:.2f}",
+            f"{query.recall_at_5:.1%}",
+            f"{query.recall_at_10:.1%}",
             _format_hits(query),
             ", ".join(query.missed_at_10) if query.missed_at_10 else "-",
         )
@@ -287,8 +313,8 @@ def _render_retrieval(console: Console, result: RetrievalEvalResult) -> None:
     console.print()
     console.print(
         "mean recall: "
-        f"@5={result.mean_recall_at_5:.3f}  "
-        f"@10={result.mean_recall_at_10:.3f}"
+        f"@5={result.mean_recall_at_5:.1%}  "
+        f"@10={result.mean_recall_at_10:.1%}"
     )
 
 

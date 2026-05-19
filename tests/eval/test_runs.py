@@ -7,12 +7,18 @@ from pathlib import Path
 import pytest
 
 from paper_copilot.eval.assertions import FieldFailure
+from paper_copilot.eval.retrieval import (
+    RetrievalEvalResult,
+    RetrievalHit,
+    RetrievalQueryResult,
+)
 from paper_copilot.eval.runs import (
     RunRow,
     _cache_hit_ratio,
     load_history,
     make_run_id,
     write_research_quality_run,
+    write_retrieval_run,
     write_run,
 )
 from paper_copilot.eval.suite import FieldResult, PaperResult, SuiteResult
@@ -161,6 +167,13 @@ def test_run_row_roundtrip() -> None:
         findings_inline_ref_count=1,
         claims_without_refs_count=1,
         evidence_coverage_ratio=0.75,
+        retrieval_query="residual connections",
+        retrieval_relevant_count=2,
+        retrieval_recall_at_5=0.5,
+        retrieval_recall_at_10=1.0,
+        retrieval_missed_at_5=("p2",),
+        retrieval_missed_at_10=(),
+        retrieval_top_papers=("p1", "p2"),
     )
     assert RunRow.from_json(row.to_json()) == row
 
@@ -184,6 +197,7 @@ def test_run_row_reads_legacy_json_without_quality_fields() -> None:
 
     assert row.evidence_ref_count is None
     assert row.evidence_coverage_ratio is None
+    assert row.retrieval_recall_at_10 is None
 
 
 def test_write_research_quality_run_records_final_output_quality(tmp_path: Path) -> None:
@@ -233,3 +247,59 @@ def test_write_research_quality_run_records_final_output_quality(tmp_path: Path)
     assert row.findings_inline_ref_count == 1
     assert row.claims_without_refs_count == 1
     assert row.evidence_coverage_ratio == 0.5
+
+
+def test_write_retrieval_run_records_one_row_per_query(tmp_path: Path) -> None:
+    result = RetrievalEvalResult(
+        suite_name="retrieval_seed",
+        queries=(
+            RetrievalQueryResult(
+                query_id="q1",
+                query="residual connections",
+                relevant_papers=("p1", "p2"),
+                hits=(
+                    RetrievalHit(
+                        rank=1,
+                        paper_id="p1",
+                        title="paper 1",
+                        year=2016,
+                        best_chunk_id=3,
+                        rrf_score=0.5,
+                        vector_rank=1,
+                        bm25_rank=None,
+                    ),
+                    RetrievalHit(
+                        rank=8,
+                        paper_id="p2",
+                        title="paper 2",
+                        year=2017,
+                        best_chunk_id=4,
+                        rrf_score=0.2,
+                        vector_rank=None,
+                        bm25_rank=2,
+                    ),
+                ),
+                recall_at_5=0.5,
+                recall_at_10=1.0,
+                missed_at_5=("p2",),
+                missed_at_10=(),
+            ),
+        ),
+    )
+
+    path = write_retrieval_run(result, runs_dir=tmp_path, run_id="retrieval1", git_sha="sha")
+
+    row = RunRow.from_json(json.loads(path.read_text(encoding="utf-8")))
+    assert row.run_id == "retrieval1"
+    assert row.suite_name == "retrieval_seed"
+    assert row.paper_id == "q1"
+    assert row.field == "retrieval_recall"
+    assert row.field_passed is True
+    assert row.field_n_failures == 0
+    assert row.retrieval_query == "residual connections"
+    assert row.retrieval_relevant_count == 2
+    assert row.retrieval_recall_at_5 == 0.5
+    assert row.retrieval_recall_at_10 == 1.0
+    assert row.retrieval_missed_at_5 == ("p2",)
+    assert row.retrieval_missed_at_10 == ()
+    assert row.retrieval_top_papers == ("p1", "p2")

@@ -39,19 +39,53 @@
   支持多 tier 计费;跑 plus 候选 vs flash baseline 对比,数据决定继续用 flash
   (2.03x cost / 2.22x latency,0 quality 上行),story 落盘
   `docs/stories/2026-04-27-model-selection-flash-vs-plus.md`。
-- **当前阶段**:**M18 Evidence-grounded RAG v1 正在落地**。截至 2026-05-19,
+- **当前阶段**:**M18 Evidence-grounded RAG v1 可关闭,下次进入 M19 最小闭环**。
+  截至 2026-05-19,
   chat-first runtime/API 与 macOS-style web shell 已可用;后端 route 已收敛为
   `knowledge_qa` / `framework_composer`,knowledge QA 下有轻量 `task_profile`。
   检索侧已从 bge-m3 切到百炼 `text-embedding-v4`(1024 维),并落地
   FTS5/BM25 + vector RRF + multi-chunk evidence + chunk ref lookup + 前端证据
   面板。默认数据根 `~/.paper-copilot` 已用
-  `/Users/a123/paper-copilot-test-pdfs` 重建 text-embedding-v4 索引:12 papers /
-  482 chunks。
-- **最新编码进展**:**retrieval eval v1 已实现但未运行**(2026-05-19)。新增
-  `eval/retrieval/queries.yaml` 人工 paper-level seed labels(15 queries)和
-  `paper-copilot eval retrieval eval/retrieval/queries.yaml` 命令,可计算
-  `paper_recall@5` / `paper_recall@10` 并显示 top papers / missed@10。按用户
-  指令,本轮没有运行 eval/测试/构建。
+  `/Users/a123/paper-copilot-test-pdfs` 补齐 text-embedding-v4 索引:当前
+  34 papers / 2066 chunks。RAG v1 当前 gate:34 篇 / 36 queries seed eval
+  mean `recall@5=98.4%`,`recall@10=100.0%`;不再为 seed eval 继续微调
+  ranking。未做/暂跳过:reranker、paper alias/metadata 检索、retrieval
+  misses/top-k 诊断接前端、unsupported claim 系统人工抽样。下一步用 M19
+  真实"论文创新方案生成"主路径倒逼 RAG 缺口。
+- **最新编码进展**:**retrieval ranking 观察切片已完成**
+  (2026-05-19)。`eval/retrieval/queries.yaml` 已从 12 篇 / 15 queries 扩到
+  当前默认论文库 34 篇 / 36 queries,新增 ReID / VI-ReID / multi-modal /
+  token selection / Transformer survey / diffusion / Mamba 等 seed。继
+  q012/q018/q033 label 审核后,又审了 q014/q015/q020/q025/q033:q014 收窄为
+  ViLBERT vs ViT,q020 把 test-time training 标签换成 VI-ReID 表征论文,
+  q025 去掉非 ReID 的 TransFG 标签;q015/q033 保留为真实 top-5 排序弱项。
+  复跑 `paper-copilot eval retrieval eval/retrieval/queries.yaml`:mean
+  `recall@5=98.4%`,`recall@10=100.0%`,recorded run:
+  `eval/runs/2026-05-19T09-32-49Z.jsonl`;`eval/report.html` 已刷新为 12 runs /
+  203 rows。随后只读比较 current / overfetch10 / overfetch20 / rrf10 /
+  vector_only:overfetch10 仅把 mean `recall@5` 提到 `98.6%`,但 q015
+  `-25.0%`、q033 `+33.3%`,属于互相抵消的排序交换;overfetch20、rrf10、
+  vector_only 都有更明显回退。因此本轮不改默认 ranking 参数。按用户最新
+  指令,本轮未运行 `ruff` / `mypy` / `pytest`。
+- **默认论文库设置**(2026-05-19):`/Users/a123/paper-copilot-test-pdfs`
+  已设为 chat/research 默认本地论文库。后端优先读 `PAPER_COPILOT_PDF_DIR`,
+  否则在本机 fallback 到该路径;前端资料库输入框默认也填这个目录。`reindex`
+  仍要求显式传 `--pdf-dir`,避免误触发全量重 embedding。按用户最新指令,
+  本轮未运行 `ruff` / `mypy` / `pytest`。
+- **默认论文库 embedding 补齐 1**(2026-05-19):对
+  `/Users/a123/paper-copilot-test-pdfs` 中尚未进入 `embeddings.db` 的 21 个
+  PDF 逐篇执行 `read`,避免全量 `reindex` 重跑旧论文。结果:20 篇成功,1 篇失败
+  (`TransFG- A Transformer Architecture for Fine-Grained Recognition.pdf`,
+  paper_id=`860e24025c67`,DeepAgent `emit_deep.methods` schema validation
+  failed)。当前 `embeddings.db` 为 33 papers / 2030 chunks;本批 20 篇 read
+  合计约 ¥1.8720,平均约 ¥0.0936/篇;日志:
+  `/private/tmp/paper-copilot-read-missing.log`。按用户最新指令,本轮未运行
+  `ruff` / `mypy` / `pytest`。
+- **默认论文库 embedding 补齐 2**(2026-05-19):单独重跑唯一失败的 TransFG
+  (`paper-copilot read ... --force`) 成功,本次成本约 ¥0.0547。当前
+  `/Users/a123/paper-copilot-test-pdfs` 的 34 个 PDF 已全部进入
+  `embeddings.db`:34 papers / 2066 chunks,missing=0。按用户最新指令,本轮未运行
+  `ruff` / `mypy` / `pytest`。
 - **M17-min 进展**(2026-05-18):新增 `paper-copilot research "<topic>"`
   的最小 bounded tool loop 骨架。当前包装本地库工具:`list_papers` /
   `list_pdfs` / `read_paper` / `search_library` / `inspect_paper` /
@@ -322,27 +356,72 @@
   12 paper(s) / 482 chunks,embeddings skipped 8(no matching pdf),elapsed 85.0s。
   新 `embeddings_meta.json` 为 `embedding_model=text-embedding-v4`,
   `embedding_dim=1024`。
-- **retrieval eval seed labels**(2026-05-19):新增
+- **retrieval eval seed labels**(2026-05-19):新增并扩充
   `eval/retrieval/queries.yaml`,人工标注当前 text-embedding-v4 索引覆盖的
-  12 篇论文,共 15 条中英文 seed query。标签先只做 paper-level
+  34 篇论文,共 36 条中英文 seed query。标签先只做 paper-level
   `relevant_papers`,作为 `paper_recall@k` 分母;chunk 层只保留
-  `snippet_hints`,避免依赖 reindex 后可能变化的 chunk_id。按用户指令未运行
-  eval/验证。
+  `snippet_hints`,避免依赖 reindex 后可能变化的 chunk_id。
 - **retrieval eval command v1**(2026-05-19):新增
   `paper-copilot eval retrieval eval/retrieval/queries.yaml`。命令读取
   paper-level retrieval labels,对当前默认数据根的 `fields.db` +
   `embeddings.db` 跑 hybrid search,按聚合后的 top papers 计算
   `paper_recall@5` / `paper_recall@10`,并渲染每条 query 的 top papers 与
-  missed@10。当前只是观测命令,不设 fail gate,也不记录历史 run。按用户指令未运行
-  eval/验证。
+  missed@10。命令仍是观测性质,不设 fail gate。
+- **retrieval eval history v1**(2026-05-19):`eval retrieval` 现在默认记录
+  history run,每条 query 一行 JSONL,包含 query、相关 paper 数、recall@5/10、
+  missed@5/10、top papers;`--no-record` 可跳过。`eval report` 新增
+  Retrieval mean recall 趋势区,且 retrieval rows 不再污染 extraction
+  PASS/cost/cache 图。已跑 focused `ruff` / `mypy` /
+  `tests/eval/test_runs.py tests/eval/test_report.py`,并 dogfood 真实命令一次:
+  mean `recall@5=98.3%`,`recall@10=100.0%`,报告刷新为 1 run / 15 rows。
+- **retrieval eval report detail v1**(2026-05-19):`eval report` 的 retrieval
+  section 现在追加 latest query detail 表,按弱项优先展示每条 query 的文本、
+  recall@5/10、missed@5/10 和 top 5 papers,用于快速定位 q015 这类 top-5
+  未满的查询。按用户最新指令,本轮未运行 `ruff` / `mypy` / `pytest`。
+- **retrieval eval 34-paper run 1**(2026-05-19):34-paper seed 扩充后已跑
+  `paper-copilot eval retrieval eval/retrieval/queries.yaml`,mean
+  `recall@5=91.9%`,`recall@10=96.1%`,recorded run
+  `eval/runs/2026-05-19T09-21-03Z.jsonl`;`eval report` 刷新为 2 runs /
+  51 rows。弱项优先看 q012/q018/q033,分别反映跨家族对比、间接 baseline label
+  和多模态表述下的漏召。
+- **retrieval eval label audit v1**(2026-05-19):审完 q012/q018/q033 后仅改
+  `eval/retrieval/queries.yaml` 标签/查询意图:q012 改为 ViT inductive-bias
+  exact lookup,q018 去掉间接 ViT baseline,q033 去掉泛化 fusion 论文。YAML
+  一致性检查通过(corpus=34,queries=36,duplicate_ids=0,missing_relevant=0);
+  复跑 retrieval eval 后 mean `recall@5=95.6%`,`recall@10=100.0%`,recorded
+  run `eval/runs/2026-05-19T09-27-55Z.jsonl`;`eval report` 刷新为 11 runs /
+  167 rows。本轮按用户最新指令未运行 `ruff` / `mypy` / `pytest`。
+- **retrieval eval top-5 label audit v2**(2026-05-19):继续审 q014/q015/q020/
+  q025/q033。q014 改成 ViLBERT vs ViT,避免 broad "multimodal transformers"
+  被多模态 ReID 论文抢语义;q020 用 `6e870fa58055` 替换
+  `7206a2c64532`,把标签对齐到 RGB/IR 表征而非 test-time training;q025 去掉
+  非 ReID 的 TransFG 标签。q015/q033 未强行改标签,保留为真实 top-5 排序弱项。
+  YAML 一致性检查通过(corpus=34,queries=36,duplicate_ids=0,
+  missing_relevant=0);复跑 retrieval eval 后 mean `recall@5=98.4%`,
+  `recall@10=100.0%`,recorded run `eval/runs/2026-05-19T09-32-49Z.jsonl`;
+  `eval report` 刷新为 12 runs / 203 rows。本轮按用户最新指令未运行
+  `ruff` / `mypy` / `pytest`。
+- **retrieval ranking 观察切片**(2026-05-19):只读比较 q015/q033 的 current、
+  rrf10/30/100、overfetch10/20、vector_only。q015 的 AlexNet 论文
+  (`2315fc6c2c0c`) 在 current 下只有 vector rank=24 且无 BM25 命中,说明
+  "AlexNet" 别名与论文标题/正文词面不完全对齐;overfetch10/20 会把 q015
+  从 `75.0%` 拉到 `50.0%`。q033 的 DeMo (`3b53aa0674f2`) 在 current 下是
+  BM25 rank=36,overfetch10 可进 top-5。全 36 query 对比:current mean
+  `recall@5=98.4%`,`recall@10=100.0%`;overfetch10 mean `recall@5=98.6%`,
+  `recall@10=100.0%`,但只是 q015 `-25.0%` 与 q033 `+33.3%` 抵消;overfetch20
+  mean `recall@5=97.7%`,`recall@10=99.3%`;rrf10 mean `recall@5=97.7%`;
+  vector_only mean `recall@5=97.7%`,`recall@10=99.3%`。结论:不要为这 2 条
+  改默认 ranking 参数。
 - **协作偏好更新**(2026-05-19):不要每次改完代码就自动 commit/push。默认只
   修改与验证,等用户明确说“commit / push / 保存进度”再提交推送。本次用户
   明确要求保存进度并 push。
-- **下一个任务建议**:如果用户允许观察性运行,先跑
-  `paper-copilot eval retrieval eval/retrieval/queries.yaml` 看当前
-  text-embedding-v4 + BM25/RRF 的 `paper_recall@5/@10`;如果仍保持"不跑验证",
-  下一刀做 retrieval eval 的 JSON/JSONL 结果落盘和历史趋势记录,再考虑
-  evidence coverage / unsupported claim 面板。
+- **下一个任务建议**:按用户最新选择,跳过 retrieval misses 前端诊断和
+  alias/metadata 检索设计;不要继续为 seed eval 微调 ranking。下次直接进入
+  M19 Research Idea Composer 最小闭环:用默认 34 篇论文库跑一个真实"论文创新
+  方案生成"请求,检查自然语言输入 → 检索证据 → 组合方案 → evidence refs
+  可追溯这条产品主路径。DoD:报告能读、关键结论带引用、明显 unsupported
+  claim 记下来、成本/耗时有记录;除非用户重新要求,继续不跑 `ruff` / `mypy` /
+  `pytest`。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from paper_copilot.eval._paths import default_runs_dir, find_project_root
+from paper_copilot.eval.retrieval import RetrievalEvalResult
 from paper_copilot.eval.suite import SuiteResult
 from paper_copilot.session import FinalOutput, SessionHeader, SessionStore
 from paper_copilot.shared.errors import EvalError
@@ -44,6 +45,13 @@ class RunRow:
     findings_inline_ref_count: int | None = None
     claims_without_refs_count: int | None = None
     evidence_coverage_ratio: float | None = None
+    retrieval_query: str | None = None
+    retrieval_relevant_count: int | None = None
+    retrieval_recall_at_5: float | None = None
+    retrieval_recall_at_10: float | None = None
+    retrieval_missed_at_5: tuple[str, ...] | None = None
+    retrieval_missed_at_10: tuple[str, ...] | None = None
+    retrieval_top_papers: tuple[str, ...] | None = None
 
     def to_json(self) -> dict[str, Any]:
         raw: dict[str, Any] = {
@@ -67,6 +75,16 @@ class RunRow:
             "evidence_coverage_ratio": self.evidence_coverage_ratio,
         }
         raw.update({key: value for key, value in quality.items() if value is not None})
+        retrieval = {
+            "retrieval_query": self.retrieval_query,
+            "retrieval_relevant_count": self.retrieval_relevant_count,
+            "retrieval_recall_at_5": self.retrieval_recall_at_5,
+            "retrieval_recall_at_10": self.retrieval_recall_at_10,
+            "retrieval_missed_at_5": _list_or_none(self.retrieval_missed_at_5),
+            "retrieval_missed_at_10": _list_or_none(self.retrieval_missed_at_10),
+            "retrieval_top_papers": _list_or_none(self.retrieval_top_papers),
+        }
+        raw.update({key: value for key, value in retrieval.items() if value is not None})
         return raw
 
     @classmethod
@@ -88,6 +106,13 @@ class RunRow:
             findings_inline_ref_count=raw.get("findings_inline_ref_count"),
             claims_without_refs_count=raw.get("claims_without_refs_count"),
             evidence_coverage_ratio=raw.get("evidence_coverage_ratio"),
+            retrieval_query=raw.get("retrieval_query"),
+            retrieval_relevant_count=raw.get("retrieval_relevant_count"),
+            retrieval_recall_at_5=raw.get("retrieval_recall_at_5"),
+            retrieval_recall_at_10=raw.get("retrieval_recall_at_10"),
+            retrieval_missed_at_5=_tuple_or_none(raw.get("retrieval_missed_at_5")),
+            retrieval_missed_at_10=_tuple_or_none(raw.get("retrieval_missed_at_10")),
+            retrieval_top_papers=_tuple_or_none(raw.get("retrieval_top_papers")),
         )
 
 
@@ -216,6 +241,48 @@ def write_research_quality_run(
     return path
 
 
+def write_retrieval_run(
+    result: RetrievalEvalResult,
+    *,
+    runs_dir: Path | None = None,
+    run_id: str | None = None,
+    git_sha: str | None = None,
+) -> Path:
+    rid = run_id if run_id is not None else make_run_id()
+    sha = git_sha if git_sha is not None else _git_sha()
+    base = runs_dir if runs_dir is not None else default_runs_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / f"{rid}.jsonl"
+    if path.exists():
+        raise EvalError(f"run file already exists: {path}")
+
+    with path.open("w", encoding="utf-8") as f:
+        for query in result.queries:
+            row = RunRow(
+                run_id=rid,
+                suite_name=result.suite_name,
+                git_sha=sha,
+                paper_id=query.query_id,
+                field="retrieval_recall",
+                field_passed=not query.missed_at_10,
+                field_n_failures=len(query.missed_at_10),
+                cost_cny=0.0,
+                latency_s=0.0,
+                cache_hit_ratio=0.0,
+                budget_passed=True,
+                retrieval_query=query.query,
+                retrieval_relevant_count=len(query.relevant_papers),
+                retrieval_recall_at_5=query.recall_at_5,
+                retrieval_recall_at_10=query.recall_at_10,
+                retrieval_missed_at_5=query.missed_at_5,
+                retrieval_missed_at_10=query.missed_at_10,
+                retrieval_top_papers=tuple(hit.paper_id for hit in query.hits),
+            )
+            f.write(json.dumps(row.to_json(), ensure_ascii=False))
+            f.write("\n")
+    return path
+
+
 def _read_research_final(session_path: Path) -> tuple[SessionHeader, FinalOutput]:
     if not session_path.exists():
         raise EvalError(f"session file not found: {session_path}")
@@ -263,6 +330,20 @@ def _int_cost(cost: dict[str, Any], key: str) -> int:
 def _float_cost(cost: dict[str, Any], key: str) -> float:
     value = cost.get(key, 0.0)
     return float(value) if isinstance(value, int | float) else 0.0
+
+
+def _tuple_or_none(value: object) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    if isinstance(value, list | tuple):
+        return tuple(str(item) for item in value)
+    return None
+
+
+def _list_or_none(value: tuple[str, ...] | None) -> list[str] | None:
+    if value is None:
+        return None
+    return list(value)
 
 
 def load_history(

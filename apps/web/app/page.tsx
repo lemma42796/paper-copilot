@@ -80,6 +80,7 @@ type UsageTip = {
 };
 
 const DEFAULT_API_URL = "http://127.0.0.1:8765";
+const DEFAULT_LIBRARY_DIR = "/Users/a123/paper-copilot-test-pdfs";
 const DEFAULT_PROMPT =
   "基于医学图像分割，先找一个可复现 baseline，再找 2-3 个可接入模块，给出实验方案和证据引用。";
 const LIBRARY_DIR_STORAGE_KEY = "paper-copilot.libraryDir";
@@ -107,7 +108,7 @@ const USAGE_TIPS: UsageTip[] = [
 export default function Home() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
   const [message, setMessage] = useState(DEFAULT_PROMPT);
-  const [pdfDir, setPdfDir] = useState("");
+  const [pdfDir, setPdfDir] = useState(DEFAULT_LIBRARY_DIR);
   const [health, setHealth] = useState<HealthState>("checking");
   const [isRunning, setIsRunning] = useState(false);
   const [isSelectingLibraryDir, setIsSelectingLibraryDir] = useState(false);
@@ -499,7 +500,7 @@ export default function Home() {
                       <input
                         id="pdf-dir"
                         onChange={(event) => updateLibraryDir(event.target.value)}
-                        placeholder="/Users/a123/Documents/papers"
+                        placeholder={DEFAULT_LIBRARY_DIR}
                         value={pdfDir}
                       />
                       <button

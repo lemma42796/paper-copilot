@@ -11,6 +11,8 @@ runs:
    (cache_read / total billed prompt tokens).
 4. Optional ResearchAgent evidence quality — catches unsupported-claim
    drift when rows include M17 quality payload fields.
+5. Optional retrieval recall — catches evidence index/search regressions
+   when rows include M18 retrieval eval payload fields.
 
 Top-of-page markdown summary diffs the most recent run against the
 prior one for the same suite, highlighting fields whose PASS state
@@ -61,19 +63,34 @@ def render_html(rows: list[RunRow], *, title: str = "paper-copilot eval report")
 
     groups = _group_runs(rows)
     summary = _summary_md(groups)
-    pass_chart = _chart_pass_rate(groups)
-    cost_chart = _chart_paper_metric(
-        groups,
-        value_fn=lambda r: r.cost_cny,
-        y_format="{:.4f}",
-    )
-    cache_chart = _chart_paper_metric(
-        groups,
-        value_fn=lambda r: r.cache_hit_ratio,
-        y_format="{:.2%}",
-        y_max=1.0,
-    )
+    non_retrieval_groups = _filter_group_rows(groups, lambda row: not _is_retrieval(row))
     quality_sections = _quality_sections(groups)
+    retrieval_sections = _retrieval_sections(groups)
+
+    chart_sections: list[str] = []
+    if non_retrieval_groups:
+        chart_sections.extend(
+            [
+                "<section class='chart'><h2>PASS rate per field</h2>",
+                _chart_pass_rate(non_retrieval_groups),
+                "</section>",
+                "<section class='chart'><h2>Per-paper cost (¥)</h2>",
+                _chart_paper_metric(
+                    non_retrieval_groups,
+                    value_fn=lambda r: r.cost_cny,
+                    y_format="{:.4f}",
+                ),
+                "</section>",
+                "<section class='chart'><h2>Per-paper cache-hit ratio</h2>",
+                _chart_paper_metric(
+                    non_retrieval_groups,
+                    value_fn=lambda r: r.cache_hit_ratio,
+                    y_format="{:.2%}",
+                    y_max=1.0,
+                ),
+                "</section>",
+            ]
+        )
 
     body = "\n".join(
         [
@@ -84,16 +101,9 @@ def render_html(rows: list[RunRow], *, title: str = "paper-copilot eval report")
             "<section class='summary'>",
             summary,
             "</section>",
-            "<section class='chart'><h2>PASS rate per field</h2>",
-            pass_chart,
-            "</section>",
-            "<section class='chart'><h2>Per-paper cost (¥)</h2>",
-            cost_chart,
-            "</section>",
-            "<section class='chart'><h2>Per-paper cache-hit ratio</h2>",
-            cache_chart,
-            "</section>",
+            *chart_sections,
             quality_sections,
+            retrieval_sections,
         ]
     )
     return _PAGE_TMPL.format(title=html.escape(title), body=body)
@@ -121,8 +131,30 @@ def _group_runs(rows: list[RunRow]) -> list[_RunGroup]:
     return groups
 
 
+def _filter_group_rows(
+    groups: list[_RunGroup], predicate: Callable[[RunRow], bool]
+) -> list[_RunGroup]:
+    filtered: list[_RunGroup] = []
+    for group in groups:
+        rows = tuple(row for row in group.rows if predicate(row))
+        if not rows:
+            continue
+        filtered.append(
+            _RunGroup(
+                run_id=group.run_id,
+                suite_name=group.suite_name,
+                git_sha=group.git_sha,
+                rows=rows,
+            )
+        )
+    return filtered
+
+
 def _summary_md(groups: list[_RunGroup]) -> str:
     latest = groups[-1]
+    if _all_retrieval(latest.rows):
+        return _retrieval_summary_md(groups)
+
     fields = sorted({r.field for r in latest.rows})
     papers = sorted({r.paper_id for r in latest.rows})
 
@@ -191,8 +223,45 @@ def _summary_md(groups: list[_RunGroup]) -> str:
     return "\n".join(lines)
 
 
+def _retrieval_summary_md(groups: list[_RunGroup]) -> str:
+    latest = groups[-1]
+    latest_stats = _run_retrieval(latest)
+    if latest_stats is None:
+        return "<p class='hint'>No retrieval rows found in latest run.</p>"
+
+    query_count, recall_at_5, recall_at_10 = latest_stats
+    lines = [
+        f"<p><b>Latest retrieval run</b>: {query_count} query(s) · "
+        f"mean recall@5 {recall_at_5:.1%} · "
+        f"mean recall@10 {recall_at_10:.1%}</p>"
+    ]
+
+    prior = _previous_retrieval_group(groups)
+    if prior is None:
+        lines.append("<p class='hint'>Need ≥2 retrieval runs to show a trend diff.</p>")
+        return "\n".join(lines)
+
+    prior_stats = _run_retrieval(prior)
+    if prior_stats is None:
+        lines.append("<p class='hint'>No comparable prior retrieval run found.</p>")
+        return "\n".join(lines)
+
+    _, prior_at_5, prior_at_10 = prior_stats
+    lines.append(
+        f"<p><b>vs prior retrieval</b> ({html.escape(prior.run_id)}, "
+        f"{html.escape(prior.git_sha)}): "
+        f"recall@5 {_format_pp(recall_at_5 - prior_at_5)} · "
+        f"recall@10 {_format_pp(recall_at_10 - prior_at_10)}</p>"
+    )
+    return "\n".join(lines)
+
+
 def _pf(passed: bool) -> str:
     return "PASS" if passed else "FAIL"
+
+
+def _format_pp(delta: float) -> str:
+    return f"{delta * 100:+.1f} pp"
 
 
 def _pass_rate(rows: tuple[RunRow, ...] | list[RunRow]) -> float:
@@ -262,6 +331,132 @@ def _quality_sections(groups: list[_RunGroup]) -> str:
             "</section>",
         ]
     )
+
+
+def _retrieval_sections(groups: list[_RunGroup]) -> str:
+    retrieval_groups = _filter_group_rows(groups, _is_retrieval)
+    if not retrieval_groups:
+        return ""
+
+    recall_chart = _chart_retrieval_recall(retrieval_groups)
+    detail_table = _retrieval_detail_table(retrieval_groups[-1])
+    return "\n".join(
+        [
+            "<section class='chart'><h2>Retrieval mean recall</h2>",
+            recall_chart,
+            "</section>",
+            "<section class='chart'><h2>Latest retrieval query detail</h2>",
+            detail_table,
+            "</section>",
+        ]
+    )
+
+
+def _retrieval_detail_table(group: _RunGroup) -> str:
+    rows = sorted(
+        (row for row in group.rows if _is_retrieval(row)),
+        key=lambda row: (
+            row.retrieval_recall_at_5
+            if row.retrieval_recall_at_5 is not None
+            else 0.0,
+            row.retrieval_recall_at_10
+            if row.retrieval_recall_at_10 is not None
+            else 0.0,
+            row.paper_id,
+        ),
+    )
+    body_rows: list[str] = []
+    for row in rows:
+        body_rows.append(
+            "<tr>"
+            f"<td><code>{html.escape(row.paper_id)}</code></td>"
+            f"<td>{html.escape(row.retrieval_query or '')}</td>"
+            f"<td class='num'>{_format_pct(row.retrieval_recall_at_5)}</td>"
+            f"<td class='num'>{_format_pct(row.retrieval_recall_at_10)}</td>"
+            f"<td>{_format_ids(row.retrieval_missed_at_5)}</td>"
+            f"<td>{_format_ids(row.retrieval_missed_at_10)}</td>"
+            f"<td>{_format_ids(_first_n(row.retrieval_top_papers, 5))}</td>"
+            "</tr>"
+        )
+
+    return "\n".join(
+        [
+            "<table class='data-table'>",
+            "<thead><tr>",
+            "<th>query</th>",
+            "<th>text</th>",
+            "<th>recall@5</th>",
+            "<th>recall@10</th>",
+            "<th>missed@5</th>",
+            "<th>missed@10</th>",
+            "<th>top 5 papers</th>",
+            "</tr></thead>",
+            f"<tbody>{''.join(body_rows)}</tbody>",
+            "</table>",
+        ]
+    )
+
+
+def _format_pct(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.1%}"
+
+
+def _format_ids(values: tuple[str, ...] | None) -> str:
+    if not values:
+        return "-"
+    return ", ".join(f"<code>{html.escape(value)}</code>" for value in values)
+
+
+def _first_n(values: tuple[str, ...] | None, n: int) -> tuple[str, ...] | None:
+    if values is None:
+        return None
+    return values[:n]
+
+
+def _chart_retrieval_recall(groups: list[_RunGroup]) -> str:
+    series = {
+        "recall@5": [
+            _avg_metric(group.rows, lambda r: r.retrieval_recall_at_5)
+            for group in groups
+        ],
+        "recall@10": [
+            _avg_metric(group.rows, lambda r: r.retrieval_recall_at_10) for group in groups
+        ],
+    }
+    return _svg_chart(
+        series=series,
+        run_labels=[_short_label(g.run_id) for g in groups],
+        y_max=1.0,
+        y_format="{:.0%}",
+    )
+
+
+def _is_retrieval(row: RunRow) -> bool:
+    return row.retrieval_recall_at_10 is not None
+
+
+def _all_retrieval(rows: tuple[RunRow, ...]) -> bool:
+    return bool(rows) and all(_is_retrieval(row) for row in rows)
+
+
+def _previous_retrieval_group(groups: list[_RunGroup]) -> _RunGroup | None:
+    for group in reversed(groups[:-1]):
+        if any(_is_retrieval(row) for row in group.rows):
+            return group
+    return None
+
+
+def _run_retrieval(group: _RunGroup) -> tuple[int, float, float] | None:
+    rows = [row for row in group.rows if _is_retrieval(row)]
+    if not rows:
+        return None
+    recall_at_5 = _avg_metric(tuple(rows), lambda r: r.retrieval_recall_at_5)
+    recall_at_10 = _avg_metric(tuple(rows), lambda r: r.retrieval_recall_at_10)
+    if recall_at_5 is None or recall_at_10 is None:
+        return None
+    return len(rows), recall_at_5, recall_at_10
 
 
 def _run_quality(group: _RunGroup) -> tuple[float, float] | None:
@@ -494,7 +689,8 @@ def _empty_page(title: str) -> str:
         f"<h1>{html.escape(title)}</h1>"
         "<p class='hint'>No runs found. Run <code>paper-copilot eval run "
         "&lt;suite.yaml&gt;</code> or <code>paper-copilot eval record-research "
-        "&lt;session.jsonl&gt;</code> at least twice to see a trend.</p>"
+        "&lt;session.jsonl&gt;</code> or <code>paper-copilot eval retrieval "
+        "&lt;queries.yaml&gt;</code> at least twice to see a trend.</p>"
     )
     return _PAGE_TMPL.format(title=html.escape(title), body=body)
 
@@ -519,6 +715,11 @@ _PAGE_TMPL = """<!doctype html>
   p.hint {{ color: #888; font-style: italic; }}
   section.chart {{ margin-top: 20px; }}
   svg.chart-svg {{ width: 100%; height: auto; max-width: {w}px; display: block; }}
+  table.data-table {{ border-collapse: collapse; width: 100%; font-size: 12px; }}
+  table.data-table th, table.data-table td {{ border-bottom: 1px solid #eee;
+         padding: 6px 8px; vertical-align: top; text-align: left; }}
+  table.data-table th {{ color: #555; background: #fafafa; font-weight: 600; }}
+  table.data-table td.num {{ text-align: right; white-space: nowrap; }}
   div.legend {{ margin-top: 6px; font-size: 11px; color: #444; }}
   span.legend-item {{ display: inline-block; margin: 2px 12px 2px 0; white-space: nowrap; }}
   span.swatch {{ display: inline-block; width: 10px; height: 10px;

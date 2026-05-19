@@ -5,8 +5,8 @@ pdf_dir: /Users/a123/paper-copilot-test-pdfs
 index:
   embedding_model: text-embedding-v4
   embedding_dim: 1024
-  indexed_papers: 12
-  indexed_chunks: 482
+  indexed_papers: 34
+  indexed_chunks: 2066
 
 notes:
   - Paper-level labels only. Chunk ids are intentionally not used because they
@@ -20,39 +20,105 @@ corpus:
   - paper_id: 071b16f25117
     title: NEURAL MACHINE TRANSLATION BY JOINTLY LEARNING TO ALIGN AND TRANSLATE
     year: 2015
+  - paper_id: 0b289f01b521
+    title: "TransReID: Transformer-based Object Re-Identification"
+    year: 2021
+  - paper_id: 1e77e94f507f
+    title: "Magic Tokens: Select Diverse Tokens for Multi-modal Object Re-Identification"
+    year: 2024
+  - paper_id: 1f65cbc78943
+    title: Eliminating Background-bias for Robust Person Re-identification
+    year: 2017
+  - paper_id: 218975d0e1db
+    title: "Tackling Domain Shifts in Person Re-Identification: A Survey and Analysis"
+    year: 2024
   - paper_id: 2315fc6c2c0c
     title: ImageNet Classification with Deep Convolutional Neural Networks
     year: 2012
+  - paper_id: 246635e69843
+    title: Robust Object Re-identification with Coupled Noisy Labels
+    year: 2024
   - paper_id: 268d347e8a55
     title: "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale"
     year: 2021
   - paper_id: 2c03df8b48bf
     title: Deep Residual Learning for Image Recognition
     year: 2015
+  - paper_id: 34c98750b613
+    title: "Transformer for Object Re-Identification: A Survey"
+    year: 2024
+  - paper_id: 3b53aa0674f2
+    title: "DeMo: Decoupled Feature-Based Mixture of Experts for Multi-Modal Object Re-Identification"
+    year: 2024
   - paper_id: 445d06b2ac99
     title: Rethinking the Inception Architecture for Computer Vision
     year: 2015
   - paper_id: 510d98681e5e
     title: Hypergraph Neural Networks
     year: 2019
+  - paper_id: 656e327ef992
+    title: Shallow-Deep Collaborative Learning for Unsupervised Visible-Infrared Person Re-Identification
+    year: 2024
   - paper_id: 65a9c7b0800c
-    title: ViLBERT
+    title: "ViLBERT: Pretraining Task-Agnostic Visiolinguistic Representations for Vision-and-Language Tasks"
     year: 2019
+  - paper_id: 6e870fa58055
+    title: Implicit Discriminative Knowledge Learning for Visible-Infrared Person Re-Identification
+    year: 2024
+  - paper_id: 7206a2c64532
+    title: Heterogeneous Test-Time Training for Multi-Modal Person Re-identification
+    year: 2024
+  - paper_id: 80877d60f969
+    title: High-Order Structure Based Middle-Feature Learning for Visible-Infrared Person Re-Identification
+    year: 2024
   - paper_id: 8533b7bdd635
     title: "FaceNet: A Unified Embedding for Face Recognition and Clustering"
     year: 2015
+  - paper_id: 860e24025c67
+    title: "TransFG: A Transformer Architecture for Fine-Grained Recognition"
+    year: 2022
+  - paper_id: 9e5acb459b0e
+    title: "Interact, Embed, and EnlargE: Boosting Modality-Specific Representations for Multi-Modal Person Re-identification"
+    year: 2022
   - paper_id: 9f53740cc80e
     title: "Learning with Hypergraphs: Clustering, Classification, and Embedding"
     year: 2004
+  - paper_id: a09d4e9a9037
+    title: "SBSGAN: Suppression of Inter-Domain Background Shift for Person Re-Identification"
+    year: 2019
+  - paper_id: a30c974ce7d1
+    title: Rewarded Semi-Supervised Re-Identification on Identities Rarely Crossing Camera Views
+    year: 2024
+  - paper_id: a639448e61be
+    title: Attention Is All You Need
+    year: 2017
+  - paper_id: aa98b29ddc93
+    title: Relieving Universal Label Noise for Unsupervised Visible-Infrared Person Re-Identification by Inferring from Neighbors
+    year: 2024
   - paper_id: b350b567b13a
     title: Bag of Tricks and A Strong Baseline for Deep Person Re-identification
     year: 2019
+  - paper_id: b4b1151e1c3a
+    title: "TOP-ReID: Multi-spectral Object Re-Identification with Token Permutation"
+    year: 2024
+  - paper_id: bf1ea703e53c
+    title: "TokenMatcher: Diverse Tokens Matching for Unsupervised Visible-Infrared Person Re-Identification"
+    year: 2025
+  - paper_id: c033e738e867
+    title: "MambaPro: Multi-Modal Object Re-Identification with Mamba Aggregation and Synergistic Prompt"
+    year: 2025
   - paper_id: c2c0252624f0
     title: In Defense of the Triplet Loss for Person Re-Identification
     year: 2017
+  - paper_id: c8258c808553
+    title: Diffusion-based Synthetic Data Generation for Visible-Infrared Person Re-Identification
+    year: 2025
   - paper_id: d3f587797f95
     title: Gradient-Based Learning Applied to Document Recognition
     year: 1998
+  - paper_id: d5c0f2c4bede
+    title: Robust Multi-Modality Person Re-identification
+    year: 2021
 
 queries:
   - id: q001_vit_patches
@@ -188,15 +254,11 @@ queries:
       - convolutional networks
 
   - id: q012_compare_cnn_transformer_inductive_bias
-    query: "compare convolutional inductive bias with transformers for image recognition"
-    intent: fixed_set_compare
+    query: "vision transformer reduced convolutional inductive bias image recognition"
+    intent: exact_method_lookup
     relevant_papers:
       - paper_id: 268d347e8a55
         reason: Discusses Vision Transformers and reduced reliance on CNN inductive biases.
-      - paper_id: 2c03df8b48bf
-        reason: ResNet is a representative convolutional architecture baseline.
-      - paper_id: 445d06b2ac99
-        reason: Inception is a representative convolutional architecture baseline.
     snippet_hints:
       - inductive biases
       - transformers for image recognition
@@ -218,7 +280,7 @@ queries:
       - metric learning
 
   - id: q014_multimodal_vs_single_modal_transformers
-    query: "multimodal transformers vs image-only transformers"
+    query: "ViLBERT vision-language transformer vs ViT image-only transformer"
     intent: topic_survey
     relevant_papers:
       - paper_id: 65a9c7b0800c
@@ -226,8 +288,9 @@ queries:
       - paper_id: 268d347e8a55
         reason: Image-only Vision Transformer model.
     snippet_hints:
+      - ViLBERT
       - vision-and-language
-      - image patches
+      - Vision Transformer
       - transformer
 
   - id: q015_old_to_new_image_recognition
@@ -247,3 +310,265 @@ queries:
       - ImageNet
       - residual networks
       - vision transformer
+
+  - id: q016_transformer_without_recurrence
+    query: "不用 RNN 只靠 self-attention 做机器翻译的是哪篇"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: a639448e61be
+        reason: Introduces the Transformer architecture based solely on attention without recurrence.
+      - paper_id: 071b16f25117
+        reason: Earlier attention-based NMT paper that the Transformer contrasts against.
+    snippet_hints:
+      - attention mechanisms
+      - without recurrence
+      - machine translation
+
+  - id: q017_transformer_object_reid_overlapping_patches
+    query: "object re-identification transformer overlapping patches jigsaw side information embedding"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: 0b289f01b521
+        reason: TransReID uses overlapping patches, JPM, and side-information embeddings for object ReID.
+    snippet_hints:
+      - overlapping patches
+      - Jigsaw Patch Module
+      - Side Information Embeddings
+
+  - id: q018_fine_grained_transformer_part_selection
+    query: "fine-grained recognition transformer part selection discriminative patches"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: 860e24025c67
+        reason: TransFG uses a Part Selection Module for discriminative patch selection in fine-grained recognition.
+    snippet_hints:
+      - fine-grained visual classification
+      - Part Selection Module
+      - discriminative image patches
+
+  - id: q019_reid_background_bias
+    query: "行人重识别里背景偏差 background bias 怎么处理"
+    intent: method_family_lookup
+    relevant_papers:
+      - paper_id: 1f65cbc78943
+        reason: Identifies background bias and proposes person-region guided pooling.
+      - paper_id: a09d4e9a9037
+        reason: Suppresses inter-domain background shift with soft-mask images.
+    snippet_hints:
+      - background-bias
+      - person-region guided pooling
+      - soft-mask images
+
+  - id: q020_multimodal_reid_rgb_ir_nir
+    query: "multi-modal person re-identification RGB infrared near infrared fusion"
+    intent: topic_survey
+    relevant_papers:
+      - paper_id: d5c0f2c4bede
+        reason: Defines multi-modality person ReID using RGB, NI, TI, and sketches.
+      - paper_id: 9e5acb459b0e
+        reason: Boosts modality-specific representations for multi-modal person ReID.
+      - paper_id: 6e870fa58055
+        reason: Learns modality-specific and modality-shared knowledge for visible-infrared person ReID.
+      - paper_id: 3b53aa0674f2
+        reason: DeMo addresses dynamic imaging quality in multi-modal object ReID.
+    snippet_hints:
+      - multi-modality person Re-ID
+      - RGB
+      - infrared
+      - modality-specific representations
+
+  - id: q021_unsupervised_visible_infrared_label_noise
+    query: "unsupervised visible-infrared reid pseudo label noise neighbor learning"
+    intent: method_family_lookup
+    relevant_papers:
+      - paper_id: aa98b29ddc93
+        reason: Relieves universal label noise with neighbor-guided label calibration.
+      - paper_id: 656e327ef992
+        reason: Uses collaborative neighbor learning for unsupervised VI-ReID.
+      - paper_id: bf1ea703e53c
+        reason: Uses diverse token neighbor learning for unsupervised VI-ReID.
+    snippet_hints:
+      - pseudo labels
+      - neighbor learning
+      - unsupervised visible-infrared
+
+  - id: q022_domain_shift_person_reid
+    query: "person re-identification domain shift cross dataset attribute shift survey"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: 218975d0e1db
+        reason: Surveys and analyzes domain shifts in person ReID.
+    snippet_hints:
+      - domain shift
+      - cross-dataset
+      - attribute domain shift
+
+  - id: q023_diffusion_synthetic_vi_reid
+    query: "用 diffusion 生成 paired RGB IR 数据做 visible infrared person reid"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: c8258c808553
+        reason: DiVE generates paired RGB-IR images with diffusion for VI-ReID.
+    snippet_hints:
+      - Diffusion-based VI-ReID data Expansion
+      - Textual Inversion
+      - LoRA
+
+  - id: q024_coupled_noisy_labels_object_reid
+    query: "coupled noisy labels single modality cross modality object re-identification"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: 246635e69843
+        reason: Defines coupled noisy labels and proposes LCNL for object ReID.
+    snippet_hints:
+      - Coupled Noisy Labels
+      - co-modeling
+      - pair division and rectification
+
+  - id: q025_token_selection_transformer_reid
+    query: "transformer token selection object re-identification diverse tokens part tokens"
+    intent: method_family_lookup
+    relevant_papers:
+      - paper_id: 1e77e94f507f
+        reason: Magic Tokens selects diverse object-centric tokens for multi-modal object ReID.
+      - paper_id: b4b1151e1c3a
+        reason: TOP-ReID permutes class and patch tokens for multi-spectral object ReID.
+      - paper_id: bf1ea703e53c
+        reason: TokenMatcher uses diverse tokens matching for unsupervised VI-ReID.
+    snippet_hints:
+      - diverse tokens
+      - token permutation
+      - object-centric tokens
+
+  - id: q026_mamba_clip_prompt_reid
+    query: "Mamba CLIP prompt multi-modal object re-identification aggregation"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: c033e738e867
+        reason: MambaPro combines CLIP, Mamba aggregation, and synergistic prompt for multi-modal object ReID.
+    snippet_hints:
+      - Mamba Aggregation
+      - CLIP
+      - Synergistic Residual Prompt
+
+  - id: q027_mixture_of_experts_multimodal_reid
+    query: "mixture of experts decoupled features multi-modal object re-identification"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: 3b53aa0674f2
+        reason: DeMo uses decoupled features and attention-triggered mixture of experts.
+    snippet_hints:
+      - Mixture of Experts
+      - Hierarchical Decoupling Module
+      - multi-modal object ReID
+
+  - id: q028_high_order_middle_features_vi_reid
+    query: "high-order structure middle features visible infrared person re-identification"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: 80877d60f969
+        reason: Models high-order relationships and middle features for VI-ReID.
+    snippet_hints:
+      - High-Order Structure Learning
+      - middle features
+      - common feature space
+
+  - id: q029_implicit_discriminative_knowledge_vi_reid
+    query: "implicit discriminative knowledge modality confuser information purifier visible infrared reid"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: 6e870fa58055
+        reason: IDKL learns implicit discriminative knowledge with modality confuser and information purifier.
+    snippet_hints:
+      - Implicit Discriminative Knowledge Learning
+      - Information Purifier
+      - Triplet Graph Structure Alignment
+
+  - id: q030_test_time_training_multimodal_reid
+    query: "test-time training multi-modal person re-identification cross identity inter modal margin"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: 7206a2c64532
+        reason: Proposes heterogeneous test-time training with CIM and 3M losses.
+      - paper_id: 9e5acb459b0e
+        reason: Introduces cross-modal interaction and multi-modal margin loss.
+    snippet_hints:
+      - test-time training
+      - Cross-identity Inter-modal Margin
+      - Multi-modal Margin
+
+  - id: q031_semisupervised_rare_cross_camera_reid
+    query: "semi-supervised re-identification identities rarely crossing camera views"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: a30c974ce7d1
+        reason: Rewarded Relation Discovery targets identities rarely crossing camera views.
+    snippet_hints:
+      - Rewarded Relation Discovery
+      - rarely crossing camera views
+      - semi-supervised
+
+  - id: q032_transformer_object_reid_survey
+    query: "Transformer object re-identification survey image text video multimodal categories"
+    intent: topic_survey
+    relevant_papers:
+      - paper_id: 34c98750b613
+        reason: Surveys Transformer-based object ReID across image, text, video, and multimodal categories.
+      - paper_id: 0b289f01b521
+        reason: Representative Transformer object ReID framework.
+      - paper_id: b4b1151e1c3a
+        reason: Representative multi-spectral Transformer object ReID framework.
+    snippet_hints:
+      - Transformer for Object Re-Identification
+      - survey
+      - multi-modal
+
+  - id: q033_modality_specific_representation_reid
+    query: "怎么增强多模态 reid 的 modality-specific representation"
+    intent: method_family_lookup
+    relevant_papers:
+      - paper_id: 9e5acb459b0e
+        reason: Explicitly boosts modality-specific representations with interaction and embedding modules.
+      - paper_id: 3b53aa0674f2
+        reason: Decouples unimodal-specific, bimodal-shared, and multimodal-interactive features.
+      - paper_id: 6e870fa58055
+        reason: Extracts modality-specific and modality-shared discriminative knowledge.
+    snippet_hints:
+      - modality-specific representations
+      - decoupled features
+      - discriminative knowledge
+
+  - id: q034_soft_mask_background_shift_reid
+    query: "soft mask suppress background shift person re-identification"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: a09d4e9a9037
+        reason: SBSGAN generates soft-mask images to suppress background shift.
+      - paper_id: 1f65cbc78943
+        reason: Earlier paper identifies background bias and uses person-region masks.
+    snippet_hints:
+      - soft-mask
+      - background shift
+      - background-bias
+
+  - id: q035_multispectral_token_permutation
+    query: "multi-spectral object re-identification token permutation class token patch token"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: b4b1151e1c3a
+        reason: TOP-ReID uses token permutation over class and patch tokens for multi-spectral ReID.
+    snippet_hints:
+      - Token Permutation Module
+      - class token
+      - patch token
+
+  - id: q036_diverse_tokens_matching_vi_reid
+    query: "diverse tokens matching unsupervised visible infrared person re-identification"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: bf1ea703e53c
+        reason: TokenMatcher proposes diverse tokens matching for unsupervised VI-ReID.
+    snippet_hints:
+      - Diverse Tokens Matching
+      - unsupervised visible-infrared
+      - neighbor learning
