@@ -1,0 +1,249 @@
+name: text_embedding_v4_seed_retrieval
+created_at: 2026-05-19
+labeler: codex_manual
+pdf_dir: /Users/a123/paper-copilot-test-pdfs
+index:
+  embedding_model: text-embedding-v4
+  embedding_dim: 1024
+  indexed_papers: 12
+  indexed_chunks: 482
+
+notes:
+  - Paper-level labels only. Chunk ids are intentionally not used because they
+    can change after reindex.
+  - relevant_papers is the denominator for paper_recall@k.
+  - snippet_hints are optional anchors for later chunk-level labeling.
+  - Only papers present in the current embeddings.db are used as positive
+    labels. Papers in fields.db without matching PDFs are excluded.
+
+corpus:
+  - paper_id: 071b16f25117
+    title: NEURAL MACHINE TRANSLATION BY JOINTLY LEARNING TO ALIGN AND TRANSLATE
+    year: 2015
+  - paper_id: 2315fc6c2c0c
+    title: ImageNet Classification with Deep Convolutional Neural Networks
+    year: 2012
+  - paper_id: 268d347e8a55
+    title: "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale"
+    year: 2021
+  - paper_id: 2c03df8b48bf
+    title: Deep Residual Learning for Image Recognition
+    year: 2015
+  - paper_id: 445d06b2ac99
+    title: Rethinking the Inception Architecture for Computer Vision
+    year: 2015
+  - paper_id: 510d98681e5e
+    title: Hypergraph Neural Networks
+    year: 2019
+  - paper_id: 65a9c7b0800c
+    title: ViLBERT
+    year: 2019
+  - paper_id: 8533b7bdd635
+    title: "FaceNet: A Unified Embedding for Face Recognition and Clustering"
+    year: 2015
+  - paper_id: 9f53740cc80e
+    title: "Learning with Hypergraphs: Clustering, Classification, and Embedding"
+    year: 2004
+  - paper_id: b350b567b13a
+    title: Bag of Tricks and A Strong Baseline for Deep Person Re-identification
+    year: 2019
+  - paper_id: c2c0252624f0
+    title: In Defense of the Triplet Loss for Person Re-Identification
+    year: 2017
+  - paper_id: d3f587797f95
+    title: Gradient-Based Learning Applied to Document Recognition
+    year: 1998
+
+queries:
+  - id: q001_vit_patches
+    query: "vision transformer image patches for image classification"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: 268d347e8a55
+        reason: Introduces Vision Transformer using sequences of image patches.
+    snippet_hints:
+      - image patches
+      - pure transformer
+      - image classification
+
+  - id: q002_residual_connections
+    query: "图像分类里的 residual connection 和 deep residual network"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: 2c03df8b48bf
+        reason: Introduces residual learning and deep residual networks for image recognition.
+    snippet_hints:
+      - residual learning
+      - shortcut connections
+      - deep residual networks
+
+  - id: q003_imagenet_cnn_architectures
+    query: "ImageNet classification CNN architectures AlexNet ResNet Inception"
+    intent: topic_survey
+    relevant_papers:
+      - paper_id: 2315fc6c2c0c
+        reason: AlexNet is a landmark CNN for ImageNet classification.
+      - paper_id: 2c03df8b48bf
+        reason: ResNet is a landmark ImageNet CNN architecture.
+      - paper_id: 445d06b2ac99
+        reason: Inception v3 is an ImageNet CNN architecture improvement.
+    snippet_hints:
+      - ImageNet
+      - convolutional neural networks
+      - residual
+      - Inception
+
+  - id: q004_attention_nmt_alignment
+    query: "attention mechanism neural machine translation alignment"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: 071b16f25117
+        reason: Introduces attention/alignment for neural machine translation.
+    snippet_hints:
+      - jointly learning to align and translate
+      - attention mechanism
+      - machine translation
+
+  - id: q005_vision_language_pretraining
+    query: "vision language pretraining co-attention image text transformer"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: 65a9c7b0800c
+        reason: ViLBERT uses two-stream visual-linguistic pretraining with co-attention.
+    snippet_hints:
+      - vision-and-language
+      - co-attentional transformer
+      - image content and natural language
+
+  - id: q006_face_embedding_triplet_loss
+    query: "triplet loss face recognition unified embedding clustering"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: 8533b7bdd635
+        reason: FaceNet learns face embeddings using triplet loss for recognition and clustering.
+    snippet_hints:
+      - face recognition
+      - clustering
+      - triplet loss
+
+  - id: q007_person_reid_triplet_loss
+    query: "person re-identification triplet loss hard mining"
+    intent: method_family_lookup
+    relevant_papers:
+      - paper_id: c2c0252624f0
+        reason: Focuses on triplet loss for person re-identification.
+      - paper_id: b350b567b13a
+        reason: Uses triplet loss in a strong person ReID baseline with training tricks.
+    snippet_hints:
+      - person re-identification
+      - triplet loss
+      - hard positive and negative pairs
+
+  - id: q008_bnneck_reid_tricks
+    query: "BNNeck label smoothing random erasing warmup strong baseline person ReID"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: b350b567b13a
+        reason: Proposes a strong ReID baseline with BNNeck and training tricks.
+    snippet_hints:
+      - BNNeck
+      - label smoothing
+      - random erasing
+      - warmup
+
+  - id: q009_hypergraph_neural_networks
+    query: "hypergraph neural networks spectral convolution representation learning"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: 510d98681e5e
+        reason: Introduces Hypergraph Neural Networks for representation learning on hypergraphs.
+    snippet_hints:
+      - hypergraph neural networks
+      - spectral convolution
+      - hypergraph structure
+
+  - id: q010_hypergraph_learning_classification
+    query: "hypergraph clustering classification embedding transductive learning"
+    intent: topic_survey
+    relevant_papers:
+      - paper_id: 9f53740cc80e
+        reason: Classic hypergraph learning paper for clustering, classification, and embedding.
+      - paper_id: 510d98681e5e
+        reason: Later neural hypergraph model also targets representation and classification.
+    snippet_hints:
+      - clustering
+      - classification
+      - embedding
+      - hypergraph
+
+  - id: q011_lenet_document_recognition
+    query: "LeNet gradient based learning document recognition convolutional networks"
+    intent: exact_method_lookup
+    relevant_papers:
+      - paper_id: d3f587797f95
+        reason: Classic gradient-based document recognition and LeNet paper.
+    snippet_hints:
+      - document recognition
+      - gradient-based learning
+      - convolutional networks
+
+  - id: q012_compare_cnn_transformer_inductive_bias
+    query: "compare convolutional inductive bias with transformers for image recognition"
+    intent: fixed_set_compare
+    relevant_papers:
+      - paper_id: 268d347e8a55
+        reason: Discusses Vision Transformers and reduced reliance on CNN inductive biases.
+      - paper_id: 2c03df8b48bf
+        reason: ResNet is a representative convolutional architecture baseline.
+      - paper_id: 445d06b2ac99
+        reason: Inception is a representative convolutional architecture baseline.
+    snippet_hints:
+      - inductive biases
+      - transformers for image recognition
+      - convolutional networks
+
+  - id: q013_metric_learning_embeddings
+    query: "哪些论文用了 triplet loss 做 embedding 或 metric learning"
+    intent: method_family_lookup
+    relevant_papers:
+      - paper_id: 8533b7bdd635
+        reason: Uses triplet loss to learn a face embedding space.
+      - paper_id: c2c0252624f0
+        reason: Uses triplet loss for person ReID metric learning.
+      - paper_id: b350b567b13a
+        reason: Uses triplet loss as part of the strong ReID baseline.
+    snippet_hints:
+      - triplet loss
+      - embedding
+      - metric learning
+
+  - id: q014_multimodal_vs_single_modal_transformers
+    query: "multimodal transformers vs image-only transformers"
+    intent: topic_survey
+    relevant_papers:
+      - paper_id: 65a9c7b0800c
+        reason: Multimodal vision-language transformer model.
+      - paper_id: 268d347e8a55
+        reason: Image-only Vision Transformer model.
+    snippet_hints:
+      - vision-and-language
+      - image patches
+      - transformer
+
+  - id: q015_old_to_new_image_recognition
+    query: "from LeNet to AlexNet ResNet and Vision Transformer image recognition"
+    intent: timeline_synthesis
+    relevant_papers:
+      - paper_id: d3f587797f95
+        reason: Early convolutional document recognition model.
+      - paper_id: 2315fc6c2c0c
+        reason: AlexNet milestone for ImageNet-scale CNNs.
+      - paper_id: 2c03df8b48bf
+        reason: ResNet milestone for very deep CNNs.
+      - paper_id: 268d347e8a55
+        reason: Vision Transformer milestone for image recognition.
+    snippet_hints:
+      - document recognition
+      - ImageNet
+      - residual networks
+      - vision transformer

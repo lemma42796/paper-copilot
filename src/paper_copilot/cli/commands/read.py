@@ -80,7 +80,7 @@ async def _read_async(pdf_path: Path, force: bool, language: Literal["en", "zh"]
     embeddings_db = root / "embeddings.db"
 
     console = Console()
-    with console.status("[dim]loading bge-m3 (first run downloads)…[/dim]"):
+    with console.status("[dim]initializing text-embedding-v4…[/dim]"):
         embedder = Embedder()
 
     with (

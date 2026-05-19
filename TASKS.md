@@ -8,7 +8,7 @@
 
 ## Current Status
 
-> 更新于 2026-05-18。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
+> 更新于 2026-05-19。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
 - **已完成**:M1–M15(Session A + B 全部 done)。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
@@ -16,7 +16,7 @@
   cache 命中率 / p50-p95 latency / top-3 贵论文。`paper-copilot reindex`
   + `paper-copilot list` (M10) 落 SQLite 字段索引,支持 `--year` /
   `--field ... --contains ...` 查询。`paper-copilot search "<q>"` (M11)
-  跨论文 hybrid search:bge-m3 本地 embedding + sqlite-vec KNN + fields
+  跨论文 hybrid search:text-embedding-v4(1024 维) + sqlite-vec KNN + fields
   预过滤。M12:`read` 末尾 spawn RelatedAgent,基于 `cross_paper_links`
   enum(5 档)挑库里 ≤ 3 篇相关论文,落盘 `graph/cross-paper-links.jsonl`
   并渲进 markdown 报告。`read` 末尾自动同步 fields.db + embeddings.db;
@@ -39,13 +39,19 @@
   支持多 tier 计费;跑 plus 候选 vs flash baseline 对比,数据决定继续用 flash
   (2.03x cost / 2.22x latency,0 quality 上行),story 落盘
   `docs/stories/2026-04-27-model-selection-flash-vs-plus.md`。
-- **当前阶段**:**Phase 2 已完成**(13 篇样本 + M8 5 条 issue 全关,
-  详见 `docs/issues.md` 顶部"Phase 2 收尾"段)。日常使用继续,但红线
-  已过,不再阻塞下一个 milestone。
-- **最新编码进展**:**M16-min 已完成**(2026-05-18)。按用户裁剪范围,
-  本轮只做门禁全绿 + schema validation retry/failure trace;不做 GitHub
-  Actions(避免 push 邮件噪音),不做可复现 smoke eval。Skim/Deep/Related
-  的结构化 tool 输出校验失败会自动 retry 一次,失败 trace 写入 session。
+- **当前阶段**:**M18 Evidence-grounded RAG v1 正在落地**。截至 2026-05-19,
+  chat-first runtime/API 与 macOS-style web shell 已可用;后端 route 已收敛为
+  `knowledge_qa` / `framework_composer`,knowledge QA 下有轻量 `task_profile`。
+  检索侧已从 bge-m3 切到百炼 `text-embedding-v4`(1024 维),并落地
+  FTS5/BM25 + vector RRF + multi-chunk evidence + chunk ref lookup + 前端证据
+  面板。默认数据根 `~/.paper-copilot` 已用
+  `/Users/a123/paper-copilot-test-pdfs` 重建 text-embedding-v4 索引:12 papers /
+  482 chunks。
+- **最新编码进展**:**retrieval eval v1 已实现但未运行**(2026-05-19)。新增
+  `eval/retrieval/queries.yaml` 人工 paper-level seed labels(15 queries)和
+  `paper-copilot eval retrieval eval/retrieval/queries.yaml` 命令,可计算
+  `paper_recall@5` / `paper_recall@10` 并显示 top papers / missed@10。按用户
+  指令,本轮没有运行 eval/测试/构建。
 - **M17-min 进展**(2026-05-18):新增 `paper-copilot research "<topic>"`
   的最小 bounded tool loop 骨架。当前包装本地库工具:`list_papers` /
   `list_pdfs` / `read_paper` / `search_library` / `inspect_paper` /
@@ -263,17 +269,80 @@
   可折叠。已跑 `npm run typecheck` + `npm run build`;未跑真实 `/chat` / LLM。
 - **后端意图分层决策**(2026-05-19):后端应自动识别两种用法,不完全交给
   LLM 自由决定产品模式。短期用轻量 router 将请求分成 knowledge_qa
-  (当前 `research`) 与 framework_composer(当前 `idea_composer` /
-  baseline-first);识别后再让 LLM 在对应 bounded harness/prompt/tool 策略内
-  自动编排工具。后续可重命名 route,但不要让一个无约束 prompt 同时决定
+  与 framework_composer(baseline-first);识别后再让 LLM 在对应 bounded
+  harness/prompt/tool 策略内自动编排工具。不要让一个无约束 prompt 同时决定
   模式和执行。
+- **Route/profile 命名收敛**(2026-05-19):后端 route 与 output_profile 已从
+  `research`/`idea_composer` 收敛为 `knowledge_qa`/`framework_composer`。
+  历史报告读取会把旧 session 的 route 映射到新名字;前端展示同步为
+  “知识库问答”与“新论文模型框架”。按用户验证策略,未跑真实 `/chat` / LLM。
+- **Knowledge QA task_profile v1**(2026-05-19):`knowledge_qa` 仍保持一个产品
+  route,但新增轻量 `task_profile` 指导工具策略:`single_paper_focus` /
+  `fixed_set_compare` / `topic_survey` / `evidence_lookup` / `claim_check` /
+  `experiment_extraction` / `timeline_synthesis` / `gap_analysis`。ResearchAgent
+  初始 prompt 会写入 task profile 并追加对应查证据约束;历史报告缺失该字段时
+  默认映射为 `topic_survey`。按用户验证策略,未跑真实 `/chat` / LLM。
+- **M18 evidence payload v1**(2026-05-19):`search_library` 返回保持旧
+  `results` 兼容,同时新增标准 `evidence[]`:`paper_id` / title / year /
+  chunk_id / section / page_start / page_end / snippet / distance / score /
+  source_kind / `citation_ref`。ResearchAgent final guidance 已要求优先使用
+  `search_library evidence citation_ref` 或 inspect/compare 字段引用。按用户
+  新指令,以后默认不跑任何验证命令;本次未运行验证。
+- **M18 multi-chunk evidence v1**(2026-05-19):`knowledge.hybrid_search.SearchResult`
+  保留 `best_chunk`,新增每篇最多 3 条默认 chunk evidence(`chunks`),并让
+  `search_library` 的顶层 `evidence[]` 展平成多条可引用 chunk;`results[]`
+  继续一篇一个 best chunk,但每个 result 也带 `evidence_chunks`。tool 输入新增
+  `max_chunks_per_paper`(默认 3,上限 5)。按用户指令未运行验证。
+- **M18 FTS5/BM25 + RRF v1**(2026-05-19):`EmbeddingsStore` 在同一
+  `embeddings.db` 内新增 `chunk_fts` FTS5 表,`replace_paper`/`delete_paper`
+  同步维护文本索引,打开旧库时会补齐缺失 FTS 行。`hybrid_search.search`
+  新增可选 `query_text`,有文本时同时取 vector KNN 与 BM25 命中,用 RRF 融合
+  chunk 排名后再按 paper group;`search_library` 与 CLI `search` 已传入原始
+  query。evidence payload 现在带 `rrf_score`/`vector_rank`/`bm25_rank`/
+  `vector_distance`/`bm25_score`。按用户指令未运行验证。
+- **M18 evidence ref lookup v1**(2026-05-19):新增 `chat.evidence`
+  反查 `[paper_id:chunks[chunk_id]]`,HTTP API 暴露 `GET /evidence?ref=...`;
+  前端报告中的 chunk evidence ref 现在可点击,右侧证据面板展示论文标题、年份、
+  section、页码和 chunk 原文。非 chunk 字段引用仍保持点击复制。按用户指令未运行
+  验证。
+- **Embedding 默认切换**(2026-05-19):默认 embedding 从本地 `BAAI/bge-m3`
+  切到阿里云百炼 OpenAI-compatible `text-embedding-v4`,维度固定 1024 以兼容
+  当前 sqlite-vec schema。`Embedder` 现在读取 `DASHSCOPE_API_KEY`,本地开发
+  可 fallback 到 `ANTHROPIC_API_KEY`;旧 `embeddings_meta.json` 会因模型名不匹配
+  要求重新 `reindex --pdf-dir`。chunking 改用轻量本地 token-span 近似,不再加载
+  bge tokenizer/model。百炼文档中对工程有用的 endpoint / dimensions / batch
+  限制 / 价格 / 多模态边界已记入 `docs/design/dashscope_text_embedding.md`。
+  按用户指令未运行验证。
+- **text-embedding-v4 runtime reindex**(2026-05-19):按用户指定并已写入记忆的
+  PDF 目录 `/Users/a123/paper-copilot-test-pdfs` 重建默认数据根
+  `~/.paper-copilot` 的 embedding 索引。重建前旧 bge-m3 `embeddings.db` 与
+  `embeddings_meta.json` 已备份到
+  `~/.paper-copilot/backups/2026-05-19-text-embedding-v4/`。本次 reindex
+  fields.db indexed 20 paper(s),fields skipped 2;embeddings.db indexed
+  12 paper(s) / 482 chunks,embeddings skipped 8(no matching pdf),elapsed 85.0s。
+  新 `embeddings_meta.json` 为 `embedding_model=text-embedding-v4`,
+  `embedding_dim=1024`。
+- **retrieval eval seed labels**(2026-05-19):新增
+  `eval/retrieval/queries.yaml`,人工标注当前 text-embedding-v4 索引覆盖的
+  12 篇论文,共 15 条中英文 seed query。标签先只做 paper-level
+  `relevant_papers`,作为 `paper_recall@k` 分母;chunk 层只保留
+  `snippet_hints`,避免依赖 reindex 后可能变化的 chunk_id。按用户指令未运行
+  eval/验证。
+- **retrieval eval command v1**(2026-05-19):新增
+  `paper-copilot eval retrieval eval/retrieval/queries.yaml`。命令读取
+  paper-level retrieval labels,对当前默认数据根的 `fields.db` +
+  `embeddings.db` 跑 hybrid search,按聚合后的 top papers 计算
+  `paper_recall@5` / `paper_recall@10`,并渲染每条 query 的 top papers 与
+  missed@10。当前只是观测命令,不设 fail gate,也不记录历史 run。按用户指令未运行
+  eval/验证。
 - **协作偏好更新**(2026-05-19):不要每次改完代码就自动 commit/push。默认只
   修改与验证,等用户明确说“commit / push / 保存进度”再提交推送。本次用户
   明确要求保存进度并 push。
-- **下一个编码建议**:停止继续打磨前端细节。若时间允许,下一步要么做一次
-  把后端 route 命名/输出 profile 从 `research`/`idea_composer` 收敛为
-  `knowledge_qa`/`framework_composer`,要么转入 M18 evidence-grounded RAG
-  设计/实现。
+- **下一个任务建议**:如果用户允许观察性运行,先跑
+  `paper-copilot eval retrieval eval/retrieval/queries.yaml` 看当前
+  text-embedding-v4 + BM25/RRF 的 `paper_recall@5/@10`;如果仍保持"不跑验证",
+  下一刀做 retrieval eval 的 JSON/JSONL 结果落盘和历史趋势记录,再考虑
+  evidence coverage / unsupported claim 面板。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
@@ -281,8 +350,8 @@
   认可后续产品方向:保留 CLI 作为底层工具和开发者入口,普通用户最终只面对
   一个自然语言输入框;新增功能对外命名为 Research Idea Composer/论文创新
   方案生成助手,避免"水论文/缝合神器"叙事。RAG 升级优先做 evidence
-  citation、FTS5/BM25 + bge-m3/sqlite-vec + RRF、retrieval eval;暂不换
-  主流向量库,除非规模/并发/ACL/托管需求触发。CCF PDF
+  citation、FTS5/BM25 + text-embedding-v4/sqlite-vec + RRF、retrieval eval;
+  暂不换主流向量库,除非规模/并发/ACL/托管需求触发。CCF PDF
   `/Users/a123/Documents/reid/第七版中国计算机学会推荐国际学术会议和期刊目录（正式版）.pdf`
   已确认是 2026 版 CCF venue 白名单,主要给 DBLP URL,不是论文库;联网发现
   只做 DBLP/开放 PDF metadata,付费或缺失 PDF 交给用户补。本路线顺序:

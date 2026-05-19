@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -40,9 +41,10 @@ def test_chat_http_response_serializes_chat_result() -> None:
     result = ChatRunResult(
         request="找一个创新点",
         route=ChatRoute(
-            kind="idea_composer",
-            output_profile="idea_composer",
-            reason="matched_idea_composer_keyword",
+            kind="framework_composer",
+            output_profile="framework_composer",
+            task_profile="framework_composer",
+            reason="matched_framework_composer_keyword",
         ),
         report_markdown="## Idea\n\nUse diffusion priors.",
         session_path=Path("/tmp/session.jsonl"),
@@ -57,7 +59,7 @@ def test_chat_http_response_serializes_chat_result() -> None:
 
     response = ChatHttpResponse.from_result(result).model_dump(mode="json")
 
-    assert response["route"]["kind"] == "idea_composer"
+    assert response["route"]["kind"] == "framework_composer"
     assert response["session_path"] == "/tmp/session.jsonl"
     assert response["quality_run_path"] == "/tmp/runs/r1.jsonl"
     assert response["paper_budget"]["touched_count"] == 2
@@ -91,7 +93,9 @@ def test_reports_response_serializes_history(tmp_path: Path) -> None:
     response = ChatReportsHttpResponse.from_items(items).model_dump(mode="json")
 
     assert response["reports"][0]["request"] == "比较注意力机制"
-    assert response["reports"][0]["route"]["kind"] == "research"
+    assert response["reports"][0]["route"]["kind"] == "knowledge_qa"
+    assert response["reports"][0]["route"]["output_profile"] == "knowledge_qa"
+    assert response["reports"][0]["route"]["task_profile"] == "topic_survey"
     assert response["reports"][0]["report_markdown"] == "# Findings\n\nEvidence."
     assert response["reports"][0]["cost_cny"] == 0.0123
     assert response["reports"][0]["events_count"] == 7
@@ -116,7 +120,7 @@ def test_select_directory_macos_returns_none_when_cancelled(
             stderr="User canceled.",
         )
 
-    monkeypatch.setattr(http.subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", fake_run)
 
     assert http._select_directory_macos() is None
 
@@ -132,6 +136,6 @@ def test_select_directory_macos_returns_selected_path(
             stderr="",
         )
 
-    monkeypatch.setattr(http.subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", fake_run)
 
     assert http._select_directory_macos() == Path("/Users/a123/Documents/papers")

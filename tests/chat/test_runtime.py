@@ -34,7 +34,7 @@ def test_handle_chat_request_returns_frontend_ready_result(tmp_path: Path) -> No
     result = asyncio.run(
         handle_chat_request(
             (
-                "基于 diffusion model 和医学图像分割，"
+                "基于 diffusion model 和医学图像分割,"
                 "帮我找一个可做的创新点"
             ),
             root=tmp_path,
@@ -44,7 +44,8 @@ def test_handle_chat_request_returns_frontend_ready_result(tmp_path: Path) -> No
         )
     )
 
-    assert result.route.kind == "idea_composer"
+    assert result.route.kind == "framework_composer"
+    assert result.route.task_profile == "framework_composer"
     assert result.report_path.exists()
     assert result.session_path.exists()
     assert result.quality_run_path is not None

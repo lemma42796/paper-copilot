@@ -58,9 +58,9 @@ dashboard、登录或云同步。
 
 ### `chat/`
 Chat-first 产品入口层。接收裸自然语言请求，做轻量 intent routing
-（如 research vs idea_composer），组装 knowledge stores / agent context，
+（如 knowledge_qa vs framework_composer），组装 knowledge stores / agent context，
 调用 agents 的公开 run 入口，并返回前端可直接消费的 `ChatRunResult`
-（route、report、session path、quality/report 路径、cost、paper budget）。
+（route/task_profile、report、session path、quality/report 路径、cost、paper budget）。
 CLI 只是它的临时外壳；后续前端单输入框也复用这一层。
 
 ### `agents/`
@@ -151,8 +151,10 @@ DeepAgent 全文投喂成本 ¥0.05-0.11/篇，未触及 ¥0.30 预算，retriev
    （如"只查 NLP 类论文"），输出是 top-k 论文 + 每篇的相关 chunk + 结构化
    字段摘要。内部流程：字段过滤 → 向量 top-k → 轻量重排。
 
-**embedding 模型锁定** `bge-m3`（中英双语、开源、本地可跑）。meta.json
-记录当前使用的模型 + 版本号；换模型需要 `paper-copilot reindex` 重建。
+**embedding 模型锁定** `text-embedding-v4`（DashScope OpenAI-compatible,
+1024 维）。meta.json 记录当前使用的模型 + 维度；换模型需要
+`paper-copilot reindex` 重建。百炼接口参数、价格和边界记录在
+`docs/design/dashscope_text_embedding.md`。
 **不支持多 embedding 共存**（存储翻倍、索引复杂，不值得）。
 
 **MVP 阶段只做 hybrid 检索**，不做重排器（重排器是进阶）。
@@ -178,9 +180,9 @@ paper_id 取 best chunk→top-k。**不做重排器**(MVP)。chunker 进
 不记录 PDF 路径 → `reindex --pdf-dir <dir>` 按 sha1 paper_id 重新匹配,
 `emit_skim` tool_use 里恢复 PaperSkeleton,零 LLM 成本重建两个索引。
 模型 / dim 不匹配在 `embeddings_meta.json` 开门校验,早 fail 避免脏距离。
-13 篇实测:reindex 186.9s(DoD < 5min,2.7x 余量)、search warm 287-973ms
-(DoD < 1s);冷启动 17s 是 torch import + 模型权重加载的固有代价,CLI
-一次性 invoke 吞。
+13 篇旧 bge-m3 实测:reindex 186.9s(DoD < 5min,2.7x 余量)、search warm
+287-973ms(DoD < 1s);2026-05-19 默认切到 `text-embedding-v4`,旧向量不可混用,
+需要重建 `embeddings.db`。
 
 ### `eval/`
 内部 eval 模块。Goldens 是字段级快照(不是 session 级标记),suite 跑
@@ -477,7 +479,8 @@ cli.reindex
   复杂度也 × N。
 - **换模型是低频操作**（一年可能换 0-1 次），为这个低频操作付高频成本不划算。
 - **解决方案是 `reindex` 命令**：一次性重建。100 篇论文 × 200 chunks ×
-  1024-dim embedding，bge-m3 在 M1 Mac 上预期 < 10 分钟跑完。可接受。
+  1024-dim embedding，`text-embedding-v4` 走百炼 API,成本和延迟用真实
+  reindex trace 记录。
 - **meta.json 记录当前模型**：防止误用（模型不匹配直接报错）。
 
 ### 为什么 compare 命令不走 LLM？
@@ -599,11 +602,12 @@ cli.reindex
       重验方法:`scripts/m9_cache_ab.py on|off` 两两对比 cache_read/create。
 
 **M11 之后审视（跨论文相关）**：
-- [~] bge-m3 在论文语料上的召回率够用（否则考虑换 voyage-3-large 等 API）
-      — **初步通过(2026-04-24)**:7 个真实 query 手工验证,rank-1 命中符合
+- [~] text-embedding-v4 在论文语料上的召回率够用
+      — bge-m3 旧检查**初步通过(2026-04-24)**:7 个真实 query 手工验证,rank-1 命中符合
       预期("triplet loss for face recognition"→FaceNet、"attention"+year=2017
       →Attention Is All You Need、"vision language pretraining multimodal"
-      →ViLBERT)。样本太小,正式召回率要等 M14 golden suite。
+      →ViLBERT)。2026-05-19 已切到 text-embedding-v4,正式召回率要等
+      retrieval eval。
 - [~] 50-100 篇规模下，sqlite-vec 的跨库检索 < 500ms
       — 13 篇下 warm 287-973ms;50-100 篇规模无实测,sqlite-vec 线性扫描
       复杂度下预估仍远低于 1s,M14 eval 时正式验。

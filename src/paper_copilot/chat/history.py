@@ -84,8 +84,30 @@ def _string_field(payload: Mapping[str, Any], key: str, *, default: str) -> str:
 
 def _route_field(value: object) -> dict[str, str]:
     if not isinstance(value, Mapping):
-        return {"kind": "research", "output_profile": "research", "reason": "missing_route"}
-    return {str(key): item for key, item in value.items() if isinstance(item, str)}
+        return {
+            "kind": "knowledge_qa",
+            "output_profile": "knowledge_qa",
+            "task_profile": "topic_survey",
+            "reason": "missing_route",
+        }
+    route = {str(key): item for key, item in value.items() if isinstance(item, str)}
+    kind = route.get("kind")
+    output_profile = route.get("output_profile")
+    if kind == "research":
+        route["kind"] = "knowledge_qa"
+    elif kind == "idea_composer":
+        route["kind"] = "framework_composer"
+    if output_profile in {"research", "research_report"}:
+        route["output_profile"] = "knowledge_qa"
+    elif output_profile == "idea_composer":
+        route["output_profile"] = "framework_composer"
+    if "task_profile" not in route:
+        route["task_profile"] = (
+            "framework_composer"
+            if route.get("kind") == "framework_composer"
+            else "topic_survey"
+        )
+    return route
 
 
 def _cost_field(value: object) -> float | None:

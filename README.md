@@ -29,9 +29,9 @@ git clone https://github.com/lemma42796/paper-copilot.git
 cd paper-copilot
 uv tool install .
 
-# 2. 配置 API key (默认走百炼的 Anthropic 兼容 endpoint)
+# 2. 配置 API key (LLM 走百炼 Anthropic 兼容 endpoint, embedding 走百炼 OpenAI 兼容 endpoint)
 cp .env.example .env
-# 编辑 .env,填入 ANTHROPIC_API_KEY
+# 编辑 .env,填入 ANTHROPIC_API_KEY 和 DASHSCOPE_API_KEY
 
 # 3. 读一篇论文
 paper-copilot read path/to/paper.pdf
@@ -42,7 +42,7 @@ paper-copilot read path/to/paper.pdf
 
 - Python 3.12+
 - [`uv`](https://docs.astral.sh/uv/)
-- Dashscope(阿里云百炼)API key,默认模型 `qwen3-flash`
+- Dashscope(阿里云百炼)API key,默认 LLM `qwen3-flash`,默认 embedding `text-embedding-v4`
 
 ## 安装
 
@@ -58,11 +58,12 @@ uv tool install .
 
 ```bash
 cp .env.example .env
-# 编辑 .env,填入 ANTHROPIC_API_KEY
+# 编辑 .env,填入 ANTHROPIC_API_KEY 和 DASHSCOPE_API_KEY
 ```
 
 `.env` 沿当前工作目录向上查找。`ANTHROPIC_API_KEY` shell 环境变量优先级
-更高。
+更高。`DASHSCOPE_API_KEY` 用于 `text-embedding-v4`;若未设置,本地开发会
+回退使用 `ANTHROPIC_API_KEY`。
 
 ## 使用
 

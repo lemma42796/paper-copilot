@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from paper_copilot.chat.evidence import EvidenceChunk, lookup_evidence_chunk
 from paper_copilot.chat.history import ChatReportItem, list_chat_reports
 from paper_copilot.chat.runtime import ChatRunResult, handle_chat_request
 from paper_copilot.shared.errors import ApiError, PaperCopilotError
@@ -35,6 +36,13 @@ class ReportsHttpRequest(BaseModel):
 
     root: Path | None = None
     limit: int = Field(default=20, ge=1, le=100)
+
+
+class EvidenceHttpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ref: str = Field(min_length=1)
+    root: Path | None = None
 
 
 class ChatHttpResponse(BaseModel):
@@ -113,6 +121,32 @@ class DirectorySelectionHttpResponse(BaseModel):
     path: str | None
 
 
+class EvidenceHttpResponse(BaseModel):
+    citation_ref: str
+    paper_id: str
+    title: str
+    year: int | None
+    chunk_id: int
+    section: str
+    page_start: int
+    page_end: int
+    text: str
+
+    @classmethod
+    def from_chunk(cls, chunk: EvidenceChunk) -> EvidenceHttpResponse:
+        return cls(
+            citation_ref=chunk.citation_ref,
+            paper_id=chunk.paper_id,
+            title=chunk.title,
+            year=chunk.year,
+            chunk_id=chunk.chunk_id,
+            section=chunk.section,
+            page_start=chunk.page_start,
+            page_end=chunk.page_end,
+            text=chunk.text,
+        )
+
+
 def serve_http_api(host: str = "127.0.0.1", port: int = 8765) -> None:
     server = ThreadingHTTPServer((host, port), _ChatHandler)
     server.serve_forever()
@@ -137,6 +171,19 @@ class _ChatHandler(BaseHTTPRequestHandler):
                 )
             except ValidationError as exc:
                 self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
+                return
+            self._write_json(HTTPStatus.OK, response.model_dump(mode="json"))
+            return
+        if parsed.path == "/evidence":
+            try:
+                request = EvidenceHttpRequest.model_validate(_single_query_values(parsed.query))
+                chunk = lookup_evidence_chunk(request.ref, root=request.root)
+                response = EvidenceHttpResponse.from_chunk(chunk)
+            except ValidationError as exc:
+                self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
+                return
+            except PaperCopilotError as exc:
+                self._write_error(HTTPStatus.BAD_REQUEST, exc.__class__.__name__, str(exc))
                 return
             self._write_json(HTTPStatus.OK, response.model_dump(mode="json"))
             return

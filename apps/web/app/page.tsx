@@ -7,6 +7,7 @@ type HealthState = "checking" | "online" | "offline";
 type ChatRoute = {
   kind?: string;
   output_profile?: string;
+  task_profile?: string;
   reason?: string;
 };
 
@@ -30,6 +31,18 @@ type ReportHistoryResponse = {
 
 type DirectorySelectionResponse = {
   path: string | null;
+};
+
+type EvidenceResponse = {
+  citation_ref: string;
+  paper_id: string;
+  title: string;
+  year: number | null;
+  chunk_id: number;
+  section: string;
+  page_start: number;
+  page_end: number;
+  text: string;
 };
 
 type ReportHistoryEntry = {
@@ -104,6 +117,9 @@ export default function Home() {
   const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isInspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  const [selectedEvidence, setSelectedEvidence] = useState<EvidenceResponse | null>(null);
+  const [evidenceError, setEvidenceError] = useState<string | null>(null);
+  const [isLoadingEvidence, setIsLoadingEvidence] = useState(false);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
 
   const normalizedApiUrl = useMemo(() => apiUrl.replace(/\/+$/, ""), [apiUrl]);
@@ -198,6 +214,8 @@ export default function Home() {
       const chatResult = raw as ChatResponse;
       setResult(chatResult);
       setSelectedReportId(chatResult.session_path);
+      setSelectedEvidence(null);
+      setEvidenceError(null);
       setHistory((items) => [
         historyItemFromChatResult(chatResult),
         ...items.filter((item) => item.id !== chatResult.session_path)
@@ -211,6 +229,8 @@ export default function Home() {
 
   function selectHistoryItem(item: RunHistoryItem) {
     setError(null);
+    setSelectedEvidence(null);
+    setEvidenceError(null);
     setMessage(item.request);
     setSelectedReportId(item.id);
     setResult(chatResponseFromHistoryItem(item));
@@ -271,6 +291,36 @@ export default function Home() {
   async function copyWithNotice(value: string, label: string) {
     const ok = await copyText(value);
     showNotice(ok ? `${label}已复制` : "复制失败");
+  }
+
+  async function openEvidence(ref: string) {
+    if (!isChunkEvidenceRef(ref)) {
+      const ok = await copyText(ref);
+      showNotice(ok ? "字段引用已复制" : "暂不支持反查该引用");
+      return;
+    }
+    setIsLoadingEvidence(true);
+    setEvidenceError(null);
+    setSelectedEvidence(null);
+    try {
+      const params = new URLSearchParams({ ref });
+      const response = await fetch(`${normalizedApiUrl}/evidence?${params.toString()}`, {
+        method: "GET"
+      });
+      const raw = (await response.json()) as EvidenceResponse | { error?: { message?: string } };
+      setHealth("online");
+      if (!response.ok) {
+        const messageText =
+          "error" in raw && raw.error?.message ? raw.error.message : "证据反查失败。";
+        throw new Error(messageText);
+      }
+      setSelectedEvidence(raw as EvidenceResponse);
+      showNotice("证据已打开");
+    } catch (exc) {
+      setEvidenceError(exc instanceof Error ? exc.message : "证据反查失败。");
+    } finally {
+      setIsLoadingEvidence(false);
+    }
   }
 
   function showNotice(text: string) {
@@ -398,7 +448,10 @@ export default function Home() {
                     onRefresh={refreshReports}
                     result={result}
                   />
-                  <MarkdownReport markdown={result.report_markdown} />
+                  <MarkdownReport
+                    markdown={result.report_markdown}
+                    onEvidenceRefClick={openEvidence}
+                  />
                 </>
               ) : (
                 <div className="empty-report">
@@ -474,6 +527,12 @@ export default function Home() {
                 </section>
 
                 <RunMetadata onCopy={copyWithNotice} result={result} />
+                <EvidenceInspector
+                  error={evidenceError}
+                  evidence={selectedEvidence}
+                  isLoading={isLoadingEvidence}
+                  onCopy={copyWithNotice}
+                />
               </>
             ) : null}
           </aside>
@@ -508,7 +567,7 @@ function historyItemFromChatResult(result: ChatResponse): RunHistoryItem {
   return {
     id: result.session_path,
     request: result.request,
-    route: result.route.kind ?? "research",
+    route: normalizeRoute(result.route.kind),
     cost: result.cost_cny,
     reportPath: result.report_path,
     sessionPath: result.session_path,
@@ -524,7 +583,7 @@ function historyItemFromReport(entry: ReportHistoryEntry): RunHistoryItem {
   return {
     id: entry.session_path,
     request: entry.request,
-    route: entry.route.kind ?? "research",
+    route: normalizeRoute(entry.route.kind),
     cost: entry.cost_cny,
     reportPath: entry.report_path,
     sessionPath: entry.session_path,
@@ -568,7 +627,7 @@ function ReportToolbar({
           {result.request}
         </p>
         <p className="report-subtitle">
-          {formatRoute(result.route.kind ?? "research")} · {formatCost(result.cost_cny)}
+          {formatRoute(result.route.kind)} · {formatCost(result.cost_cny)}
         </p>
       </div>
       <div className="report-toolbar-actions">
@@ -619,7 +678,7 @@ function RunMetadata({
     <section className="metadata">
       <h2>运行</h2>
       <dl>
-        <MetaItem label="路由" value={formatRoute(result.route.kind ?? "research")} />
+        <MetaItem label="路由" value={formatRoute(result.route.kind)} />
         <MetaItem label="停止原因" value={formatTermination(result.termination_reason)} />
         <MetaItem label="费用" value={`¥${result.cost_cny.toFixed(4)}`} />
         <MetaItem label="事件数" value={String(result.events_count)} />
@@ -638,6 +697,48 @@ function RunMetadata({
           value={result.eval_report_path ?? "未更新"}
         />
       </dl>
+    </section>
+  );
+}
+
+function EvidenceInspector({
+  error,
+  evidence,
+  isLoading,
+  onCopy
+}: {
+  error: string | null;
+  evidence: EvidenceResponse | null;
+  isLoading: boolean;
+  onCopy: (value: string, label: string) => Promise<void>;
+}) {
+  return (
+    <section className="evidence-panel">
+      <h2>证据</h2>
+      {isLoading ? <p className="settings-note">正在打开证据。</p> : null}
+      {error ? <p className="evidence-error">{error}</p> : null}
+      {evidence ? (
+        <div className="evidence-card">
+          <div className="evidence-card-header">
+            <p>{evidence.title || evidence.paper_id}</p>
+            <button
+              className="copy-button"
+              onClick={() => void onCopy(evidence.citation_ref, "证据引用")}
+              type="button"
+            >
+              复制
+            </button>
+          </div>
+          <p className="evidence-meta">
+            {evidence.year ? `${evidence.year} · ` : ""}
+            {evidence.section} · {formatPageRange(evidence.page_start, evidence.page_end)} ·{" "}
+            chunk {evidence.chunk_id}
+          </p>
+          <pre>{evidence.text}</pre>
+        </div>
+      ) : !isLoading && !error ? (
+        <p className="settings-note">点击报告中的 chunk 证据引用查看原文。</p>
+      ) : null}
     </section>
   );
 }
@@ -692,14 +793,27 @@ function formatHistoryTime(value: string): string {
   }).format(date);
 }
 
-function formatRoute(route: string): string {
+function normalizeRoute(route: string | undefined): string {
   switch (route) {
     case "idea_composer":
-      return "创新方案";
+      return "framework_composer";
     case "research":
-      return "研究";
+    case "research_report":
+    case undefined:
+      return "knowledge_qa";
     default:
       return route;
+  }
+}
+
+function formatRoute(route: string | undefined): string {
+  switch (normalizeRoute(route)) {
+    case "framework_composer":
+      return "新论文模型框架";
+    case "knowledge_qa":
+      return "知识库问答";
+    default:
+      return route ?? "知识库问答";
   }
 }
 
@@ -717,7 +831,21 @@ function formatTermination(reason: string): string {
   }
 }
 
-function MarkdownReport({ markdown }: { markdown: string }) {
+function formatPageRange(start: number, end: number): string {
+  return start === end ? `p.${start}` : `p.${start}-${end}`;
+}
+
+function isChunkEvidenceRef(ref: string): boolean {
+  return /^\[[A-Za-z0-9_-]{3,64}:chunks\[\d+\]\]$/.test(ref);
+}
+
+function MarkdownReport({
+  markdown,
+  onEvidenceRefClick
+}: {
+  markdown: string;
+  onEvidenceRefClick?: (ref: string) => void | Promise<void>;
+}) {
   const blocks = useMemo(() => parseMarkdown(markdown), [markdown]);
   return (
     <div className="markdown-body">
@@ -725,17 +853,17 @@ function MarkdownReport({ markdown }: { markdown: string }) {
         switch (block.kind) {
           case "heading":
             return block.level === 1 ? (
-              <h1 key={index}>{renderInlineText(block.text)}</h1>
+              <h1 key={index}>{renderInlineText(block.text, onEvidenceRefClick)}</h1>
             ) : block.level === 2 ? (
-              <h2 key={index}>{renderInlineText(block.text)}</h2>
+              <h2 key={index}>{renderInlineText(block.text, onEvidenceRefClick)}</h2>
             ) : (
-              <h3 key={index}>{renderInlineText(block.text)}</h3>
+              <h3 key={index}>{renderInlineText(block.text, onEvidenceRefClick)}</h3>
             );
           case "list":
             return (
               <ul key={index}>
                 {block.items.map((item, itemIndex) => (
-                  <li key={itemIndex}>{renderInlineText(item)}</li>
+                  <li key={itemIndex}>{renderInlineText(item, onEvidenceRefClick)}</li>
                 ))}
               </ul>
             );
@@ -748,34 +876,39 @@ function MarkdownReport({ markdown }: { markdown: string }) {
           case "rule":
             return <hr key={index} />;
           case "paragraph":
-            return <p key={index}>{renderInlineText(block.text)}</p>;
+            return <p key={index}>{renderInlineText(block.text, onEvidenceRefClick)}</p>;
         }
       })}
     </div>
   );
 }
 
-function renderInlineText(text: string): ReactNode[] {
+function renderInlineText(
+  text: string,
+  onEvidenceRefClick?: (ref: string) => void | Promise<void>
+): ReactNode[] {
   const parts: ReactNode[] = [];
-  const refPattern = /(\[[A-Za-z0-9_-]+:[^\]\s][^\]]*\])/g;
+  const refPattern =
+    /(\[[A-Za-z0-9_-]{3,64}:chunks\[\d+\]\]|\[[A-Za-z0-9_-]+:[^\]\s][^\]]*\])/g;
   let lastIndex = 0;
   for (const match of text.matchAll(refPattern)) {
-    if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index));
+    const matchIndex = match.index ?? 0;
+    if (matchIndex > lastIndex) {
+      parts.push(text.slice(lastIndex, matchIndex));
     }
     const ref = match[0];
     parts.push(
       <button
         className="evidence-ref"
-        key={`${ref}-${match.index}`}
-        onClick={() => void copyText(ref)}
-        title="复制证据引用"
+        key={`${ref}-${matchIndex}`}
+        onClick={() => void (onEvidenceRefClick ? onEvidenceRefClick(ref) : copyText(ref))}
+        title={isChunkEvidenceRef(ref) ? "打开证据原文" : "复制证据引用"}
         type="button"
       >
         {ref}
       </button>
     );
-    lastIndex = match.index + ref.length;
+    lastIndex = matchIndex + ref.length;
   }
   if (lastIndex < text.length) {
     parts.push(text.slice(lastIndex));

@@ -60,11 +60,11 @@ def _payload(
     }
 
 
-def _chunk(paper_id: str, text: str) -> ChunkRow:
+def _chunk(paper_id: str, text: str, *, ord_: int = 0) -> ChunkRow:
     return ChunkRow(
         chunk_id=0,
         paper_id=paper_id,
-        ord=0,
+        ord=ord_,
         section="Abstract",
         page_start=1,
         page_end=1,
@@ -80,8 +80,11 @@ def test_dispatch_research_tools_list_search_and_inspect(tmp_path: Path) -> None
         fs.upsert("paperA", _payload(), datetime.now(UTC).isoformat())
         es.replace_paper(
             "paperA",
-            [_chunk("paperA", "sparse attention over visual tokens")],
-            np.array([[1, 0, 0, 0]], dtype=np.float32),
+            [
+                _chunk("paperA", "sparse attention over visual tokens", ord_=0),
+                _chunk("paperA", "top-k attention keeps salient edges", ord_=1),
+            ],
+            np.array([[1, 0, 0, 0], [1, 0.1, 0, 0]], dtype=np.float32),
         )
         context = ResearchToolContext(
             fields_store=fs,
@@ -105,7 +108,23 @@ def test_dispatch_research_tools_list_search_and_inspect(tmp_path: Path) -> None
             context,
         )
         assert searched.is_error is False
-        assert json.loads(searched.output)["results"][0]["paper_id"] == "paperA"
+        search_data = json.loads(searched.output)
+        assert search_data["citation_format"] == "[paper_id:chunks[chunk_id]]"
+        assert search_data["evidence"][0]["paper_id"] == "paperA"
+        assert search_data["evidence"][0]["source_kind"] == "pdf_text"
+        assert search_data["evidence"][0]["section"] == "Abstract"
+        assert search_data["evidence"][0]["page_start"] == 1
+        assert search_data["evidence"][0]["score_kind"] == "rrf"
+        assert search_data["evidence"][0]["vector_rank"] == 1
+        assert search_data["evidence"][0]["bm25_rank"] == 1
+        assert search_data["evidence"][0]["citation_ref"].startswith("[paperA:chunks[")
+        assert search_data["evidence"][1]["paper_id"] == "paperA"
+        assert search_data["evidence"][1]["chunk_rank"] == 2
+        assert search_data["results"][0]["paper_id"] == "paperA"
+        assert search_data["results"][0]["citation_ref"] == search_data["evidence"][0][
+            "citation_ref"
+        ]
+        assert len(search_data["results"][0]["evidence_chunks"]) == 2
 
         inspected = dispatch_research_tool(
             ToolUseRequest(
@@ -399,9 +418,10 @@ def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
     final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
     assert final.payload["topic"] == "sparse attention"
     assert final.payload["request_route"] == {
-        "kind": "research",
-        "output_profile": "research_report",
-        "reason": "default_research_route",
+        "kind": "knowledge_qa",
+        "output_profile": "knowledge_qa",
+        "task_profile": "topic_survey",
+        "reason": "matched_topic_survey",
     }
     assert final.payload["termination_reason"] == "end_turn"
     assert final.payload["evidence_refs"] == []
@@ -417,15 +437,18 @@ def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
     assert final.payload["termination_summary"]["paper_budget"]["touched_count"] == 1
     initial = next(e for e in entries if isinstance(e, Message) and e.role == "user")
     assert "The final answer must be the report itself" in initial.text
-    assert "Request route: research" in initial.text
+    assert "Request route: knowledge_qa" in initial.text
+    assert "Task profile: topic_survey" in initial.text
     assert "Tool inputs must match the JSON schema exactly" in initial.text
+    assert "gather a small evidence set" in initial.text
+    assert "search_library evidence citation_ref values" in initial.text
     assert "you may still inspect_paper the same paper_id afterward" in initial.text
     assert "suggested_citations" in initial.text
     assert "do not stop after one inspected paper" in initial.text
     assert "mirror the claim in Evidence" in initial.text
 
 
-def test_run_research_routes_idea_composer_prompt(tmp_path: Path) -> None:
+def test_run_research_routes_framework_composer_prompt(tmp_path: Path) -> None:
     with FieldsStore.open(tmp_path / "fields.db") as fs:
         fs.upsert("paperA", _payload(), datetime.now(UTC).isoformat())
         context = ResearchToolContext(fields_store=fs)
@@ -464,13 +487,14 @@ def test_run_research_routes_idea_composer_prompt(tmp_path: Path) -> None:
     initial = next(e for e in entries if isinstance(e, Message) and e.role == "user")
     final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
 
-    assert "Task profile: idea_composer" in initial.text
+    assert "Task profile: framework_composer" in initial.text
     assert "Problem, Baseline, Candidate Modules" in initial.text
     assert "baseline-first workflow" in initial.text
     assert final.payload["request_route"] == {
-        "kind": "idea_composer",
-        "output_profile": "idea_composer",
-        "reason": "matched_idea_composer_keyword",
+        "kind": "framework_composer",
+        "output_profile": "framework_composer",
+        "task_profile": "framework_composer",
+        "reason": "matched_framework_composer_keyword",
     }
     assert final.payload["quality"]["findings_claim_count"] == 1
 

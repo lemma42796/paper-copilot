@@ -93,7 +93,7 @@ def search_cmd(
         raise typer.Exit(code=2) from e
 
     console = Console()
-    with console.status("[dim]loading bge-m3…[/dim]"):
+    with console.status("[dim]initializing text-embedding-v4…[/dim]"):
         embedder = Embedder()
         embedder.warmup()
 
@@ -116,6 +116,7 @@ def search_cmd(
             k=k,
             year=year,
             contains=contains_filter,
+            query_text=query,
         )
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
@@ -139,9 +140,10 @@ def _render(
         page_range = (
             f"p.{c.page_start}" if c.page_start == c.page_end else f"p.{c.page_start}-{c.page_end}"
         )
+        score_label = _score_label(r)
         header = (
             f"[bold]{rank}. {r.title}[/bold]  "
-            f"[dim]({r.year})  {r.paper_id}  d={c.distance:.3f}[/dim]"
+            f"[dim]({r.year})  {r.paper_id}  {score_label}[/dim]"
         )
         body = f"[dim]{c.section}  {page_range}[/dim]\n{_truncate(c.text, 400)}"
         console.print(Panel.fit(body, title=header, border_style="dim"))
@@ -151,3 +153,15 @@ def _render(
 def _truncate(text: str, n: int) -> str:
     flat = " ".join(text.split())
     return flat if len(flat) <= n else flat[: n - 1].rstrip() + "…"
+
+
+def _score_label(result: SearchResult) -> str:
+    if not result.chunk_scores:
+        return f"d={result.best_chunk.distance:.3f}"
+    score = result.chunk_scores[0]
+    parts = [f"rrf={score.rrf_score:.3f}"]
+    if score.vector_distance is not None:
+        parts.append(f"d={score.vector_distance:.3f}")
+    if score.bm25_score is not None:
+        parts.append(f"bm25={score.bm25_score:.3f}")
+    return "  ".join(parts)

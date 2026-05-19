@@ -6,9 +6,10 @@ modules that cannot import each other; both build their own ``Section``
 inputs and consume the same chunker.
 
 The chunker is tokenizer-agnostic. Callers inject a ``token_spans``
-function — for production the bge-m3 fast tokenizer's ``offset_mapping``;
-for tests, a whitespace splitter. Chunks never cross section boundaries:
-a section is the smallest semantic unit the ranker has to score.
+function; production currently uses the embedding client's local rough
+token spans, while tests use a whitespace splitter. Chunks never cross
+section boundaries: a section is the smallest semantic unit the ranker
+has to score.
 """
 
 from __future__ import annotations

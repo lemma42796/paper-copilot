@@ -79,12 +79,15 @@ The target is a small-scale enterprise-style RAG pipeline:
 ```text
 metadata filters
 + FTS5/BM25 keyword retrieval
-+ bge-m3/sqlite-vec dense retrieval
++ text-embedding-v4/sqlite-vec dense retrieval
 + RRF rank fusion
 + per-paper multi-chunk aggregation
 + evidence snippets and citations
 + retrieval eval and observability
 ```
+
+`text-embedding-v4` provider details are pinned in
+`docs/design/dashscope_text_embedding.md`.
 
 ### Why Not a Dedicated Vector Database Yet
 
@@ -114,10 +117,21 @@ Add a reusable evidence reference shape before advanced agent work:
 EvidenceRef
   paper_id
   title
+  year
+  chunk_id
+  paper_rank
+  chunk_rank
+  vector_rank
+  bm25_rank
   page_start
   page_end
   section
   snippet
+  score
+  distance
+  vector_distance
+  bm25_score
+  citation_ref
   source_kind: pdf_text | metadata | user_supplied
 ```
 
@@ -143,7 +157,7 @@ First version:
 1. Use `fields.db` for metadata filters: year, venue, CCF level, field,
    paper_id set.
 2. Use SQLite FTS5 over chunk text for BM25-style lexical hits.
-3. Use existing `sqlite-vec` + `bge-m3` for semantic hits.
+3. Use existing `sqlite-vec` + `text-embedding-v4` for semantic hits.
 4. Fuse FTS and vector ranks with RRF instead of score calibration.
 5. Return top papers with top 2-3 non-duplicate chunks per paper.
 6. Render chunk page/section/snippet in CLI, chat, reports, and trace.
@@ -345,7 +359,11 @@ debugging.
 Wrap existing commands into stable core tools:
 
 - `read_paper(pdf_path, lang, force) -> PaperSummary`
-- `search_library(query, filters, k) -> SearchResults`
+- `search_library(query, filters, k) -> SearchResults` with `evidence[]`
+  entries carrying `paper_id`, title, pages, snippet, score/distance, paper/chunk
+  rank, and a stable `citation_ref` such as `[paper_id:chunks[chunk_id]]`.
+  The result remains grouped by paper, while each paper can expose several chunk
+  evidence entries.
 - `compare_papers(a, b) -> Comparison`
 - `reindex_library(pdf_dir) -> ReindexSummary`
 - `doctor() -> HealthSummary`
@@ -375,18 +393,36 @@ backend remains the contract.
 There are two primary modes:
 
 - **knowledge_qa**: explain a paper, compare multiple papers, summarize a topic
-  from the local library, or answer research questions with evidence. This is
-  currently implemented as the `research` route.
+  from the local library, or answer research questions with evidence.
 - **framework_composer**: given a research direction, first choose a strong
   reproducible baseline, then find 2-3 compatible modules or tricks from local
-  papers, then propose a verifiable model framework with ablations. This is
-  currently implemented as the `idea_composer` route.
+  papers, then propose a verifiable model framework with ablations.
 
 Short term, a deterministic keyword router is enough. It should recognize
 explain/compare/summarize/evidence questions as `knowledge_qa`, and recognize
 baseline/module/framework/innovation/ablation requests as
 `framework_composer`. After routing, the LLM can plan tool calls inside the
 selected bounded harness, prompt, output profile, and termination rules.
+
+`knowledge_qa` is still one product mode, but it carries a lightweight
+`task_profile` for tool-use guidance:
+
+- `single_paper_focus`: resolve one paper, inspect it, and avoid expansion unless
+  the user asks for related work.
+- `fixed_set_compare`: stay inside the named paper or method set, inspect each
+  target, then compare.
+- `topic_survey`: search or follow links to a small evidence set, inspect each
+  selected paper, then synthesize.
+- `evidence_lookup`: prioritize snippets and suggested citations, separating
+  hits from missing evidence.
+- `claim_check`: search for supporting and conflicting evidence, then label the
+  claim supported, partially supported, or unsupported by the local library.
+- `experiment_extraction`: focus on methods/experiments fields such as datasets,
+  metrics, baselines, training details, and ablations.
+- `timeline_synthesis`: use years and method evidence to order a development
+  story without comparing every possible pair.
+- `gap_analysis`: focus on limitations and experiment gaps without drifting into
+  framework proposal mode.
 
 Longer term, a small LLM classifier may replace keyword matching, but it should
 only classify the mode. It should not be responsible for both deciding the mode
@@ -481,10 +517,14 @@ Goal: move from vector-search MVP to citation-grade RAG.
 Deliver:
 
 - FTS5/BM25 chunk index
-- vector + lexical RRF fusion
-- multi-chunk per-paper search results
-- citation rendering
-- retrieval eval metrics
+- vector + lexical RRF fusion (v1 implemented in `knowledge.hybrid_search.search`
+  when `query_text` is supplied)
+- multi-chunk per-paper search results (v1: grouped `SearchResult` with
+  `chunks` and per-chunk score metadata)
+- citation rendering and chunk evidence lookup (`GET /evidence?ref=...`, with
+  frontend click-through panel v1)
+- retrieval eval metrics (v1: `eval/retrieval/queries.yaml` paper-level labels
+  and `paper-copilot eval retrieval ...` for `paper_recall@5/@10`)
 - RAG observability in reports
 
 M18 can be pulled before M17 if chat exposes too much retrieval weakness. The

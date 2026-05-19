@@ -67,7 +67,7 @@ def reindex(
     embedder: Embedder | None = None
     embeddings_store: EmbeddingsStore | None = None
     if pdf_dir is not None:
-        with console.status("[dim]loading bge-m3 (first run downloads ~2.3 GB)…[/dim]"):
+        with console.status("[dim]initializing text-embedding-v4…[/dim]"):
             embedder = Embedder()
         embeddings_store = EmbeddingsStore.open(home / "embeddings.db", dim=EMBEDDING_DIM)
 

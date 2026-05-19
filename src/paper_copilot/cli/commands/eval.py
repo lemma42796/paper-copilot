@@ -1,4 +1,4 @@
-"""`paper-copilot eval mark` and `paper-copilot eval run` subcommands."""
+"""`paper-copilot eval` subcommands."""
 
 from __future__ import annotations
 
@@ -16,17 +16,26 @@ from paper_copilot.eval.goldens import (
     mark_from_session,
 )
 from paper_copilot.eval.report import write_report
+from paper_copilot.eval.retrieval import (
+    RetrievalEvalResult,
+    RetrievalQueryResult,
+    load_retrieval_suite,
+    run_retrieval_eval,
+)
 from paper_copilot.eval.runs import load_history, write_research_quality_run, write_run
 from paper_copilot.eval.suite import (
     SuiteResult,
     load_suite,
     run_suite_sync,
 )
-from paper_copilot.shared.errors import EvalError
+from paper_copilot.shared.errors import PaperCopilotError
 
 app = typer.Typer(
     name="eval",
-    help="Eval workflow: `mark` goldens, `run` regression suites, `report` HTML trend.",
+    help=(
+        "Eval workflow: `mark` goldens, `run` regression suites, "
+        "`retrieval` search labels, `report` HTML trend."
+    ),
     no_args_is_help=True,
 )
 
@@ -67,7 +76,7 @@ def mark(
     paper_id = resolve_paper_arg(paper)
     try:
         records = mark_from_session(paper_id, fields, root=root, dir_=dir_)
-    except EvalError as e:
+    except PaperCopilotError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1) from e
 
@@ -102,7 +111,7 @@ def run(
     """Execute a suite: rerun the pipeline on each paper, compare to goldens."""
     try:
         suite = load_suite(suite_path)
-    except EvalError as e:
+    except PaperCopilotError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=2) from e
 
@@ -112,7 +121,7 @@ def run(
 
     try:
         result = run_suite_sync(suite, goldens_dir=dir_)
-    except EvalError as e:
+    except PaperCopilotError as e:
         typer.echo(f"suite aborted: {e}", err=True)
         raise typer.Exit(code=2) from e
 
@@ -122,10 +131,33 @@ def run(
         try:
             run_path = write_run(result, runs_dir=runs_dir)
             console.print(f"[dim]recorded run → {run_path}[/dim]")
-        except EvalError as e:
+        except PaperCopilotError as e:
             console.print(f"[yellow]warning:[/yellow] could not record run: {e}")
 
     raise typer.Exit(code=0 if result.passed else 1)
+
+
+@app.command("retrieval")
+def retrieval(
+    suite_path: Annotated[Path, typer.Argument(help="Path to a retrieval query YAML file")],
+    root: Annotated[
+        Path | None,
+        typer.Option("--root", help="Override PAPER_COPILOT_HOME root"),
+    ] = None,
+    k: Annotated[
+        int,
+        typer.Option("--k", help="Number of top papers to retrieve; must be >= 10"),
+    ] = 10,
+) -> None:
+    """Run retrieval labels against the current hybrid search index."""
+    try:
+        suite = load_retrieval_suite(suite_path)
+        result = run_retrieval_eval(suite, root=root, k=k)
+    except PaperCopilotError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=2) from e
+
+    _render_retrieval(Console(), result)
 
 
 @app.command("record-research")
@@ -153,7 +185,7 @@ def record_research(
             runs_dir=runs_dir,
             suite_name=suite_name,
         )
-    except EvalError as e:
+    except PaperCopilotError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(code=1) from e
 
@@ -228,3 +260,43 @@ def _render(console: Console, result: SuiteResult) -> None:
     console.print()
     overall = "[green]PASS[/green]" if result.passed else "[red]FAIL[/red]"
     console.print(f"overall: {overall}")
+
+
+def _render_retrieval(console: Console, result: RetrievalEvalResult) -> None:
+    table = Table(
+        title=f"retrieval: {result.suite_name}",
+        show_header=True,
+        header_style="bold",
+    )
+    table.add_column("query")
+    table.add_column("recall@5", justify="right")
+    table.add_column("recall@10", justify="right")
+    table.add_column("top papers")
+    table.add_column("missed@10")
+
+    for query in result.queries:
+        table.add_row(
+            query.query_id,
+            f"{query.recall_at_5:.2f}",
+            f"{query.recall_at_10:.2f}",
+            _format_hits(query),
+            ", ".join(query.missed_at_10) if query.missed_at_10 else "-",
+        )
+
+    console.print(table)
+    console.print()
+    console.print(
+        "mean recall: "
+        f"@5={result.mean_recall_at_5:.3f}  "
+        f"@10={result.mean_recall_at_10:.3f}"
+    )
+
+
+def _format_hits(query: RetrievalQueryResult) -> str:
+    hits = query.hits
+    labels: list[str] = []
+    relevant = set(query.relevant_papers)
+    for hit in hits[:5]:
+        marker = "*" if hit.paper_id in relevant else ""
+        labels.append(f"{hit.rank}.{hit.paper_id}{marker}")
+    return "  ".join(labels) if labels else "-"

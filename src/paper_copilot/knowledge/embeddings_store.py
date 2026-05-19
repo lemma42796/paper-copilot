@@ -16,6 +16,7 @@ The query pattern is: pre-filter rowids by paper_id (sub-query), then
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,7 +28,9 @@ import sqlite_vec
 
 from paper_copilot.shared.errors import KnowledgeError
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
+_FTS_TOKEN_RE = re.compile(r"[\w]+", flags=re.UNICODE)
+_MAX_FTS_TERMS = 16
 
 
 def _f32_bytes(vec: np.ndarray) -> bytes:
@@ -51,6 +54,7 @@ def _create_statements(dim: int) -> tuple[str, ...]:
         """,
         "CREATE INDEX IF NOT EXISTS idx_chunks_paper ON chunks(paper_id)",
         f"CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(embedding float[{dim}])",
+        "CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(text)",
         """
         CREATE TABLE IF NOT EXISTS schema_meta (
             key   TEXT PRIMARY KEY,
@@ -70,6 +74,18 @@ class ChunkHit:
     page_end: int
     text: str
     distance: float
+
+
+@dataclass(frozen=True, slots=True)
+class TextHit:
+    chunk_id: int
+    paper_id: str
+    ord: int
+    section: str
+    page_start: int
+    page_end: int
+    text: str
+    bm25: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +131,19 @@ class EmbeddingsStore:
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 ("version", str(_SCHEMA_VERSION)),
             )
+            self._backfill_fts()
+
+    def _backfill_fts(self) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO chunk_fts(rowid, text)
+            SELECT c.chunk_id, c.text
+            FROM chunks c
+            WHERE NOT EXISTS (
+                SELECT 1 FROM chunk_fts f WHERE f.rowid = c.chunk_id
+            )
+            """
+        )
 
     def close(self) -> None:
         self._conn.close()
@@ -161,6 +190,9 @@ class EmbeddingsStore:
                     f"DELETE FROM vec_chunks WHERE rowid IN ({placeholders})", old
                 )
                 self._conn.execute(
+                    f"DELETE FROM chunk_fts WHERE rowid IN ({placeholders})", old
+                )
+                self._conn.execute(
                     f"DELETE FROM chunks WHERE chunk_id IN ({placeholders})", old
                 )
             for row, vec in zip(chunks, embeddings, strict=True):
@@ -181,6 +213,10 @@ class EmbeddingsStore:
                     "INSERT INTO vec_chunks(rowid, embedding) VALUES(?, ?)",
                     (chunk_id, _f32_bytes(vec)),
                 )
+                self._conn.execute(
+                    "INSERT INTO chunk_fts(rowid, text) VALUES(?, ?)",
+                    (chunk_id, row.text),
+                )
 
     def delete_paper(self, paper_id: str) -> int:
         with self._conn:
@@ -195,6 +231,9 @@ class EmbeddingsStore:
             placeholders = ",".join("?" * len(old))
             self._conn.execute(
                 f"DELETE FROM vec_chunks WHERE rowid IN ({placeholders})", old
+            )
+            self._conn.execute(
+                f"DELETE FROM chunk_fts WHERE rowid IN ({placeholders})", old
             )
             self._conn.execute(
                 f"DELETE FROM chunks WHERE chunk_id IN ({placeholders})", old
@@ -250,6 +289,75 @@ class EmbeddingsStore:
             )
         return hits
 
+    def bm25(
+        self,
+        query: str,
+        *,
+        k: int,
+        paper_ids: list[str] | None = None,
+    ) -> list[TextHit]:
+        if k <= 0:
+            return []
+        match_query = _fts_match_query(query)
+        if not match_query:
+            return []
+
+        params: list[object] = [match_query]
+        sql = (
+            "SELECT c.chunk_id, bm25(chunk_fts), c.paper_id, c.ord, c.section, "
+            "       c.page_start, c.page_end, c.text "
+            "FROM chunk_fts JOIN chunks c ON c.chunk_id = chunk_fts.rowid "
+            "WHERE chunk_fts MATCH ?"
+        )
+        if paper_ids is not None:
+            if not paper_ids:
+                return []
+            placeholders = ",".join("?" * len(paper_ids))
+            sql += f" AND c.paper_id IN ({placeholders})"
+            params.extend(paper_ids)
+        sql += " ORDER BY bm25(chunk_fts) LIMIT ?"
+        params.append(k)
+
+        hits: list[TextHit] = []
+        for row in self._conn.execute(sql, params):
+            chunk_id, bm25, paper_id, ord_, section, ps, pe, text = row
+            hits.append(
+                TextHit(
+                    chunk_id=int(chunk_id),
+                    paper_id=str(paper_id),
+                    ord=int(ord_),
+                    section=str(section),
+                    page_start=int(ps),
+                    page_end=int(pe),
+                    text=str(text),
+                    bm25=float(bm25),
+                )
+            )
+        return hits
+
+    def get_chunk(self, chunk_id: int, *, paper_id: str | None = None) -> ChunkRow | None:
+        params: list[object] = [chunk_id]
+        sql = (
+            "SELECT chunk_id, paper_id, ord, section, page_start, page_end, text "
+            "FROM chunks WHERE chunk_id = ?"
+        )
+        if paper_id is not None:
+            sql += " AND paper_id = ?"
+            params.append(paper_id)
+        row = self._conn.execute(sql, params).fetchone()
+        if row is None:
+            return None
+        chunk_id_raw, paper_id_raw, ord_, section, ps, pe, text = row
+        return ChunkRow(
+            chunk_id=int(chunk_id_raw),
+            paper_id=str(paper_id_raw),
+            ord=int(ord_),
+            section=str(section),
+            page_start=int(ps),
+            page_end=int(pe),
+            text=str(text),
+        )
+
     def count_chunks(self) -> int:
         (n,) = self._conn.execute("SELECT COUNT(*) FROM chunks").fetchone()
         return int(n)
@@ -257,3 +365,16 @@ class EmbeddingsStore:
     def count_papers(self) -> int:
         (n,) = self._conn.execute("SELECT COUNT(DISTINCT paper_id) FROM chunks").fetchone()
         return int(n)
+
+
+def _fts_match_query(query: str) -> str:
+    terms = _FTS_TOKEN_RE.findall(query.casefold())
+    if not terms:
+        return ""
+    unique_terms = list(dict.fromkeys(terms))[:_MAX_FTS_TERMS]
+    return " OR ".join(_quote_fts_term(term) for term in unique_terms)
+
+
+def _quote_fts_term(term: str) -> str:
+    escaped = term.replace('"', '""')
+    return f'"{escaped}"'

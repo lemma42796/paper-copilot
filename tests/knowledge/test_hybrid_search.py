@@ -98,6 +98,35 @@ def test_search_picks_best_chunk_per_paper(stores) -> None:
     )
     hit = next(r for r in results if r.paper_id == "pA")
     assert hit.best_chunk.text == "contrastive loss"  # not the noise chunk
+    assert [chunk.text for chunk in hit.chunks] == ["contrastive loss", "off-topic noise"]
+
+
+def test_search_limits_chunks_per_paper(stores) -> None:
+    fs, es = stores
+    results = search(
+        np.array([1, 0.1, 0, 0], dtype=np.float32),
+        fields_store=fs,
+        embeddings_store=es,
+        k=5,
+        max_chunks_per_paper=1,
+    )
+    hit = next(r for r in results if r.paper_id == "pA")
+    assert [chunk.text for chunk in hit.chunks] == ["contrastive loss"]
+
+
+def test_search_fuses_bm25_candidates(stores) -> None:
+    fs, es = stores
+    results = search(
+        np.array([1, 0, 0, 0], dtype=np.float32),
+        fields_store=fs,
+        embeddings_store=es,
+        k=2,
+        query_text="baseline softmax",
+    )
+    hit = next(r for r in results if r.paper_id == "pB")
+    assert hit.best_chunk.text == "baseline softmax"
+    assert hit.chunk_scores[0].bm25_rank == 1
+    assert hit.chunk_scores[0].bm25_score is not None
 
 
 def test_year_filter_narrows_candidates(stores) -> None:

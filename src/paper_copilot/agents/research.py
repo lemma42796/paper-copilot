@@ -39,10 +39,15 @@ from paper_copilot.agents.loop import (
 from paper_copilot.agents.read_pipeline import ReadPipelineRun, run_read_pipeline
 from paper_copilot.chat.router import ChatRoute, route_chat_request
 from paper_copilot.knowledge.compare import build_compare_payload
-from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
+from paper_copilot.knowledge.embeddings_store import ChunkHit, EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore, PaperRow, available_fields
 from paper_copilot.knowledge.graph_store import graph_path
-from paper_copilot.knowledge.hybrid_search import ContainsFilter, SearchResult, search
+from paper_copilot.knowledge.hybrid_search import (
+    ChunkScore,
+    ContainsFilter,
+    SearchResult,
+    search,
+)
 from paper_copilot.session import SessionStore
 from paper_copilot.session.paths import compute_paper_id, paper_dir
 from paper_copilot.shared.cost import CostSnapshot, CostTracker, pricing_for_model
@@ -62,6 +67,7 @@ __all__ = [
 _AGENT_NAME = "ResearchAgent"
 _MAX_LIST_LIMIT = 20
 _MAX_SEARCH_K = 10
+_MAX_SEARCH_CHUNKS_PER_PAPER = 5
 _MAX_INSPECT_ITEMS = 8
 _MAX_RELATED_K = 10
 _RESEARCH_MAX_TOKENS = 3000
@@ -137,6 +143,11 @@ class _SearchLibraryInput(BaseModel):
 
     query: str = Field(min_length=1)
     k: StrictInt = Field(default=5, ge=1, le=_MAX_SEARCH_K)
+    max_chunks_per_paper: StrictInt = Field(
+        default=3,
+        ge=1,
+        le=_MAX_SEARCH_CHUNKS_PER_PAPER,
+    )
     year: StrictInt | None = None
     field: str | None = None
     contains: str | None = None
@@ -344,8 +355,10 @@ def research_tools() -> list[dict[str, Any]]:
             (
                 "Search the existing local paper library for papers/chunks related "
                 "to a query. Returns paper ids, titles, pages, sections, snippets, "
-                "and vector distance. Use this when list_papers does not surface "
-                "enough candidate papers."
+                "vector distance, and citation-grade evidence refs. Use this when "
+                "list_papers does not surface enough candidate papers. Use "
+                "max_chunks_per_paper when a task needs multiple snippets from the "
+                "same paper."
             ),
             _SearchLibraryInput,
         ),
@@ -682,10 +695,18 @@ def _search_library(args: _SearchLibraryInput, context: ResearchToolContext) -> 
         k=args.k,
         year=args.year,
         contains=contains_filter,
+        max_chunks_per_paper=args.max_chunks_per_paper,
+        query_text=args.query,
     )
+    ranked = list(enumerate(results, start=1))
+    evidence = _search_evidence_list(ranked)
     return {
         "query": args.query,
-        "results": [_search_result_payload(result) for result in results],
+        "citation_format": "[paper_id:chunks[chunk_id]]",
+        "evidence": evidence,
+        "results": [
+            _search_result_payload(result, paper_rank=rank) for rank, result in ranked
+        ],
     }
 
 
@@ -1262,18 +1283,111 @@ def _row_title(row: PaperRow | None) -> str:
     return title if isinstance(title, str) else ""
 
 
-def _search_result_payload(result: SearchResult) -> dict[str, Any]:
+def _search_result_payload(result: SearchResult, *, paper_rank: int) -> dict[str, Any]:
     chunk = result.best_chunk
+    best_score = _chunk_score(result, chunk.chunk_id)
+    evidence_chunks = [
+        _search_evidence_payload(
+            result,
+            chunk=chunk_hit,
+            score=_chunk_score(result, chunk_hit.chunk_id),
+            rank=chunk_rank,
+            paper_rank=paper_rank,
+            chunk_rank=chunk_rank,
+        )
+        for chunk_rank, chunk_hit in enumerate(_result_chunks(result), start=1)
+    ]
+    best_evidence = evidence_chunks[0]
     return {
         "paper_id": result.paper_id,
         "title": result.title,
         "year": result.year,
-        "distance": chunk.distance,
+        "distance": _vector_distance(best_score, fallback=chunk.distance),
+        "bm25_score": best_score.bm25_score if best_score is not None else None,
+        "rrf_score": best_score.rrf_score if best_score is not None else None,
+        "score": best_evidence["score"],
+        "citation_ref": best_evidence["citation_ref"],
+        "evidence": best_evidence,
+        "evidence_chunks": evidence_chunks,
         "section": chunk.section,
         "page_start": chunk.page_start,
         "page_end": chunk.page_end,
         "snippet": _truncate(chunk.text, 500),
     }
+
+
+def _search_evidence_list(ranked: list[tuple[int, SearchResult]]) -> list[dict[str, Any]]:
+    evidence: list[dict[str, Any]] = []
+    for paper_rank, result in ranked:
+        for chunk_rank, chunk in enumerate(_result_chunks(result), start=1):
+            evidence.append(
+                _search_evidence_payload(
+                    result,
+                    chunk=chunk,
+                    score=_chunk_score(result, chunk.chunk_id),
+                    rank=len(evidence) + 1,
+                    paper_rank=paper_rank,
+                    chunk_rank=chunk_rank,
+                )
+            )
+    return evidence
+
+
+def _search_evidence_payload(
+    result: SearchResult,
+    *,
+    chunk: ChunkHit,
+    score: ChunkScore | None,
+    rank: int,
+    paper_rank: int,
+    chunk_rank: int,
+) -> dict[str, Any]:
+    vector_distance = _vector_distance(score, fallback=chunk.distance)
+    return {
+        "rank": rank,
+        "paper_rank": paper_rank,
+        "chunk_rank": chunk_rank,
+        "paper_id": result.paper_id,
+        "title": result.title,
+        "year": result.year,
+        "source_kind": "pdf_text",
+        "chunk_id": chunk.chunk_id,
+        "section": chunk.section,
+        "page_start": chunk.page_start,
+        "page_end": chunk.page_end,
+        "snippet": _truncate(chunk.text, 500),
+        "distance": vector_distance,
+        "vector_distance": vector_distance,
+        "bm25_score": score.bm25_score if score is not None else None,
+        "vector_rank": score.vector_rank if score is not None else None,
+        "bm25_rank": score.bm25_rank if score is not None else None,
+        "score": (
+            score.rrf_score if score is not None else _distance_score(chunk.distance)
+        ),
+        "score_kind": "rrf" if score is not None else "inverse_distance",
+        "citation_ref": f"[{result.paper_id}:chunks[{chunk.chunk_id}]]",
+    }
+
+
+def _chunk_score(result: SearchResult, chunk_id: int) -> ChunkScore | None:
+    for score in result.chunk_scores:
+        if score.chunk_id == chunk_id:
+            return score
+    return None
+
+
+def _vector_distance(score: ChunkScore | None, *, fallback: float) -> float:
+    if score is not None and score.vector_distance is not None:
+        return score.vector_distance
+    return fallback
+
+
+def _result_chunks(result: SearchResult) -> tuple[ChunkHit, ...]:
+    return result.chunks or (result.best_chunk,)
+
+
+def _distance_score(distance: float) -> float:
+    return round(1.0 / (1.0 + max(distance, 0.0)), 6)
 
 
 def _build_initial_user_text(
@@ -1290,6 +1404,7 @@ def _build_initial_user_text(
         f"Research topic: {topic}\n"
         f"Request route: {route.kind} ({route.reason})\n"
         f"Output profile: {route.output_profile}\n"
+        f"Task profile: {route.task_profile}\n"
         f"PDF directory: {pdf_dir}\n\n"
         f"Paper touch limit: at most {context.max_papers} unique paper_ids may be "
         "inspected or compared in this run. Reusing the same paper_id is allowed; "
@@ -1313,24 +1428,89 @@ def _build_initial_user_text(
         "expand from an already relevant paper to nearby candidates. "
         "Tool inputs must match the JSON schema exactly; "
         "numbers such as year, k, limit, and max_items must be JSON numbers.\n\n"
+        f"{_task_profile_guidance(route)}\n\n"
         f"{_final_report_guidance(route)} "
         "Do not include process narration such as 'I have inspected...', 'Now I "
         "will...', or 'Let me compile...'."
     )
 
 
+def _task_profile_guidance(route: ChatRoute) -> str:
+    match route.task_profile:
+        case "single_paper_focus":
+            return (
+                "Task-specific guidance: resolve one target paper, then use "
+                "inspect_paper for its structured fields. Do not call "
+                "find_related_papers or compare_papers unless the user explicitly "
+                "asks for related work or comparison."
+            )
+        case "fixed_set_compare":
+            return (
+                "Task-specific guidance: stay inside the papers or methods named "
+                "by the user. Resolve and inspect each target, then use "
+                "compare_papers for direct pairwise comparison. Do not expand to "
+                "extra papers unless a named target cannot be resolved."
+            )
+        case "evidence_lookup":
+            return (
+                "Task-specific guidance: prioritize search_library evidence "
+                "entries, inspect_paper suggested_citations, and clear hit/miss "
+                "evidence. The final answer must separate evidence found from "
+                "evidence still missing."
+            )
+        case "claim_check":
+            return (
+                "Task-specific guidance: search for supporting and conflicting "
+                "evidence before answering. The final answer must label the claim "
+                "as supported, partially supported, or unsupported by the local "
+                "library."
+            )
+        case "experiment_extraction":
+            return (
+                "Task-specific guidance: prioritize methods and experiments fields. "
+                "Extract datasets, metrics, baselines, training details, and "
+                "ablations when present; mark missing items as gaps."
+            )
+        case "timeline_synthesis":
+            return (
+                "Task-specific guidance: inspect multiple relevant papers and use "
+                "year/title/method evidence to order the synthesis. Use "
+                "compare_papers only for key transitions, not every possible pair."
+            )
+        case "gap_analysis":
+            return (
+                "Task-specific guidance: focus on limitations, experiment gaps, "
+                "and cross-paper disagreements. Do not switch into proposing a new "
+                "model framework unless the user asks for a proposal."
+            )
+        case "framework_composer":
+            return (
+                "Task-specific guidance: use a baseline-first path. Identify one "
+                "strong baseline and 2-3 compatible modules before writing the "
+                "proposal."
+            )
+        case "topic_survey":
+            return (
+                "Task-specific guidance: gather a small evidence set with "
+                "search_library or find_related_papers, inspect each selected paper, "
+                "then synthesize only claims that have evidence references."
+            )
+
+
 def _final_report_guidance(route: ChatRoute) -> str:
     evidence_rule = (
-        "Prefer inspect_paper evidence_summary and suggested_citations for "
-        "final-report claims. In Evidence, each bullet must include at least "
-        "one bracket reference in exact format `[paper_id:field]`, for example "
-        "`[abc123:contributions[0].claim]`; use field names from "
-        "suggested_citations or compare_papers output. Keep every concrete "
-        "claim tied to a paper_id or explicitly mark it as a gap."
+        "Prefer search_library evidence citation_ref values, inspect_paper "
+        "evidence_summary and suggested_citations for final-report claims. In "
+        "Evidence, each bullet must include at least one bracket reference in "
+        "exact format `[paper_id:field]`, for example "
+        "`[abc123:chunks[12]]` or `[abc123:contributions[0].claim]`; use "
+        "citation_ref from search_library evidence or field names from "
+        "suggested_citations / compare_papers output. Keep every concrete claim "
+        "tied to a paper_id or explicitly mark it as a gap."
     )
-    if route.output_profile == "idea_composer":
+    if route.output_profile == "framework_composer":
         return (
-            "Task profile: idea_composer. When you have enough information, "
+            "Task profile: framework_composer. When you have enough information, "
             "stop calling tools and write a concise Markdown proposal with "
             "these sections: Problem, Baseline, Candidate Modules, "
             "Compatibility, Proposed Composition, Experiment Plan, Risks, "
