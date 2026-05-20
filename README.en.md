@@ -1,129 +1,131 @@
 # Paper Copilot
 
-> Local-first research copilot for reading papers, searching a personal paper
-> library, and composing evidence-grounded research notes.
+> Local-first research copilot for reading PDFs, searching a personal paper
+> library, and composing evidence-grounded research notes and model-framework
+> drafts.
 
 ![Python](https://img.shields.io/badge/python-3.12+-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Code style](https://img.shields.io/badge/code_style-ruff-purple)
-![Packaged with uv](https://img.shields.io/badge/packaged_with-uv-orange)
+![Package manager](https://img.shields.io/badge/package-uv-orange)
 
 [简体中文](README.md) | English
 
-Paper Copilot turns a small local PDF library into a searchable, traceable
-research workspace. It can read papers into structured Markdown reports, index
-their fields and chunks, answer questions over the local library, compare papers,
-and run bounded research loops with cost and evidence traces.
+Paper Copilot is built for a small local library of research PDFs. It reads
+papers into structured reports, builds local SQLite / sqlite-vec indexes,
+answers questions over the library, compares papers, and helps turn a research
+direction into a verifiable baseline + module model-framework draft.
 
-The current product direction is **chat-first**: normal use starts from one
-natural-language input box, backed by a local Python HTTP API and a Next.js
-macOS-style web shell. The CLI remains available for indexing, debugging, eval,
-and scripted workflows.
+It is not meant to invent results or write a paper for you. The goal is to keep
+evidence, sources, costs, traces, and failure boundaries visible so research
+ideas are easier to verify.
 
-## Project Status
+## Contents
 
-Status as of `TASKS.md` updated on 2026-05-19:
+- [Status](#status)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Running](#running)
+- [Local HTTP API](#local-http-api)
+- [Data Layout](#data-layout)
+- [Development](#development)
+- [Roadmap](#roadmap)
+- [Known Limitations](#known-limitations)
+- [Contributing](#contributing)
 
-- CLI reading, listing, searching, comparing, reindexing, eval, and cost
-  diagnostics are implemented.
-- Local HTTP API is available via `paper-copilot serve`; the main runtime
-  endpoint is `POST /chat`.
-- `apps/web/` contains the current Next.js chat shell with library selection,
+## Status
+
+Current status is synced from `TASKS.md`, last updated on 2026-05-19.
+
+Paper Copilot has moved toward a local chat-first research assistant:
+
+- The local API runs via `paper-copilot serve`; the main runtime endpoint is
+  `POST /chat`.
+- `apps/web/` contains a Next.js macOS-style chat shell with library selection,
   report history, route/status display, cost display, and evidence inspection.
-- The default local test library has 34 papers / 2066 chunks indexed with
-  `text-embedding-v4`.
-- Paper-level retrieval seed eval is strong: mean `recall@5=98.4%`,
-  `recall@10=100.0%`.
-- Evidence chunk selection is the known weak point: current labeled-query mean
-  `evidence_recall@5=53.8%`, `evidence_recall@10=53.8%`. The system often finds
-  the right paper but does not always surface the exact answer chunk.
+- Retrieval now uses DashScope `text-embedding-v4` with FTS5/BM25 + vector RRF +
+  multi-chunk evidence.
+- The current local test library contains 34 papers / 2066 chunks.
 
-This is not a hosted SaaS, not a multi-user system, and not an open-ended
-autonomous literature reviewer. It is a local-first research assistant for a
-personal library of roughly 50-100 papers.
+Current retrieval gate:
+
+| Metric | Result | Notes |
+| --- | ---: | --- |
+| paper `recall@5` | 98.4% | Mean over 36 seed queries |
+| paper `recall@10` | 100.0% | Paper-level recall is good enough for now |
+| paper `precision@5` | 32.8% | Relevant papers among topK |
+| paper `precision@10` | 16.9% | Expected to drop as topK expands |
+| evidence `recall@5` | 53.8% | Mean over 13 anchor-labeled queries |
+| evidence `recall@10` | 53.8% | Known gap: right paper, not always right chunk |
+| evidence anchor `precision@5` | 25.6% | Anchor-hit metric, not full semantic relevance |
+
+This is still an experimental, local-first, personal-library tool. The intended
+scale is roughly 50-100 papers, not a hosted SaaS, multi-user platform, or
+open-ended autonomous literature reviewer.
 
 ## Features
 
-- **Chat-first research runtime**: route a natural-language request into
-  `knowledge_qa` or `framework_composer`, run a bounded tool loop, and return a
-  Markdown report with session paths, cost, termination reason, and paper budget.
-- **Local paper reading pipeline**: skim / deep / related agents extract
-  contributions, methods, experiments, limitations, and cross-paper links.
-- **Hybrid local retrieval**: metadata filters from `fields.db`, FTS5/BM25,
-  `sqlite-vec` dense retrieval, RRF fusion, and multi-chunk evidence per paper.
-- **Evidence inspection**: generated reports can include parseable evidence refs;
-  the API and web UI can fetch the backing chunk text.
-- **SQLite-only knowledge base**: no external vector database is required for the
-  intended personal-library scale.
-- **Eval and observability**: golden-field regression, retrieval eval, run
-  history, static HTML reports, cache-hit diagnostics, latency, and CNY cost
-  tracking.
-- **Traceable outputs**: each run writes human-readable Markdown plus JSONL
-  session traces under `~/.paper-copilot`.
+### Paper Reading
 
-## Architecture
+- Read a PDF into a structured Markdown report.
+- Extract contributions, methods, experiments, limitations, and cross-paper
+  links.
+- Preserve `session.jsonl` for LLM calls, schema outputs, traces, and costs.
 
-```text
-apps/web
-  -> local HTTP API
-  -> chat.runtime.handle_chat_request()
-  -> ResearchAgent bounded tool loop
-  -> knowledge stores, paper readers, reports, eval traces
-```
+### Local Library Retrieval
 
-Main modules:
+- Store structured fields in `fields.db`.
+- Store cross-paper chunks in `embeddings.db` with `sqlite-vec`.
+- Return relevant papers and evidence chunks with FTS5/BM25 + dense retrieval +
+  RRF fusion.
+- Avoid external vector databases for the intended personal-library scale.
 
-| Path | Responsibility |
-| --- | --- |
-| `src/paper_copilot/api/` | Local stdlib HTTP API for the web shell |
-| `src/paper_copilot/chat/` | Single-input routing and runtime boundary |
-| `src/paper_copilot/agents/` | Reading agents and bounded research loop |
-| `src/paper_copilot/knowledge/` | Cross-paper fields, embeddings, hybrid search |
-| `src/paper_copilot/retrieval/` | Single-paper chunk/section utilities |
-| `src/paper_copilot/eval/` | Regression, retrieval metrics, and reports |
-| `src/paper_copilot/session/` | JSONL session storage |
-| `apps/web/` | Next.js local chat UI |
+### Chat-first Research Entry
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for module boundaries and
-[docs/design/chat_first_research_copilot_plan.md](docs/design/chat_first_research_copilot_plan.md)
-for the chat-first roadmap.
+- Accept a natural-language request.
+- Route it to `knowledge_qa` or `framework_composer`.
+- Return Markdown, route, session/report paths, cost, termination reason, and
+  paper budget.
 
-## Requirements
+### Model-framework Drafts From Research Directions
 
-- Python 3.12+
-- [`uv`](https://docs.astral.sh/uv/)
-- Node.js 20+ for the web UI
-- API keys for the configured model providers:
-  - `ANTHROPIC_API_KEY` for the Anthropic-compatible LLM endpoint
-  - `DASHSCOPE_API_KEY` for DashScope `text-embedding-v4`
+Given a research direction, Paper Copilot can:
 
-The default LLM endpoint in `.env.example` targets Alibaba Cloud DashScope's
-Anthropic-compatible API. Embeddings use DashScope's OpenAI-compatible
-`text-embedding-v4` endpoint.
+1. Select a strong baseline.
+2. Find 2-3 potentially compatible modules from the local library.
+3. Analyze compatibility and risks.
+4. Compose a baseline + modules model-framework draft.
+5. Suggest ablations and cite evidence.
 
-## Installation
+The output is a verifiable research draft, not a finished paper and not proof of
+effectiveness.
 
-Install as a CLI tool:
+### Eval and Observability
+
+- Field-level golden regression.
+- Retrieval query suites.
+- Run history and static HTML trend reports.
+- Cache-hit, latency, token, and CNY cost diagnostics.
+
+## Quick Start
+
+### 1. Install the local backend
 
 ```bash
 git clone https://github.com/lemma42796/paper-copilot.git
 cd paper-copilot
 uv tool install .
-paper-copilot --help
 ```
 
 For local development:
 
 ```bash
-git clone https://github.com/lemma42796/paper-copilot.git
-cd paper-copilot
 uv sync --dev
-uv run paper-copilot --help
 ```
 
-`pc` is also registered as a short alias for `paper-copilot`.
-
-## Configuration
+### 2. Configure models and your paper folder
 
 ```bash
 cp .env.example .env
@@ -138,52 +140,15 @@ DASHSCOPE_API_KEY=sk-your-key-here
 PAPER_COPILOT_PDF_DIR=/path/to/your/papers
 ```
 
-`PAPER_COPILOT_HOME` controls the runtime data root. If unset, data is stored in
-`~/.paper-copilot`.
+### 3. Run the local API and web UI
 
-`PAPER_COPILOT_PDF_DIR` is used by chat/research when a request needs local PDFs.
-For a fresh clone, point it at your own PDF folder and build the index with
-`read` or `reindex`.
-
-## Quick Start
-
-Read and index one paper:
-
-```bash
-paper-copilot read path/to/paper.pdf --lang zh
-```
-
-Search the local library:
-
-```bash
-paper-copilot search "residual connections for very deep image recognition" --k 5
-```
-
-Run a bounded research request from the CLI:
-
-```bash
-paper-copilot research "对比 Transformer 和 ViT 的注意力机制演化，给出证据引用" \
-  --pdf-dir /path/to/your/papers \
-  --max-papers 5 \
-  --budget-cny 2.0
-```
-
-Start the local API:
+Terminal 1:
 
 ```bash
 paper-copilot serve --host 127.0.0.1 --port 8765
 ```
 
-Call the chat endpoint:
-
-```bash
-curl -sS http://127.0.0.1:8765/health
-curl -sS -X POST http://127.0.0.1:8765/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"message":"总结本地库里和 ViT attention 相关的证据","pdf_dir":"/path/to/your/papers"}'
-```
-
-Run the web shell:
+Terminal 2:
 
 ```bash
 cd apps/web
@@ -191,52 +156,142 @@ npm ci
 npm run dev
 ```
 
-Then open `http://127.0.0.1:3000`. Keep `paper-copilot serve` running in another
-terminal.
+Open `http://127.0.0.1:3000`.
 
-## CLI Reference
+## Installation
 
-| Command | Purpose |
+Requirements:
+
+- Python 3.12+
+- [`uv`](https://docs.astral.sh/uv/)
+- Node.js 20+ for the web UI
+- DashScope / Bailian API keys
+
+Install:
+
+```bash
+git clone https://github.com/lemma42796/paper-copilot.git
+cd paper-copilot
+uv tool install .
+```
+
+Reinstall current code:
+
+```bash
+uv tool install . --reinstall
+```
+
+Development mode:
+
+```bash
+uv sync --dev
+```
+
+## Configuration
+
+`.env.example` defaults to Alibaba Cloud Bailian / DashScope's
+Anthropic-compatible LLM endpoint and OpenAI-compatible embedding endpoint.
+
+| Variable | Purpose |
 | --- | --- |
-| `read <pdf>` | Read one PDF, write `report.md`, `session.jsonl`, and update indexes |
-| `research "<topic>"` | Run the chat-first bounded research loop from the CLI |
-| `serve` | Start the local HTTP API for the web shell |
-| `list` | List indexed papers from `fields.db` |
-| `search "<query>"` | Hybrid semantic search over the local library |
-| `compare <paper_id_a> <paper_id_b>` | Compare two indexed papers without an LLM call |
-| `reindex` | Rebuild local indexes from session traces and optional PDFs |
-| `doctor` | Inspect recent cache hit rate, latency, tokens, and cost |
-| `eval mark/run/report/retrieval` | Maintain golden evals, retrieval evals, and trend reports |
+| `ANTHROPIC_BASE_URL` | LLM endpoint; defaults to Bailian's Anthropic-compatible API |
+| `ANTHROPIC_API_KEY` | LLM API key |
+| `DASHSCOPE_API_KEY` | Embedding key for `text-embedding-v4` |
+| `PAPER_COPILOT_HOME` | Runtime data root; defaults to `~/.paper-copilot` |
+| `PAPER_COPILOT_PDF_DIR` | Default local PDF folder for chat/research |
 
-Run `paper-copilot <command> --help` for full options.
+For a new environment, point `PAPER_COPILOT_PDF_DIR` at your paper folder. If
+you already have previous sessions, rebuild indexes from those sessions plus the
+PDF folder:
+
+```bash
+paper-copilot reindex --pdf-dir /path/to/your/papers
+```
+
+## Running
+
+The web UI is the current product entry:
+
+```bash
+paper-copilot serve --host 127.0.0.1 --port 8765
+cd apps/web
+npm ci
+npm run dev
+```
+
+Example prompt:
+
+```text
+For person re-identification, choose a strong baseline, find recent pluggable
+modules, compose a verifiable new model framework, and include ablations and
+evidence citations.
+```
 
 ## Local HTTP API
 
-The local API is intentionally small and dependency-light.
+The local API intentionally stays lightweight. It uses Python's stdlib HTTP
+server and does not add FastAPI.
 
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/health` | Health check |
-| `POST` | `/chat` | Run a natural-language request through `handle_chat_request()` |
+| `POST` | `/chat` | Run a natural-language request |
 | `GET` | `/reports` | List recent chat/research reports |
-| `GET` | `/evidence?ref=...` | Resolve a report evidence reference to chunk text |
+| `GET` | `/evidence?ref=...` | Resolve an evidence ref to chunk text |
 | `POST` | `/library/select-directory` | Desktop directory picker for the web UI |
 
-Typical `POST /chat` body:
+`POST /chat` example:
 
-```json
-{
-  "message": "找一个 ReID strong baseline，再找 2-3 个可接入模块，给出实验计划",
-  "pdf_dir": "/path/to/your/papers",
-  "max_turns": 16,
-  "budget_cny": 2.0,
-  "max_papers": 5
-}
+```bash
+curl -sS -X POST http://127.0.0.1:8765/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "message": "find a ReID strong baseline, then 2-3 compatible modules and an experiment plan",
+    "pdf_dir": "/path/to/your/papers",
+    "max_turns": 16,
+    "budget_cny": 2.0,
+    "max_papers": 5
+  }'
 ```
 
-The response includes route, Markdown report, session path, report path, optional
-quality/eval report paths, termination reason, cost, event count, and paper
-budget.
+The response includes:
+
+- route / task profile
+- Markdown report
+- session path / report path
+- quality run path / eval report path
+- termination reason
+- cost
+- events count
+- paper budget
+
+## Architecture
+
+```text
+apps/web
+  -> local HTTP API
+  -> chat.runtime.handle_chat_request()
+  -> ResearchAgent bounded tool loop
+  -> local knowledge stores
+  -> Markdown reports + JSONL traces + eval rows
+```
+
+Main modules:
+
+| Path | Responsibility |
+| --- | --- |
+| `src/paper_copilot/api/` | Local HTTP API |
+| `src/paper_copilot/chat/` | Single-input routing and runtime |
+| `src/paper_copilot/agents/` | Reading agents and research loop |
+| `src/paper_copilot/knowledge/` | Cross-paper indexes and hybrid search |
+| `src/paper_copilot/retrieval/` | Single-paper chunk / section utilities |
+| `src/paper_copilot/eval/` | Regression, retrieval eval, and reports |
+| `src/paper_copilot/session/` | JSONL session storage |
+| `apps/web/` | Next.js local frontend |
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) and the
+[chat-first roadmap](docs/design/chat_first_research_copilot_plan.md) for more
+detail.
 
 ## Data Layout
 
@@ -258,10 +313,10 @@ Runtime data lives outside the repository by default:
     └── report.html
 ```
 
-`paper_id` is `SHA1(PDF bytes)[:12]`, so renaming or moving a PDF does not change
-its identity.
+`paper_id = SHA1(PDF bytes)[:12]`, so renaming or moving a PDF does not change
+its ID.
 
-Repository eval fixtures live under `eval/`:
+Repository eval assets:
 
 ```text
 eval/
@@ -279,46 +334,50 @@ make typecheck
 make test
 ```
 
-Useful focused checks:
+For docs-only changes:
 
 ```bash
 git diff --check -- README.md README.en.md
-uv run pytest tests/chat/test_runtime.py tests/api/test_http.py
 ```
 
-Before changing model tiers, run the smoke eval and compare both quality and
-cost/latency. The current default remains the cheaper flash tier because the
-documented plus-tier trial showed higher cost and latency with no measured
-quality gain.
+Before changing the default model tier, run the smoke eval and compare both
+quality and cost/latency. The previous plus-tier trial passed regression, but
+cost was about 2.03x and latency about 2.22x with no measured quality gain, so
+the default remains the flash tier.
 
 ## Roadmap
 
-Near-term work is tracked in [TASKS.md](TASKS.md). Current priority:
+Near-term work is tracked in [TASKS.md](TASKS.md).
 
-1. Improve evidence chunk selection without changing paper-level ranking.
+Current priorities:
+
+1. Improve evidence chunk selection before changing paper-level ranking.
 2. Track evidence pool recall, final evidence recall, and evidence anchor
-   precision.
-3. Continue toward the M19 minimum loop for real research-idea composition once
-   grounding risk is better bounded.
+   precision together.
+3. After grounding risk is bounded, continue the M19 minimum loop for more
+   stable "research direction -> model-framework draft" generation.
 
 ## Known Limitations
 
 - No cloud sync, accounts, multi-user ACL, or hosted deployment.
-- No internet paper discovery in the core runtime; it works over local PDFs and
+- No internet paper discovery in the core runtime; it works from local PDFs and
   local indexes.
 - No cross-encoder or LLM reranker in the active retrieval path.
-- Evidence chunks are not yet reliable enough to treat every generated claim as
-  fully grounded.
-- Some eval suites depend on local PDFs that are not shipped in the repository.
+- Evidence chunk selection is still a weak point; generated claims are not all
+  fully grounded yet.
+- Some eval suites depend on local PDFs that are not shipped with the repository.
 
 ## Contributing
 
-This is an experimental local-first research tool. Before opening a pull request:
+This is an experimental local-first research tool. Please read
+[AGENTS.md](AGENTS.md) before opening a pull request.
 
-- Read [AGENTS.md](AGENTS.md) for engineering conventions and module boundaries.
-- Keep changes narrow and explain user-visible behavior.
-- Do not add dependencies unless the tradeoff is discussed first.
-- Prefer traceable, deterministic harness improvements over prompt-only fixes.
+Basic principles:
+
+- Keep changes narrow.
+- Explain user-visible behavior.
+- Do not add dependencies without discussing the tradeoff first.
+- Prefer traceable, evaluable harness improvements over prompt-only fixes.
 
 ## License
 

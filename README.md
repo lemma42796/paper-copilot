@@ -1,101 +1,115 @@
 # Paper Copilot
 
-> 本地优先的论文研究助手：阅读 PDF、检索个人论文库，并基于证据生成可验证的研究笔记和模型框架草案。
+> 本地优先的论文研究助手：阅读 PDF、检索个人论文库，并基于证据生成可验证的研究笔记与模型框架草案。
 
 ![Python](https://img.shields.io/badge/python-3.12+-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Code style](https://img.shields.io/badge/code_style-ruff-purple)
-![Packaged with uv](https://img.shields.io/badge/packaged_with-uv-orange)
+![Package manager](https://img.shields.io/badge/package-uv-orange)
 
 简体中文 | [English](README.en.md)
 
-Paper Copilot 会把一个小规模本地 PDF 论文库变成可检索、可追溯的研究工作区。它可以把论文读成结构化 Markdown 报告，建立字段索引和 chunk 索引，围绕本地论文库回答问题，对比论文，并在预算约束下运行有 trace 的研究循环。
+Paper Copilot 面向个人研究者的小规模本地论文库。它把 PDF 读成结构化报告，建立本地 SQLite / sqlite-vec 索引，通过一个自然语言输入框完成论文问答、跨论文检索、论文对比，以及“研究方向 -> baseline + 可接入模块 -> 可验证模型框架草案”的初步组合。
 
-当前产品方向是 **chat-first**：普通用户从一个自然语言输入框开始提问，本地 Python HTTP API 负责运行，Next.js macOS 风格前端负责展示。CLI 仍然保留，用于索引、调试、eval 和脚本化流程。
+它的目标不是替你编造结果或自动写论文，而是把论文证据、来源、成本、trace 和失败边界都摆在台面上，让研究想法更容易被验证。
+
+## 目录
+
+- [项目状态](#项目状态)
+- [核心能力](#核心能力)
+- [快速开始](#快速开始)
+- [安装](#安装)
+- [配置](#配置)
+- [运行](#运行)
+- [本地 HTTP API](#本地-http-api)
+- [数据目录](#数据目录)
+- [开发](#开发)
+- [路线图](#路线图)
+- [已知限制](#已知限制)
+- [贡献](#贡献)
 
 ## 项目状态
 
-状态同步自 `TASKS.md`，更新时间为 2026-05-19：
+当前状态同步自 `TASKS.md`，更新时间为 2026-05-19。
 
-- CLI 已支持读论文、列论文、检索、对比、重建索引、eval 和成本诊断。
-- 本地 HTTP API 已可通过 `paper-copilot serve` 启动；主运行时接口是 `POST /chat`。
-- `apps/web/` 已包含当前 Next.js chat shell，支持资料库选择、报告历史、route/status、成本展示和 evidence 查看。
-- 当前本地默认测试论文库已有 34 篇论文 / 2066 个 chunks，索引模型为 `text-embedding-v4`。
-- paper 级 retrieval seed eval 已达到较高召回：mean `recall@5=98.4%`，`recall@10=100.0%`。
-- evidence chunk selection 是当前已知短板：带标签 query 的 mean `evidence_recall@5=53.8%`，`evidence_recall@10=53.8%`。系统经常能找对论文，但不总能把精确答案 chunk 放到前排。
+Paper Copilot 已经推进到 chat-first 本地研究助手：
 
-这不是托管 SaaS，不是多用户系统，也不是开放式全自动文献综述 agent。它面向的是大约 50-100 篇论文规模的个人本地知识库。
+- 本地 API 可通过 `paper-copilot serve` 启动，核心入口是 `POST /chat`。
+- `apps/web/` 已有 Next.js macOS 风格 chat shell，可展示资料库、历史报告、route/status、成本和 evidence。
+- 检索侧已切到百炼 `text-embedding-v4`，并落地 FTS5/BM25 + vector RRF + multi-chunk evidence。
+- 当前本机默认测试库为 34 篇论文 / 2066 个 chunks。
+
+当前 retrieval gate：
+
+| 指标 | 当前结果 | 说明 |
+| --- | ---: | --- |
+| paper `recall@5` | 98.4% | 36 条 seed queries 的均值 |
+| paper `recall@10` | 100.0% | paper 级召回已够用 |
+| paper `precision@5` | 32.8% | topK 中 relevant papers 占比 |
+| paper `precision@10` | 16.9% | topK 扩大后自然下降 |
+| evidence `recall@5` | 53.8% | 13 条带 anchor queries 的均值 |
+| evidence `recall@10` | 53.8% | 已知短板：找对论文后未必找准答案 chunk |
+| evidence anchor `precision@5` | 25.6% | 只衡量人工 anchor 命中，不代表完整语义相关性 |
+
+这仍是实验性、本地优先、个人知识库规模的工具。目标规模是约 50-100 篇论文，不是托管 SaaS、多用户平台或开放式全自动文献综述系统。
 
 ## 核心能力
 
-- **Chat-first 研究运行时**：把自然语言请求路由到 `knowledge_qa` 或 `framework_composer`，运行有上限的 tool loop，并返回 Markdown 报告、session 路径、成本、终止原因和 paper budget。
-- **根据研究方向生成模型框架草案**：围绕用户给定方向，先找 strong baseline，再从本地论文库中找可接入模块，组合成 baseline + modules 的新模型框架建议，并给出兼容性风险、消融实验和证据引用。
-- **本地论文阅读流水线**：skim / deep / related agents 提取贡献、方法、实验、局限和跨论文关系。
-- **本地 hybrid retrieval**：`fields.db` 元数据过滤、FTS5/BM25、`sqlite-vec` dense retrieval、RRF 融合，以及每篇论文的多 chunk evidence。
-- **证据查看**：报告中可以包含可解析 evidence refs；API 和 Web UI 可以回查对应 chunk 原文。
-- **SQLite-only 知识库**：目标规模下不需要外部向量数据库。
-- **Eval 与可观测性**：字段级 golden regression、retrieval eval、run history、静态 HTML 报告、cache 命中率、延迟和人民币成本统计。
-- **可追溯输出**：每次运行都会在 `~/.paper-copilot` 下写 Markdown 和 JSONL session trace。
+### 论文阅读
 
-## 架构
+- 读取单篇 PDF，生成结构化 Markdown 报告。
+- 提取贡献、方法、实验、局限和跨论文关系。
+- 每篇论文保留 `session.jsonl`，可追溯每次 LLM 调用、schema 输出和成本。
 
-```text
-apps/web
-  -> local HTTP API
-  -> chat.runtime.handle_chat_request()
-  -> ResearchAgent bounded tool loop
-  -> knowledge stores, paper readers, reports, eval traces
-```
+### 本地论文库检索
 
-主要模块：
+- 用 `fields.db` 管理结构化字段。
+- 用 `embeddings.db` 和 `sqlite-vec` 做跨论文向量检索。
+- 用 FTS5/BM25 + dense retrieval + RRF 融合返回相关论文和 evidence chunks。
+- 不依赖外部向量数据库，适合个人本地库。
 
-| 路径 | 职责 |
-| --- | --- |
-| `src/paper_copilot/api/` | 面向 Web shell 的本地 stdlib HTTP API |
-| `src/paper_copilot/chat/` | 单输入框路由与运行时边界 |
-| `src/paper_copilot/agents/` | 论文阅读 agents 与 bounded research loop |
-| `src/paper_copilot/knowledge/` | 跨论文字段、embedding 与 hybrid search |
-| `src/paper_copilot/retrieval/` | 单篇论文 chunk / section 工具 |
-| `src/paper_copilot/eval/` | 回归、retrieval 指标与报告 |
-| `src/paper_copilot/session/` | JSONL session 存储 |
-| `apps/web/` | Next.js 本地 chat UI |
+### Chat-first 研究入口
 
-更多模块边界见 [ARCHITECTURE.md](ARCHITECTURE.md)，chat-first 路线见 [docs/design/chat_first_research_copilot_plan.md](docs/design/chat_first_research_copilot_plan.md)。
+- 用户输入一句自然语言请求。
+- runtime 自动路由到 `knowledge_qa` 或 `framework_composer`。
+- 输出 Markdown 报告、route、session/report 路径、成本、终止原因和 paper budget。
 
-## 环境要求
+### 新论文模型框架草案
 
-- Python 3.12+
-- [`uv`](https://docs.astral.sh/uv/)
-- Node.js 20+，用于 Web UI
-- 模型 provider API key：
-  - `ANTHROPIC_API_KEY`：Anthropic-compatible LLM endpoint
-  - `DASHSCOPE_API_KEY`：DashScope `text-embedding-v4`
+给定一个研究方向，Paper Copilot 可以从本地论文库中：
 
-`.env.example` 默认使用阿里云百炼 DashScope 的 Anthropic-compatible LLM API。Embedding 使用 DashScope OpenAI-compatible `text-embedding-v4` endpoint。
+1. 找一个 strong baseline。
+2. 检索 2-3 个可能可接入的模块。
+3. 分析模块兼容性和风险。
+4. 生成 baseline + modules 的模型框架草案。
+5. 给出消融实验计划和证据引用。
 
-## 安装
+这里的输出是“可验证研究草案”，不是论文成稿，也不会声称已经证明了效果。
 
-作为 CLI 工具安装：
+### Eval 与可观测性
+
+- 字段级 golden regression。
+- retrieval query suite。
+- run history + 静态 HTML 趋势报告。
+- cache 命中率、latency、token 和人民币成本统计。
+
+## 快速开始
+
+### 1. 安装本地后端
 
 ```bash
 git clone https://github.com/lemma42796/paper-copilot.git
 cd paper-copilot
 uv tool install .
-paper-copilot --help
 ```
 
-本地开发：
+本地开发建议使用：
 
 ```bash
-git clone https://github.com/lemma42796/paper-copilot.git
-cd paper-copilot
 uv sync --dev
-uv run paper-copilot --help
 ```
 
-`pc` 也注册为 `paper-copilot` 的短别名。
-
-## 配置
+### 2. 配置模型和论文目录
 
 ```bash
 cp .env.example .env
@@ -110,58 +124,15 @@ DASHSCOPE_API_KEY=sk-your-key-here
 PAPER_COPILOT_PDF_DIR=/path/to/your/papers
 ```
 
-`PAPER_COPILOT_HOME` 控制运行时数据根目录。未设置时，默认写入 `~/.paper-copilot`。
+### 3. 启动本地 API 和 Web UI
 
-`PAPER_COPILOT_PDF_DIR` 是 chat/research 在需要本地 PDF 时使用的默认论文文件夹。新 clone 后请指向自己的 PDF 目录，并用 `read` 或 `reindex` 建立索引。
-
-## 快速开始
-
-读并索引一篇论文：
-
-```bash
-paper-copilot read path/to/paper.pdf --lang zh
-```
-
-检索本地论文库：
-
-```bash
-paper-copilot search "residual connections for very deep image recognition" --k 5
-```
-
-从 CLI 发起一个 bounded research 请求：
-
-```bash
-paper-copilot research "对比 Transformer 和 ViT 的注意力机制演化，给出证据引用" \
-  --pdf-dir /path/to/your/papers \
-  --max-papers 5 \
-  --budget-cny 2.0
-```
-
-请求生成新论文模型框架草案：
-
-```bash
-paper-copilot research "针对行人重识别，先选一个 strong baseline，再从近年论文找可插拔模块，组合成可验证的新模型框架，并给出消融实验计划和证据引用" \
-  --pdf-dir /path/to/your/papers \
-  --max-papers 5 \
-  --budget-cny 2.0
-```
-
-启动本地 API：
+终端 1：
 
 ```bash
 paper-copilot serve --host 127.0.0.1 --port 8765
 ```
 
-调用 chat endpoint：
-
-```bash
-curl -sS http://127.0.0.1:8765/health
-curl -sS -X POST http://127.0.0.1:8765/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"message":"总结本地库里和 ViT attention 相关的证据","pdf_dir":"/path/to/your/papers"}'
-```
-
-运行 Web shell：
+终端 2：
 
 ```bash
 cd apps/web
@@ -169,53 +140,138 @@ npm ci
 npm run dev
 ```
 
-然后打开 `http://127.0.0.1:3000`。另一个终端里需要保持 `paper-copilot serve` 运行。
+打开 `http://127.0.0.1:3000`。
 
-## CLI 参考
+## 安装
 
-| 命令 | 用途 |
+环境要求：
+
+- Python 3.12+
+- [`uv`](https://docs.astral.sh/uv/)
+- Node.js 20+，仅 Web UI 需要
+- DashScope / 百炼 API key
+
+安装方式：
+
+```bash
+git clone https://github.com/lemma42796/paper-copilot.git
+cd paper-copilot
+uv tool install .
+```
+
+重新安装当前代码：
+
+```bash
+uv tool install . --reinstall
+```
+
+开发模式：
+
+```bash
+uv sync --dev
+```
+
+## 配置
+
+`.env.example` 默认使用阿里云百炼 DashScope 的 Anthropic-compatible LLM endpoint，以及 DashScope OpenAI-compatible embedding endpoint。
+
+| 变量 | 用途 |
 | --- | --- |
-| `read <pdf>` | 读一篇 PDF，写入 `report.md`、`session.jsonl` 并更新索引 |
-| `research "<topic>"` | 从 CLI 运行 chat-first bounded research loop |
-| `serve` | 启动 Web shell 使用的本地 HTTP API |
-| `list` | 从 `fields.db` 列出已索引论文 |
-| `search "<query>"` | 对本地论文库做 hybrid semantic search |
-| `compare <paper_id_a> <paper_id_b>` | 不调用 LLM，直接对比两篇已索引论文 |
-| `reindex` | 从 session traces 和可选 PDF 重建本地索引 |
-| `doctor` | 查看最近运行的 cache 命中率、延迟、tokens 和成本 |
-| `eval mark/run/report/retrieval` | 维护 golden eval、retrieval eval 和趋势报告 |
+| `ANTHROPIC_BASE_URL` | LLM endpoint，默认指向百炼 Anthropic-compatible API |
+| `ANTHROPIC_API_KEY` | LLM API key |
+| `DASHSCOPE_API_KEY` | `text-embedding-v4` embedding API key |
+| `PAPER_COPILOT_HOME` | 运行时数据根目录，默认 `~/.paper-copilot` |
+| `PAPER_COPILOT_PDF_DIR` | chat/research 默认本地论文目录 |
 
-完整参数见 `paper-copilot <command> --help`。
+新环境需要先准备本地论文目录。已有历史 session 时，可以用 PDF 目录重建索引：
+
+```bash
+paper-copilot reindex --pdf-dir /path/to/your/papers
+```
+
+## 运行
+
+Web UI 是当前产品主入口：
+
+```bash
+paper-copilot serve --host 127.0.0.1 --port 8765
+cd apps/web
+npm ci
+npm run dev
+```
+
+可以输入类似：
+
+```text
+针对行人重识别，先选一个 strong baseline，再从近年论文找可插拔模块，组合成可验证的新模型框架，并给出消融实验计划和证据引用。
+```
 
 ## 本地 HTTP API
 
-本地 API 故意保持轻量，当前不引入 FastAPI 等额外框架。
+本地 API 故意保持轻量，当前基于 Python stdlib HTTP server，不引入 FastAPI。
 
 | Method | Path | 说明 |
 | --- | --- | --- |
 | `GET` | `/health` | 健康检查 |
-| `POST` | `/chat` | 通过 `handle_chat_request()` 运行自然语言请求 |
+| `POST` | `/chat` | 运行自然语言请求 |
 | `GET` | `/reports` | 列出最近 chat/research 报告 |
-| `GET` | `/evidence?ref=...` | 把报告里的 evidence ref 解析成 chunk 原文 |
-| `POST` | `/library/select-directory` | 给 Web UI 使用的桌面目录选择器 |
+| `GET` | `/evidence?ref=...` | 把 evidence ref 解析为 chunk 原文 |
+| `POST` | `/library/select-directory` | Web UI 使用的桌面目录选择器 |
 
-典型 `POST /chat` body：
+`POST /chat` 示例：
 
-```json
-{
-  "message": "找一个 ReID strong baseline，再找 2-3 个可接入模块，给出实验计划",
-  "pdf_dir": "/path/to/your/papers",
-  "max_turns": 16,
-  "budget_cny": 2.0,
-  "max_papers": 5
-}
+```bash
+curl -sS -X POST http://127.0.0.1:8765/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "message": "找一个 ReID strong baseline，再找 2-3 个可接入模块，给出实验计划",
+    "pdf_dir": "/path/to/your/papers",
+    "max_turns": 16,
+    "budget_cny": 2.0,
+    "max_papers": 5
+  }'
 ```
 
-响应包含 route、Markdown 报告、session 路径、report 路径、可选 quality/eval report 路径、终止原因、成本、事件数和 paper budget。
+响应包含：
+
+- route / task profile
+- Markdown report
+- session path / report path
+- quality run path / eval report path
+- termination reason
+- cost
+- events count
+- paper budget
+
+## 架构
+
+```text
+apps/web
+  -> local HTTP API
+  -> chat.runtime.handle_chat_request()
+  -> ResearchAgent bounded tool loop
+  -> local knowledge stores
+  -> Markdown reports + JSONL traces + eval rows
+```
+
+主要模块：
+
+| 路径 | 职责 |
+| --- | --- |
+| `src/paper_copilot/api/` | 本地 HTTP API |
+| `src/paper_copilot/chat/` | 单输入框路由与 runtime |
+| `src/paper_copilot/agents/` | 阅读 agents 与 research loop |
+| `src/paper_copilot/knowledge/` | 跨论文索引与 hybrid search |
+| `src/paper_copilot/retrieval/` | 单论文 chunk / section 工具 |
+| `src/paper_copilot/eval/` | 回归、retrieval eval 与报告 |
+| `src/paper_copilot/session/` | JSONL session 存储 |
+| `apps/web/` | Next.js 本地前端 |
+
+更多设计细节见 [ARCHITECTURE.md](ARCHITECTURE.md) 和 [chat-first roadmap](docs/design/chat_first_research_copilot_plan.md)。
 
 ## 数据目录
 
-运行时数据默认保存在仓库外：
+运行时数据默认在仓库外：
 
 ```text
 ~/.paper-copilot/
@@ -233,9 +289,9 @@ npm run dev
     └── report.html
 ```
 
-`paper_id` 是 `SHA1(PDF bytes)[:12]`，所以 PDF 改名或移动位置不会改变身份。
+`paper_id = SHA1(PDF bytes)[:12]`，所以 PDF 改名或移动位置不会改变 ID。
 
-仓库内 eval fixtures：
+仓库内 eval 资产：
 
 ```text
 eval/
@@ -253,39 +309,42 @@ make typecheck
 make test
 ```
 
-常用聚焦检查：
+文档改动可先跑：
 
 ```bash
 git diff --check -- README.md README.en.md
-uv run pytest tests/chat/test_runtime.py tests/api/test_http.py
 ```
 
-改默认模型 tier 之前，需要跑 smoke eval，并同时比较质量、成本和延迟。当前默认仍保持较便宜的 flash tier，因为已有 plus-tier 试验显示成本和延迟更高，但没有测到质量收益。
+改默认模型 tier 前，需要跑 smoke eval，并同时比较质量、成本和延迟。历史 plus-tier 试验显示：plus 通过回归，但成本约 2.03x、延迟约 2.22x，且没有测到质量收益，所以默认仍保持 flash tier。
 
-## Roadmap
+## 路线图
 
-近期工作以 [TASKS.md](TASKS.md) 为准。当前优先级：
+近期进展和下一步以 [TASKS.md](TASKS.md) 为准。
 
-1. 在不改 paper-level ranking 的前提下改进 evidence chunk selection。
+当前优先级：
+
+1. 改进 evidence chunk selection，不先改 paper-level ranking。
 2. 同时跟踪 evidence pool recall、final evidence recall 和 evidence anchor precision。
-3. 在 grounding 风险更可控后，继续推进 M19 最小闭环，让“论文创新方案生成 / 新模型框架草案”更稳定可用。
+3. 在 grounding 风险更可控后，推进 M19 最小闭环，让“研究方向 -> 新模型框架草案”更稳定。
 
 ## 已知限制
 
-- 没有云同步、账号、多用户 ACL 或托管部署。
-- 核心运行时不联网发现论文；它基于本地 PDF 和本地索引工作。
-- 当前 active retrieval path 没有 cross-encoder 或 LLM reranker。
-- Evidence chunk 还不够稳定，不能把每条生成 claim 都视为完全 grounding。
-- 部分 eval suite 依赖本地 PDF，仓库不会随附这些论文文件。
+- 不支持云同步、账号、多用户 ACL 或托管部署。
+- 核心运行时不联网发现论文，只基于本地 PDF 和本地索引。
+- active retrieval path 没有 cross-encoder 或 LLM reranker。
+- evidence chunk 命中仍是短板，不能把每条生成 claim 都视为完全 grounded。
+- 部分 eval suite 依赖本地 PDF，仓库不会随附论文原文。
 
 ## 贡献
 
-这是一个实验性的 local-first 研究工具。提交 PR 前：
+这是一个实验性的 local-first 研究工具。提交 PR 前请先阅读 [AGENTS.md](AGENTS.md)。
 
-- 阅读 [AGENTS.md](AGENTS.md)，理解工程规约和模块边界。
-- 保持改动范围小，说明用户可见行为。
+基本原则：
+
+- 保持改动范围小。
+- 说明用户可见行为。
 - 不要在未讨论 tradeoff 的情况下新增依赖。
-- 优先做可追溯、确定性的 harness 改进，而不是只改 prompt。
+- 优先做可追溯、可评估的 harness 改进，而不是只改 prompt。
 
 ## License
 
