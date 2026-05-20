@@ -1,237 +1,323 @@
-# paper-copilot
+# Paper Copilot
 
-> 本地论文阅读 agent —— 读 PDF、出报告、留 trace,可检索可对比可回放。
+> Local-first research copilot for reading papers, searching a personal paper
+> library, and composing evidence-grounded research notes.
 
 ![Python](https://img.shields.io/badge/python-3.12+-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Code style](https://img.shields.io/badge/code_style-ruff-purple)
 ![Packaged with uv](https://img.shields.io/badge/packaged_with-uv-orange)
 
-`paper-copilot` 读取论文 PDF,用 LLM 提取结构化字段(贡献、方法、实验、
-局限),输出 Markdown 报告和可追溯的 JSONL trace,并将结果落入本地 SQLite
-索引。已索引的论文支持列表筛选、自然语言检索、双论文对比与跨论文关系挖掘。
+Paper Copilot turns a small local PDF library into a searchable, traceable
+research workspace. It can read papers into structured Markdown reports, index
+their fields and chunks, answer questions over the local library, compare papers,
+and run bounded research loops with cost and evidence traces.
 
-## 特性
+The current product direction is **chat-first**: normal use starts from one
+natural-language input box, backed by a local Python HTTP API and a Next.js
+macOS-style web shell. The CLI remains available for indexing, debugging, eval,
+and scripted workflows.
 
-- 三阶段 agent 流水线(skim / deep / related),各自独立的 schema 与 prompt
-- Pydantic 结构化输出,字段描述即 prompt,prompt 随代码进 git
-- 本地向量检索基于 `sqlite-vec`,单文件部署,不依赖外部向量库
-- `doctor` 子命令观测最近 N 次 session 的 cache 命中率、延迟与 token 成本
-- Eval 框架:`mark` 标 golden、`run` 跑 suite 回归、`report` 出跨 run 趋势
-- 每篇论文一份 `session.jsonl`,完整调用链可 grep 与 replay
-- 中英双语输出(`--lang`),事实字段(数据集、metric、引用片段)保留英文
+## Project Status
 
-## 快速开始
+Status as of `TASKS.md` updated on 2026-05-19:
 
-```bash
-# 1. 安装
-git clone https://github.com/lemma42796/paper-copilot.git
-cd paper-copilot
-uv tool install .
+- CLI reading, listing, searching, comparing, reindexing, eval, and cost
+  diagnostics are implemented.
+- Local HTTP API is available via `paper-copilot serve`; the main runtime
+  endpoint is `POST /chat`.
+- `apps/web/` contains the current Next.js chat shell with library selection,
+  report history, route/status display, cost display, and evidence inspection.
+- The default local test library has 34 papers / 2066 chunks indexed with
+  `text-embedding-v4`.
+- Paper-level retrieval seed eval is strong: mean `recall@5=98.4%`,
+  `recall@10=100.0%`.
+- Evidence chunk selection is the known weak point: current labeled-query mean
+  `evidence_recall@5=53.8%`, `evidence_recall@10=53.8%`. The system often finds
+  the right paper but does not always surface the exact answer chunk.
 
-# 2. 配置 API key (LLM 走百炼 Anthropic 兼容 endpoint, embedding 走百炼 OpenAI 兼容 endpoint)
-cp .env.example .env
-# 编辑 .env,填入 ANTHROPIC_API_KEY 和 DASHSCOPE_API_KEY
+This is not a hosted SaaS, not a multi-user system, and not an open-ended
+autonomous literature reviewer. It is a local-first research assistant for a
+personal library of roughly 50-100 papers.
 
-# 3. 读一篇论文
-paper-copilot read path/to/paper.pdf
-# → 报告落在 ~/.paper-copilot/papers/<paper_id>/report.md
+## Features
+
+- **Chat-first research runtime**: route a natural-language request into
+  `knowledge_qa` or `framework_composer`, run a bounded tool loop, and return a
+  Markdown report with session paths, cost, termination reason, and paper budget.
+- **Local paper reading pipeline**: skim / deep / related agents extract
+  contributions, methods, experiments, limitations, and cross-paper links.
+- **Hybrid local retrieval**: metadata filters from `fields.db`, FTS5/BM25,
+  `sqlite-vec` dense retrieval, RRF fusion, and multi-chunk evidence per paper.
+- **Evidence inspection**: generated reports can include parseable evidence refs;
+  the API and web UI can fetch the backing chunk text.
+- **SQLite-only knowledge base**: no external vector database is required for the
+  intended personal-library scale.
+- **Eval and observability**: golden-field regression, retrieval eval, run
+  history, static HTML reports, cache-hit diagnostics, latency, and CNY cost
+  tracking.
+- **Traceable outputs**: each run writes human-readable Markdown plus JSONL
+  session traces under `~/.paper-copilot`.
+
+## Architecture
+
+```text
+apps/web
+  -> local HTTP API
+  -> chat.runtime.handle_chat_request()
+  -> ResearchAgent bounded tool loop
+  -> knowledge stores, paper readers, reports, eval traces
 ```
 
-## 环境要求
+Main modules:
+
+| Path | Responsibility |
+| --- | --- |
+| `src/paper_copilot/api/` | Local stdlib HTTP API for the web shell |
+| `src/paper_copilot/chat/` | Single-input routing and runtime boundary |
+| `src/paper_copilot/agents/` | Reading agents and bounded research loop |
+| `src/paper_copilot/knowledge/` | Cross-paper fields, embeddings, hybrid search |
+| `src/paper_copilot/retrieval/` | Single-paper chunk/section utilities |
+| `src/paper_copilot/eval/` | Regression, retrieval metrics, and reports |
+| `src/paper_copilot/session/` | JSONL session storage |
+| `apps/web/` | Next.js local chat UI |
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for module boundaries and
+[docs/design/chat_first_research_copilot_plan.md](docs/design/chat_first_research_copilot_plan.md)
+for the chat-first roadmap.
+
+## Requirements
 
 - Python 3.12+
 - [`uv`](https://docs.astral.sh/uv/)
-- Dashscope(阿里云百炼)API key,默认 LLM `qwen3-flash`,默认 embedding `text-embedding-v4`
+- Node.js 20+ for the web UI
+- API keys for the configured model providers:
+  - `ANTHROPIC_API_KEY` for the Anthropic-compatible LLM endpoint
+  - `DASHSCOPE_API_KEY` for DashScope `text-embedding-v4`
 
-## 安装
+The default LLM endpoint in `.env.example` targets Alibaba Cloud DashScope's
+Anthropic-compatible API. Embeddings use DashScope's OpenAI-compatible
+`text-embedding-v4` endpoint.
+
+## Installation
+
+Install as a CLI tool:
 
 ```bash
 git clone https://github.com/lemma42796/paper-copilot.git
 cd paper-copilot
 uv tool install .
+paper-copilot --help
 ```
 
-代码改动后重装:`uv tool install . --reinstall`。
+For local development:
 
-## 配置
+```bash
+git clone https://github.com/lemma42796/paper-copilot.git
+cd paper-copilot
+uv sync --dev
+uv run paper-copilot --help
+```
+
+`pc` is also registered as a short alias for `paper-copilot`.
+
+## Configuration
 
 ```bash
 cp .env.example .env
-# 编辑 .env,填入 ANTHROPIC_API_KEY 和 DASHSCOPE_API_KEY
 ```
 
-`.env` 沿当前工作目录向上查找。`ANTHROPIC_API_KEY` shell 环境变量优先级
-更高。`DASHSCOPE_API_KEY` 用于 `text-embedding-v4`;若未设置,本地开发会
-回退使用 `ANTHROPIC_API_KEY`。
-`PAPER_COPILOT_PDF_DIR` 用作 chat/research 的默认本地论文文件夹;当前本机
-默认测试论文库为 `/Users/a123/paper-copilot-test-pdfs`。
-
-## 使用
-
-> 全部命令都支持 `--help`;大多数命令支持 `--root PATH` 覆盖
-> `PAPER_COPILOT_HOME` 数据根目录(默认 `~/.paper-copilot`)。
-
-### `read` — 深读一篇 PDF
-
-跑完整三阶段流水线(skim → deep → related),把整个调用链写进 `session.jsonl`,
-再把结构化字段渲染成 Markdown 报告,同时落进 `fields.db` 与 `embeddings.db`。
+Edit `.env`:
 
 ```bash
-paper-copilot read path/to/paper.pdf
-paper-copilot read paper.pdf --force --lang zh
+ANTHROPIC_BASE_URL=https://dashscope.aliyuncs.com/apps/anthropic
+ANTHROPIC_API_KEY=sk-your-key-here
+DASHSCOPE_API_KEY=sk-your-key-here
+PAPER_COPILOT_PDF_DIR=/path/to/your/papers
 ```
 
-- `--force` —— 这篇 PDF 之前已经分析过(`session.jsonl` 已存在)时,强制覆盖重跑
-- `--lang, -l en|zh`(默认 `en`)—— 报告语言。叙述字段切换为目标语言,数据集名 / metric / 数值 / 作者 / 原文引用片段保留英文
+`PAPER_COPILOT_HOME` controls the runtime data root. If unset, data is stored in
+`~/.paper-copilot`.
 
-输出落在 `~/.paper-copilot/papers/<paper_id>/{report.md, session.jsonl}`,
-其中 `paper_id = SHA1(PDF bytes)[:12]`。
+`PAPER_COPILOT_PDF_DIR` is used by chat/research when a request needs local PDFs.
+For a fresh clone, point it at your own PDF folder and build the index with
+`read` or `reindex`.
 
-### `list` — 列已索引论文
+## Quick Start
 
-从 `fields.db` 读已索引的论文清单,支持按年份或字段子串过滤。纯本地查询,
-0 LLM 成本。
+Read and index one paper:
 
 ```bash
-paper-copilot list                                # 全部
-paper-copilot list --year 2017
-paper-copilot list -f method -c attention         # method 字段含 "attention"
-paper-copilot list --format json
+paper-copilot read path/to/paper.pdf --lang zh
 ```
 
-- `--year, -y INT` —— 按发表年份过滤
-- `--field, -f {method,contribution,experiment,limitation}` —— 限制子串匹配的目标字段(单数形式,对应 `fields.db` 的表)
-- `--contains, -c TEXT` —— 子串匹配(大小写不敏感),需配合 `--field` 使用
-- `--format text|json`(默认 `text`)—— 输出格式
-
-### `search` — 跨论文语义检索
-
-对自然语言 query 做向量检索(sqlite-vec),返回最相关的 top-k 篇论文。可用
-`--field` / `--contains` 先做子串预筛,再在子集上跑向量召回。
+Search the local library:
 
 ```bash
-paper-copilot search "attention without softmax"
-paper-copilot search "residual connection" --k 5 --year 2016
-paper-copilot search "vision transformer" -f method -c attention
+paper-copilot search "residual connections for very deep image recognition" --k 5
 ```
 
-- `--year, -y INT` —— 仅在该年份的论文中搜索
-- `--field, -f` / `--contains, -c` —— 子串预筛,字段集同 `list`
-- `--k INT`(默认 `10`)—— 返回 top-k
-
-### `compare` — 双论文并排对比
-
-直接读 `fields.db` 把两篇论文的字段拼成对比表。**纯 SQLite 查询,0 LLM 成本**,
-适合写综述时快速对照两篇 baseline。
+Run a bounded research request from the CLI:
 
 ```bash
-paper-copilot compare 2c03df8b48bf 2315fc6c2c0c
-paper-copilot compare 2c03df8b48bf 2315fc6c2c0c --format json
+paper-copilot research "对比 Transformer 和 ViT 的注意力机制演化，给出证据引用" \
+  --pdf-dir /path/to/your/papers \
+  --max-papers 5 \
+  --budget-cny 2.0
 ```
 
-- `--format text|json`(默认 `text`)—— 输出格式
-
-`paper_id` 从 `paper-copilot list` 的输出获取。
-
-### `doctor` — Cache / 延迟 / 成本观测
-
-扫描最近 N 次 session 的 `session.jsonl`,汇总 prompt cache 命中率、端到端
-延迟、token 消耗与人民币成本。换模型 / 调 prompt / 评估 cache 策略时主要靠它对比。
+Start the local API:
 
 ```bash
-paper-copilot doctor               # 最近 10 次
-paper-copilot doctor --n 50
-paper-copilot doctor -f json       # 接 jq 之类
+paper-copilot serve --host 127.0.0.1 --port 8765
 ```
 
-- `--n, -n INT`(默认 `10`)—— 最近多少次 session
-- `--format, -f text|json`(默认 `text`)—— 输出格式
-
-### `eval` — 回归与趋势
-
-三个子命令构成一条评估闭环:
-
-- `mark` — 把某篇论文当前的字段结果钉成 golden 快照
-- `run` — 在一个 suite 上重跑流水线,逐字段比对 golden,输出 PASS/FAIL,并把这次 run 追加到 `eval/runs/`
-- `report` — 把多次 run 渲染成 HTML 趋势图(PASS rate / cost / cache 命中率)
+Call the chat endpoint:
 
 ```bash
-# 钉 golden(选哪些字段做基准)
-paper-copilot eval mark 2c03df8b48bf -f methods -f contributions
-
-# 跑回归 suite(suite 里的 pdf 路径相对当前工作目录解析,
-# 见 eval/suites/smoke.yaml — 在含有那 5 篇 PDF 的目录运行)
-paper-copilot eval run eval/suites/smoke.yaml
-
-# 渲染跨 run 趋势 HTML
-paper-copilot eval report --last 10 -o eval/report.html
+curl -sS http://127.0.0.1:8765/health
+curl -sS -X POST http://127.0.0.1:8765/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"总结本地库里和 ViT attention 相关的证据","pdf_dir":"/path/to/your/papers"}'
 ```
 
-`mark -f` 合法字段:`meta`、`contributions`、`methods`、`experiments`(deep-output
-顶层结构,**复数形式**,与 `list -f` 的字段集不同),可重复传 `-f`。
-
-`run --no-record` 跳过把这次 run 写进 `eval/runs/`(临时调试时用,正常应该让
-`report` 看到)。
-
-Suite YAML 形如:
-
-```yaml
-name: smoke
-papers:
-  - paper_id: 2c03df8b48bf
-    pdf: /path/to/paper.pdf
-    fields: [methods, contributions]
-budget_per_paper:
-  cost_cny: 0.20
-  latency_s: 180
-```
-
-`report` 还有 `--suite NAME` 只画特定 suite,`--last, -n INT` 只画最近 N 次。
-
-### `reindex` — 从 session 重建索引
-
-从 `~/.paper-copilot/papers/*/session.jsonl` 反向重建 `fields.db`(以及
-`embeddings.db`,如果传了 `--pdf-dir`),用于误删索引或换机器迁移数据。
+Run the web shell:
 
 ```bash
-paper-copilot reindex                              # 只重建 fields.db
-paper-copilot reindex --pdf-dir ~/papers           # 同时重建 embeddings.db
+cd apps/web
+npm ci
+npm run dev
 ```
 
-- `--pdf-dir PATH` —— 含原始 PDF 的目录;**只有传了它才会重建 embeddings.db**(向量索引依赖原文重新切块,光看 session.jsonl 不够)
+Then open `http://127.0.0.1:3000`. Keep `paper-copilot serve` running in another
+terminal.
 
-完整 flag 列表见 `paper-copilot <command> --help`。
+## CLI Reference
 
-## 目录结构
+| Command | Purpose |
+| --- | --- |
+| `read <pdf>` | Read one PDF, write `report.md`, `session.jsonl`, and update indexes |
+| `research "<topic>"` | Run the chat-first bounded research loop from the CLI |
+| `serve` | Start the local HTTP API for the web shell |
+| `list` | List indexed papers from `fields.db` |
+| `search "<query>"` | Hybrid semantic search over the local library |
+| `compare <paper_id_a> <paper_id_b>` | Compare two indexed papers without an LLM call |
+| `reindex` | Rebuild local indexes from session traces and optional PDFs |
+| `doctor` | Inspect recent cache hit rate, latency, tokens, and cost |
+| `eval mark/run/report/retrieval` | Maintain golden evals, retrieval evals, and trend reports |
 
+Run `paper-copilot <command> --help` for full options.
+
+## Local HTTP API
+
+The local API is intentionally small and dependency-light.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/health` | Health check |
+| `POST` | `/chat` | Run a natural-language request through `handle_chat_request()` |
+| `GET` | `/reports` | List recent chat/research reports |
+| `GET` | `/evidence?ref=...` | Resolve a report evidence reference to chunk text |
+| `POST` | `/library/select-directory` | Desktop directory picker for the web UI |
+
+Typical `POST /chat` body:
+
+```json
+{
+  "message": "找一个 ReID strong baseline，再找 2-3 个可接入模块，给出实验计划",
+  "pdf_dir": "/path/to/your/papers",
+  "max_turns": 16,
+  "budget_cny": 2.0,
+  "max_papers": 5
+}
 ```
-~/.paper-copilot/                       # 用户运行时数据
+
+The response includes route, Markdown report, session path, report path, optional
+quality/eval report paths, termination reason, cost, event count, and paper
+budget.
+
+## Data Layout
+
+Runtime data lives outside the repository by default:
+
+```text
+~/.paper-copilot/
 ├── papers/<paper_id>/
-│   ├── session.jsonl                   # 完整调用链 trace
-│   └── report.md
-├── fields.db                           # SQLite 字段索引
-├── embeddings.db                       # sqlite-vec 向量索引
+│   ├── source.pdf
+│   ├── session.jsonl
+│   ├── report.md
+│   └── research-report.md
+├── fields.db
+├── embeddings.db
 ├── embeddings_meta.json
-└── graph/cross-paper-links.jsonl       # 跨论文关系,append-only
-
-eval/                                   # 仓库内
-├── goldens/<paper_id>_<field>.json
-├── suites/<name>.yaml
-├── runs/<run_id>.jsonl                 # .gitignore
-└── report.html                         # .gitignore
+├── graph/cross-paper-links.jsonl
+└── eval/
+    ├── runs/<run_id>.jsonl
+    └── report.html
 ```
 
-`paper_id = SHA1(PDF bytes)[:12]`。同一 PDF 改名或移动位置不影响 id。
+`paper_id` is `SHA1(PDF bytes)[:12]`, so renaming or moving a PDF does not change
+its identity.
 
-## 文档
+Repository eval fixtures live under `eval/`:
 
-- [VISION.md](VISION.md) — 项目目标与非目标
-- [ARCHITECTURE.md](ARCHITECTURE.md) — 模块边界与数据流
-- [TASKS.md](TASKS.md) — 里程碑与实现进度
-- [AGENTS.md](AGENTS.md) — 工程规约
-- `docs/stories/` — 关键技术决策记录
+```text
+eval/
+├── goldens/<paper_id>_<field>.json
+├── retrieval/queries.yaml
+└── suites/smoke.yaml
+```
 
-## 许可
+## Development
 
-MIT — 详见 [LICENSE](LICENSE)。
+```bash
+uv sync --dev
+make lint
+make typecheck
+make test
+```
+
+Useful focused checks:
+
+```bash
+git diff --check -- README.md
+uv run pytest tests/chat/test_runtime.py tests/api/test_http.py
+```
+
+Before changing model tiers, run the smoke eval and compare both quality and
+cost/latency. The current default remains the cheaper flash tier because the
+documented plus-tier trial showed higher cost and latency with no measured
+quality gain.
+
+## Roadmap
+
+Near-term work is tracked in [TASKS.md](TASKS.md). Current priority:
+
+1. Improve evidence chunk selection without changing paper-level ranking.
+2. Track evidence pool recall, final evidence recall, and evidence anchor
+   precision.
+3. Continue toward the M19 minimum loop for real research-idea composition once
+   grounding risk is better bounded.
+
+## Known Limitations
+
+- No cloud sync, accounts, multi-user ACL, or hosted deployment.
+- No internet paper discovery in the core runtime; it works over local PDFs and
+  local indexes.
+- No cross-encoder or LLM reranker in the active retrieval path.
+- Evidence chunks are not yet reliable enough to treat every generated claim as
+  fully grounded.
+- Some eval suites depend on local PDFs that are not shipped in the repository.
+
+## Contributing
+
+This is an experimental local-first research tool. Before opening a pull request:
+
+- Read [AGENTS.md](AGENTS.md) for engineering conventions and module boundaries.
+- Keep changes narrow and explain user-visible behavior.
+- Do not add dependencies unless the tradeoff is discussed first.
+- Prefer traceable, deterministic harness improvements over prompt-only fixes.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
