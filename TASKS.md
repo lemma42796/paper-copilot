@@ -8,7 +8,7 @@
 
 ## Current Status
 
-> 更新于 2026-05-19。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
+> 更新于 2026-05-21。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
 - **已完成**:M1–M15(Session A + B 全部 done)。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
@@ -41,7 +41,7 @@
   `docs/stories/2026-04-27-model-selection-flash-vs-plus.md`。
 - **当前阶段**:**M18 paper-level RAG gate 已完成,chunk/evidence 级 baseline
   已补上并暴露缺口;下次先决定是否修 evidence chunk retrieval,再进 M19 最小闭环**。
-  截至 2026-05-19,
+  截至 2026-05-21,
   chat-first runtime/API 与 macOS-style web shell 已可用;后端 route 已收敛为
   `knowledge_qa` / `framework_composer`,knowledge QA 下有轻量 `task_profile`。
   检索侧已从 bge-m3 切到百炼 `text-embedding-v4`(1024 维),并落地
@@ -51,20 +51,67 @@
   34 papers / 2066 chunks。RAG v1 当前 gate:34 篇 / 36 queries seed eval
   mean `recall@5=98.4%`,`recall@10=100.0%`;不再为 seed eval 继续微调
   ranking。当前 paper mean `precision@5=32.8%`,`precision@10=16.9%`。
-  chunk/evidence baseline 当前只覆盖 13 条带 anchor 的 query;经
-  anchor 语义收紧为答案型原文短句后,query-mean
-  `evidence_recall@5=53.8%`,`evidence_recall@10=53.8%`,说明
-  已经经常找对论文,但没有把目标 evidence chunk 放进每篇 top evidence。
-  当前 evidence anchor precision 为 `@5=25.6%`,`@10=25.6%`;它只衡量
-  anchor-labeled paper 返回 chunks 中有多少包含人工 anchor,不是完整语义
-  相关性标注。
+  chunk/evidence baseline 当前只覆盖 13 条带 anchor 的 query;eval matching
+  已从严格 substring 改为 exact substring + embedding semantic window match。
+  当前 query-mean `evidence_recall@5=82.1%`,`evidence_recall@10=84.6%`,
+  说明此前一部分 miss 是“语义相关但不含人工 anchor 原文”的保守计分。
+  当前 evidence anchor precision 为 `@5=43.6%`,`@10=44.4%`;它只衡量
+  anchor-labeled paper 返回 chunks 中有多少命中人工 anchor 或语义窗口,不是
+  未标注 chunk 的完整相关性判断。
   未做/暂跳过:reranker、paper alias/metadata 检索、retrieval misses/top-k
   诊断接前端、unsupported claim 系统人工抽样。M19 真实"论文创新方案生成"
   可以继续推进,但要把 evidence chunk recall 作为已知 grounding 风险。
-  下次建议先做 evidence chunk selection v1:top paper 排名不动,每篇内部
-  overfetch 20-50 个候选 chunk,再精选 3-5 个发给 LLM;eval 同时看
-  evidence pool recall、final evidence recall 与 evidence anchor precision。
-- **最新编码进展**:**retrieval precision 指标已接入**
+  代码层 evidence chunk selection v1 已完成:top paper 排名不动,每篇内部
+  默认取 20 个候选 chunk pool,再返回 3-5 个 evidence chunks。正式复跑后
+  evidence recall 小升、precision 小降;下一步应做最终 chunk selector,不要继续
+  盲目扩大 pool。
+- **最新编码进展**:**embedding cache 已接入**
+  (2026-05-21)。论文库 chunks 的向量本来就落在
+  `~/.paper-copilot/embeddings.db`;本次补的是通用文本向量缓存:
+  search/chat/retrieval eval/related/read/reindex 现在通过
+  `~/.paper-copilot/embedding_cache.sqlite` 按 `model + dim + text_sha256`
+  复用已算向量,避免重复 query / evidence anchor / semantic window / chunk text
+  反复调用 `text-embedding-v4`。该改动不改变 retrieval ranking 或
+  `search_library` 输出;换模型或换维度不会复用旧缓存。已跑
+  `uv run pytest tests/eval/test_embedding_cache.py tests/eval/test_retrieval.py tests/eval/test_runs.py tests/eval/test_report.py -q`
+  与扩展后的 focused suite(52 passed,5 warnings)、touched-file `ruff check`、
+  touched source `mypy` 和 `git diff --check`;为避免额外花 embedding API 成本,
+  本轮未复跑真实 retrieval eval。
+- **上一编码进展**:**evidence anchor semantic matching 已接入**
+  (2026-05-21)。`eval.retrieval` 的 evidence matching 现在先保留严格
+  substring 命中;未命中时把同 paper 返回 chunk 切成 45-token/20-stride
+  小窗口,用现有 `text-embedding-v4` 比 anchor-vs-window cosine similarity,
+  阈值 `_SEMANTIC_ANCHOR_THRESHOLD=0.75`。这只改 eval 计分口径,不改
+  retrieval ranking 或 `search_library` 输出。已跑
+  `uv run pytest tests/eval/test_retrieval.py tests/eval/test_runs.py tests/eval/test_report.py -q`
+  (18 passed,5 warnings)、touched-file `ruff check` 和 `git diff --check`。正式复跑
+  `uv run paper-copilot eval retrieval eval/retrieval/queries.yaml`,recorded run:
+  `eval/runs/2026-05-21T09-05-27Z.jsonl`;`eval/report.html` 刷新为 10 runs /
+  339 rows。当前结果:paper mean `recall@5=98.4%`,`recall@10=100.0%`,
+  `precision@5=32.8%`,`precision@10=16.9%`;13 条 evidence-labeled queries 的
+  query-mean `evidence_recall@5=82.1%`,`evidence_recall@10=84.6%`,
+  `evidence_anchor_precision@5=43.6%`,`evidence_anchor_precision@10=44.4%`。
+  主要新增命中来自 q006/q023/q033/q036。该 eval 口径会额外调用 embedding API
+  编码 anchor 与候选 chunk 窗口;本轮未跑真实 `/chat` / LLM。
+- **上一编码进展**:**evidence chunk selection v1 已接入**
+  (2026-05-21)。`knowledge.hybrid_search.search()` 现在先按全库 hybrid
+  chunk 排名固定 top papers,再对每个 selected paper 用同一 query 做
+  paper-local vector + BM25/RRF chunk pool,最后返回
+  `max_chunks_per_paper` 个 evidence chunks。`search_library` 新增
+  `evidence_pool_per_paper` 参数,默认 20、上限 50,用于扩大每篇内部 evidence
+  候选池而不改变 paper ranking。已补 focused 单测覆盖“论文进入 top papers,
+  但目标 evidence chunk 未进入第一阶段全局 pool”的场景。已跑
+  `uv run pytest tests/knowledge/test_hybrid_search.py tests/agents/test_research.py -q`
+  (24 passed,5 warnings)、touched-file `ruff check` 和 `git diff --check`。正式复跑
+  `uv run paper-copilot eval retrieval eval/retrieval/queries.yaml`,recorded run:
+  `eval/runs/2026-05-21T08-06-26Z.jsonl`;`eval/report.html` 刷新为 9 runs /
+  303 rows。当前结果:paper mean `recall@5=98.4%`,`recall@10=100.0%`,
+  `precision@5=32.8%`,`precision@10=16.9%`;13 条 evidence-labeled queries 的
+  query-mean `evidence_recall@5=56.4%`,`evidence_recall@10=56.4%`,
+  `evidence_anchor_precision@5=24.4%`,`evidence_anchor_precision@10=23.9%`。
+  相比上一轮,q033 evidence recall 从 `0.0%` 到 `33.3%`,q018 recall 不变但
+  anchor precision 从 `66.7%` 降到 `33.3%`。未跑真实 `/chat` / LLM。
+- **上一编码进展**:**retrieval precision 指标已接入**
   (2026-05-19)。`paper-copilot eval retrieval` 现在同时计算/展示/记录
   paper `precision@5/@10` 与 evidence anchor `precision@5/@10`;run history
   JSON 兼容旧 retrieval rows,`eval report` 的 retrieval summary、趋势图和

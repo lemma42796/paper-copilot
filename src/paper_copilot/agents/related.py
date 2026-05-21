@@ -32,7 +32,7 @@ from paper_copilot.knowledge.hybrid_search import SearchResult, search
 from paper_copilot.schemas.paper import CrossPaperLink, Paper
 from paper_copilot.session import SessionStore
 from paper_copilot.shared.cache import cached_system, mark_tools_cached
-from paper_copilot.shared.embedder import Embedder
+from paper_copilot.shared.embedding_cache import EmbeddingEncoder
 from paper_copilot.shared.jsonschema import inline_refs
 from paper_copilot.shared.logging import get_logger
 
@@ -118,7 +118,7 @@ class RelatedAgent:
         new_paper: Paper,
         new_paper_id: str,
         *,
-        embedder: Embedder,
+        embedder: EmbeddingEncoder,
         fields_store: FieldsStore,
         embeddings_store: EmbeddingsStore,
     ) -> RelatedRun:

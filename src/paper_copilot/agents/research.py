@@ -51,7 +51,7 @@ from paper_copilot.knowledge.hybrid_search import (
 from paper_copilot.session import SessionStore
 from paper_copilot.session.paths import compute_paper_id, paper_dir
 from paper_copilot.shared.cost import CostSnapshot, CostTracker, pricing_for_model
-from paper_copilot.shared.embedder import Embedder
+from paper_copilot.shared.embedding_cache import EmbeddingEncoder
 from paper_copilot.shared.errors import KnowledgeError, PaperCopilotError
 
 __all__ = [
@@ -68,6 +68,7 @@ _AGENT_NAME = "ResearchAgent"
 _MAX_LIST_LIMIT = 20
 _MAX_SEARCH_K = 10
 _MAX_SEARCH_CHUNKS_PER_PAPER = 5
+_MAX_EVIDENCE_POOL_PER_PAPER = 50
 _MAX_INSPECT_ITEMS = 8
 _MAX_RELATED_K = 10
 _RESEARCH_MAX_TOKENS = 3000
@@ -90,7 +91,7 @@ class ResearchToolContext:
     fields_store: FieldsStore
     embeddings_store: EmbeddingsStore | None = None
     encode_query: QueryEncoder | None = None
-    embedder: Embedder | None = None
+    embedder: EmbeddingEncoder | None = None
     pdf_dir: Path | None = None
     root: Path | None = None
     max_papers: int = 5
@@ -147,6 +148,15 @@ class _SearchLibraryInput(BaseModel):
         default=3,
         ge=1,
         le=_MAX_SEARCH_CHUNKS_PER_PAPER,
+    )
+    evidence_pool_per_paper: StrictInt = Field(
+        default=20,
+        ge=1,
+        le=_MAX_EVIDENCE_POOL_PER_PAPER,
+        description=(
+            "Number of candidate chunks to retrieve inside each selected paper "
+            "before returning the top max_chunks_per_paper evidence chunks."
+        ),
     )
     year: StrictInt | None = None
     field: str | None = None
@@ -358,7 +368,8 @@ def research_tools() -> list[dict[str, Any]]:
                 "vector distance, and citation-grade evidence refs. Use this when "
                 "list_papers does not surface enough candidate papers. Use "
                 "max_chunks_per_paper when a task needs multiple snippets from the "
-                "same paper."
+                "same paper; use evidence_pool_per_paper to widen within-paper "
+                "evidence recall while keeping the paper ranking fixed."
             ),
             _SearchLibraryInput,
         ),
@@ -696,6 +707,7 @@ def _search_library(args: _SearchLibraryInput, context: ResearchToolContext) -> 
         year=args.year,
         contains=contains_filter,
         max_chunks_per_paper=args.max_chunks_per_paper,
+        evidence_pool_per_paper=args.evidence_pool_per_paper,
         query_text=args.query,
     )
     ranked = list(enumerate(results, start=1))

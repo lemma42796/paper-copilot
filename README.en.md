@@ -37,7 +37,7 @@ ideas are easier to verify.
 
 ## Status
 
-Current status is synced from `TASKS.md`, last updated on 2026-05-19.
+Current status is synced from `TASKS.md`, last updated on 2026-05-21.
 
 Paper Copilot has moved toward a local chat-first research assistant:
 
@@ -46,7 +46,8 @@ Paper Copilot has moved toward a local chat-first research assistant:
 - `apps/web/` contains a Next.js macOS-style chat shell with library selection,
   report history, route/status display, cost display, and evidence inspection.
 - Retrieval now uses DashScope `text-embedding-v4` with FTS5/BM25 + vector RRF +
-  multi-chunk evidence.
+  multi-chunk evidence; previously computed text embeddings are reused from a
+  local cache to avoid repeated model calls.
 - The current local test library contains 34 papers / 2066 chunks.
 
 Current retrieval gate:
@@ -57,9 +58,9 @@ Current retrieval gate:
 | paper `recall@10` | 100.0% | Paper-level recall is good enough for now |
 | paper `precision@5` | 32.8% | Relevant papers among topK |
 | paper `precision@10` | 16.9% | Expected to drop as topK expands |
-| evidence `recall@5` | 53.8% | Mean over 13 anchor-labeled queries |
-| evidence `recall@10` | 53.8% | Known gap: right paper, not always right chunk |
-| evidence anchor `precision@5` | 25.6% | Anchor-hit metric, not full semantic relevance |
+| evidence `recall@5` | 82.1% | Mean over 13 anchor-labeled queries; exact + semantic window match |
+| evidence `recall@10` | 84.6% | Evidence chunk coverage still needs work after paper-level hits |
+| evidence anchor `precision@5` | 43.6% | Anchor/semantic-window hit metric, not full relevance |
 
 This is still an experimental, local-first, personal-library tool. The intended
 scale is roughly 50-100 papers, not a hosted SaaS, multi-user platform, or
@@ -307,6 +308,7 @@ Runtime data lives outside the repository by default:
 ├── fields.db
 ├── embeddings.db
 ├── embeddings_meta.json
+├── embedding_cache.sqlite
 ├── graph/cross-paper-links.jsonl
 └── eval/
     ├── runs/<run_id>.jsonl
@@ -314,7 +316,9 @@ Runtime data lives outside the repository by default:
 ```
 
 `paper_id = SHA1(PDF bytes)[:12]`, so renaming or moving a PDF does not change
-its ID.
+its ID. `embeddings.db` stores paper-library chunk vectors; `embedding_cache.sqlite`
+stores reusable vectors for queries, evidence anchors, semantic windows, and
+similar text keyed by model and dimension.
 
 Repository eval assets:
 

@@ -79,6 +79,36 @@ def test_score_query_computes_evidence_anchor_recall() -> None:
     assert result.missed_evidence_at_10 == ("p2:missing anchor",)
 
 
+def test_score_query_accepts_semantic_anchor_matcher() -> None:
+    query = RetrievalQuery(
+        id="q1",
+        query="residual learning",
+        intent="exact_method_lookup",
+        relevant_papers=[RelevantPaper(paper_id="p1", reason="target")],
+        evidence_anchors=[
+            EvidenceAnchor(paper_id="p1", text="deep residual learning framework"),
+        ],
+    )
+
+    result = _score_query(
+        query,
+        [
+            _result(
+                "p1",
+                chunk_id=7,
+                text="The paper proposes shortcut connections for very deep networks.",
+            ),
+        ],
+        anchor_matcher=lambda anchor, chunk: (
+            anchor.paper_id == chunk.paper_id and chunk.chunk_id == 7
+        ),
+    )
+
+    assert result.evidence_recall_at_5 == pytest.approx(1.0)
+    assert result.evidence_anchor_precision_at_5 == pytest.approx(1.0)
+    assert result.missed_evidence_at_10 == ()
+
+
 def test_score_query_computes_paper_precision() -> None:
     query = RetrievalQuery(
         id="q1",

@@ -31,11 +31,12 @@ from paper_copilot.knowledge.meta import IndexMeta, write_meta
 from paper_copilot.knowledge.sync import index_paper, index_paper_embeddings
 from paper_copilot.retrieval.sections import split_by_sections
 from paper_copilot.schemas.paper import PaperSkeleton
-from paper_copilot.session.paths import compute_paper_id, default_root
+from paper_copilot.session.paths import compute_paper_id, default_root, embedding_cache_file
 from paper_copilot.session.store import SessionStore
 from paper_copilot.session.types import ToolUse
 from paper_copilot.shared.chunking import Section
 from paper_copilot.shared.embedder import EMBEDDING_DIM, MODEL_NAME, Embedder
+from paper_copilot.shared.embedding_cache import CachedEmbedder, EmbeddingCache, EmbeddingEncoder
 from paper_copilot.shared.errors import SessionError
 
 
@@ -64,11 +65,14 @@ def reindex(
 
     pdf_map: dict[str, Path] = _index_pdfs(pdf_dir) if pdf_dir is not None else {}
 
-    embedder: Embedder | None = None
+    embedder: EmbeddingEncoder | None = None
+    embedding_cache: EmbeddingCache | None = None
     embeddings_store: EmbeddingsStore | None = None
     if pdf_dir is not None:
         with console.status("[dim]initializing text-embedding-v4…[/dim]"):
-            embedder = Embedder()
+            raw_embedder = Embedder()
+        embedding_cache = EmbeddingCache.open(embedding_cache_file(home), dim=EMBEDDING_DIM)
+        embedder = CachedEmbedder(raw_embedder, embedding_cache)
         embeddings_store = EmbeddingsStore.open(home / "embeddings.db", dim=EMBEDDING_DIM)
 
     indexed_fields = 0
@@ -134,6 +138,8 @@ def reindex(
     finally:
         if embeddings_store is not None:
             embeddings_store.close()
+        if embedding_cache is not None:
+            embedding_cache.close()
 
     elapsed = time.perf_counter() - t0
     console.print(

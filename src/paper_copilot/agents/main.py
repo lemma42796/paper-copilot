@@ -30,7 +30,7 @@ from paper_copilot.schemas.paper import Paper, PaperMeta
 from paper_copilot.session import SessionStore
 from paper_copilot.session.paths import compute_paper_id
 from paper_copilot.shared.cost import CostSnapshot, CostTracker, pricing_for_model
-from paper_copilot.shared.embedder import Embedder
+from paper_copilot.shared.embedding_cache import EmbeddingEncoder
 
 __all__ = ["MainAgent", "MainRun"]
 
@@ -57,7 +57,7 @@ class MainAgent:
         pdf_path: Path,
         *,
         language: Literal["en", "zh"] = "en",
-        embedder: Embedder | None = None,
+        embedder: EmbeddingEncoder | None = None,
         fields_store: FieldsStore | None = None,
         embeddings_store: EmbeddingsStore | None = None,
     ) -> MainRun:

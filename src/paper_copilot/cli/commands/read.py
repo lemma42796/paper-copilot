@@ -15,8 +15,14 @@ from paper_copilot.agents.llm_client import LLMClient
 from paper_copilot.agents.read_pipeline import run_read_pipeline
 from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
-from paper_copilot.session.paths import compute_paper_id, default_root, paper_dir
+from paper_copilot.session.paths import (
+    compute_paper_id,
+    default_root,
+    embedding_cache_file,
+    paper_dir,
+)
 from paper_copilot.shared.embedder import EMBEDDING_DIM, Embedder
+from paper_copilot.shared.embedding_cache import CachedEmbedder, EmbeddingCache
 
 
 def read(
@@ -81,12 +87,14 @@ async def _read_async(pdf_path: Path, force: bool, language: Literal["en", "zh"]
 
     console = Console()
     with console.status("[dim]initializing text-embedding-v4…[/dim]"):
-        embedder = Embedder()
+        raw_embedder = Embedder()
 
     with (
         FieldsStore.open(fields_db) as fields_store,
         EmbeddingsStore.open(embeddings_db, dim=EMBEDDING_DIM) as embeddings_store,
+        EmbeddingCache.open(embedding_cache_file(root), dim=EMBEDDING_DIM) as embedding_cache,
     ):
+        embedder = CachedEmbedder(raw_embedder, embedding_cache)
         run = await run_read_pipeline(
             pdf_path,
             client=LLMClient(),

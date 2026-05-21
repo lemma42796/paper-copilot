@@ -17,6 +17,11 @@ def default_root() -> Path:
     return Path.home() / ".paper-copilot"
 
 
+def embedding_cache_file(root: Path | None = None) -> Path:
+    base = root if root is not None else default_root()
+    return base / "embedding_cache.sqlite"
+
+
 def default_pdf_dir() -> Path | None:
     load_env()
     override = os.environ.get(_PDF_DIR_ENV_VAR)

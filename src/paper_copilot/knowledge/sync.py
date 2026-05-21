@@ -17,7 +17,7 @@ from typing import Any
 
 from paper_copilot.schemas import Paper
 from paper_copilot.shared.chunking import Section, chunk_sections
-from paper_copilot.shared.embedder import Embedder
+from paper_copilot.shared.embedding_cache import EmbeddingEncoder
 
 from .embeddings_store import ChunkRow, EmbeddingsStore
 from .fields_store import FieldsStore
@@ -40,7 +40,7 @@ def index_paper_embeddings(
     sections: list[Section],
     *,
     store: EmbeddingsStore,
-    embedder: Embedder,
+    embedder: EmbeddingEncoder,
     max_tokens: int = 512,
     overlap_tokens: int = 64,
     batch_size: int = 32,

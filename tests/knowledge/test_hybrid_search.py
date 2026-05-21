@@ -114,6 +114,58 @@ def test_search_limits_chunks_per_paper(stores) -> None:
     assert [chunk.text for chunk in hit.chunks] == ["contrastive loss"]
 
 
+def test_search_refines_evidence_chunks_within_selected_papers(tmp_path: Path) -> None:
+    with (
+        FieldsStore.open(tmp_path / "f.db") as fs,
+        EmbeddingsStore.open(tmp_path / "e.db", dim=DIM) as es,
+    ):
+        now = datetime.now(UTC).isoformat()
+        fs.upsert("pA", _payload("Paper A", 2024), now)
+        fs.upsert("pB", _payload("Paper B", 2024), now)
+
+        def _row(pid: str, ord_: int, text: str) -> ChunkRow:
+            return ChunkRow(
+                chunk_id=0,
+                paper_id=pid,
+                ord=ord_,
+                section="Intro",
+                page_start=1,
+                page_end=1,
+                text=text,
+            )
+
+        es.replace_paper(
+            "pA",
+            [
+                _row("pA", 0, "paper A nearest chunk"),
+                _row("pA", 1, "paper A deeper answer evidence"),
+            ],
+            np.array([[1, 0, 0, 0], [1, 0.4, 0, 0]], dtype=np.float32),
+        )
+        es.replace_paper(
+            "pB",
+            [_row("pB", 0, "paper B distractor chunk")],
+            np.array([[1, 0.1, 0, 0]], dtype=np.float32),
+        )
+
+        results = search(
+            np.array([1, 0, 0, 0], dtype=np.float32),
+            fields_store=fs,
+            embeddings_store=es,
+            k=2,
+            overfetch=1,
+            max_chunks_per_paper=2,
+            evidence_pool_per_paper=2,
+        )
+
+    assert [r.paper_id for r in results] == ["pA", "pB"]
+    hit = next(r for r in results if r.paper_id == "pA")
+    assert [chunk.text for chunk in hit.chunks] == [
+        "paper A nearest chunk",
+        "paper A deeper answer evidence",
+    ]
+
+
 def test_search_fuses_bm25_candidates(stores) -> None:
     fs, es = stores
     results = search(

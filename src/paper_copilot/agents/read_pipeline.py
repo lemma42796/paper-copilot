@@ -18,7 +18,8 @@ from paper_copilot.retrieval.sections import split_by_sections
 from paper_copilot.session.paths import compute_paper_id, default_root, paper_dir
 from paper_copilot.shared.chunking import Section
 from paper_copilot.shared.cost import CostSnapshot
-from paper_copilot.shared.embedder import EMBEDDING_DIM, MODEL_NAME, Embedder
+from paper_copilot.shared.embedder import EMBEDDING_DIM, MODEL_NAME
+from paper_copilot.shared.embedding_cache import EmbeddingEncoder
 from paper_copilot.shared.render import to_markdown
 
 __all__ = ["ReadPipelineRun", "run_read_pipeline"]
@@ -43,7 +44,7 @@ async def run_read_pipeline(
     client: LLMClient,
     fields_store: FieldsStore,
     embeddings_store: EmbeddingsStore,
-    embedder: Embedder,
+    embedder: EmbeddingEncoder,
     root: Path | None = None,
     language: Literal["en", "zh"] = "en",
 ) -> ReadPipelineRun:

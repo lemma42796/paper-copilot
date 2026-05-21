@@ -14,8 +14,9 @@ from paper_copilot.eval.runs import load_history, write_research_quality_run
 from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.knowledge.meta import IndexMeta, require_match, write_meta
-from paper_copilot.session.paths import default_pdf_dir, default_root
+from paper_copilot.session.paths import default_pdf_dir, default_root, embedding_cache_file
 from paper_copilot.shared.embedder import EMBEDDING_DIM, MODEL_NAME, Embedder
+from paper_copilot.shared.embedding_cache import CachedEmbedder, EmbeddingCache, EmbeddingEncoder
 from paper_copilot.shared.errors import KnowledgeError
 
 
@@ -66,7 +67,7 @@ async def handle_chat_request(
         )
 
     route = route_chat_request(request)
-    embedder: Embedder | None = None
+    embedder: EmbeddingEncoder | None = None
     with ExitStack() as stack:
         fields_store = stack.enter_context(FieldsStore.open(fields_db))
         embeddings_store: EmbeddingsStore | None = None
@@ -77,8 +78,12 @@ async def handle_chat_request(
                     embedding_model=MODEL_NAME,
                     embedding_dim=EMBEDDING_DIM,
                 )
-            embedder = Embedder()
-            embedder.warmup()
+            raw_embedder = Embedder()
+            raw_embedder.warmup()
+            embedding_cache = stack.enter_context(
+                EmbeddingCache.open(embedding_cache_file(home), dim=EMBEDDING_DIM)
+            )
+            embedder = CachedEmbedder(raw_embedder, embedding_cache)
             embeddings_store = stack.enter_context(
                 EmbeddingsStore.open(embeddings_db, dim=EMBEDDING_DIM)
             )

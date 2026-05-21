@@ -24,8 +24,9 @@ from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore, available_fields
 from paper_copilot.knowledge.hybrid_search import ContainsFilter, SearchResult, search
 from paper_copilot.knowledge.meta import require_match
-from paper_copilot.session.paths import default_root
+from paper_copilot.session.paths import default_root, embedding_cache_file
 from paper_copilot.shared.embedder import EMBEDDING_DIM, MODEL_NAME, Embedder
+from paper_copilot.shared.embedding_cache import CachedEmbedder, EmbeddingCache
 from paper_copilot.shared.errors import KnowledgeError
 
 
@@ -94,8 +95,8 @@ def search_cmd(
 
     console = Console()
     with console.status("[dim]initializing text-embedding-v4…[/dim]"):
-        embedder = Embedder()
-        embedder.warmup()
+        raw_embedder = Embedder()
+        raw_embedder.warmup()
 
     contains_filter = (
         ContainsFilter(field=field, term=contains)
@@ -104,11 +105,13 @@ def search_cmd(
     )
 
     t0 = time.perf_counter()
-    qvec = embedder.encode([query])[0]
     with (
+        EmbeddingCache.open(embedding_cache_file(home), dim=EMBEDDING_DIM) as embedding_cache,
         FieldsStore.open(fields_db) as fs,
         EmbeddingsStore.open(embed_db, dim=EMBEDDING_DIM) as es,
     ):
+        embedder = CachedEmbedder(raw_embedder, embedding_cache)
+        qvec = embedder.encode([query])[0]
         results = search(
             qvec,
             fields_store=fs,

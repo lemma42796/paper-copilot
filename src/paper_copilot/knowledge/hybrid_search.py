@@ -3,8 +3,9 @@
 Pipeline: structured filter on ``fields.db`` produces a candidate
 ``paper_id`` set, then vector KNN and optional FTS5/BM25 search both run
 on ``embeddings.db``. Chunk rankings are fused with RRF, then grouped by
-paper so a single paper result is returned with its best chunk plus
-nearby evidence chunks.
+paper to fix the top paper order. Each selected paper then gets a
+paper-local evidence pool, so the returned evidence chunks are not limited
+to the first global chunk pool.
 
 No reranker — ARCHITECTURE.md 135 defers that. ``overfetch`` controls
 the initial pool width (``k * overfetch`` chunks); if grouping leaves
@@ -66,6 +67,7 @@ def search(
     contains: ContainsFilter | None = None,
     overfetch: int = 5,
     max_chunks_per_paper: int = 3,
+    evidence_pool_per_paper: int = 20,
     query_text: str | None = None,
     rrf_k: int = 60,
 ) -> list[SearchResult]:
@@ -75,6 +77,8 @@ def search(
         raise KnowledgeError("overfetch must be >= 1")
     if max_chunks_per_paper < 1:
         raise KnowledgeError("max_chunks_per_paper must be >= 1")
+    if evidence_pool_per_paper < 1:
+        raise KnowledgeError("evidence_pool_per_paper must be >= 1")
     if rrf_k < 1:
         raise KnowledgeError("rrf_k must be >= 1")
 
@@ -129,7 +133,18 @@ def search(
 
     results: list[SearchResult] = []
     for candidates_for_paper in ordered:
-        h = candidates_for_paper[0].chunk
+        paper_id = candidates_for_paper[0].chunk.paper_id
+        refined = _paper_local_chunks(
+            query_vec,
+            embeddings_store=embeddings_store,
+            paper_id=paper_id,
+            query_text=query_text,
+            pool=max(evidence_pool_per_paper, max_chunks_per_paper),
+            limit=max_chunks_per_paper,
+            rrf_k=rrf_k,
+        )
+        selected_chunks = refined or candidates_for_paper
+        h = selected_chunks[0].chunk
         row = fields_store.get(h.paper_id)
         if row is None:
             continue  # indexed chunk without a fields row — stale; skip quietly
@@ -141,9 +156,9 @@ def search(
                 year=int(meta.get("year", 0)),
                 best_chunk=h,
                 paper_data=row.data,
-                chunks=tuple(candidate.chunk for candidate in candidates_for_paper),
+                chunks=tuple(candidate.chunk for candidate in selected_chunks),
                 chunk_scores=tuple(
-                    candidate.score for candidate in candidates_for_paper
+                    candidate.score for candidate in selected_chunks
                 ),
             )
         )
@@ -164,23 +179,23 @@ def _fuse_hits(
     rrf_k: int,
 ) -> list[_FusedChunk]:
     candidates: dict[int, _FusionCandidate] = {}
-    for rank, hit in enumerate(vector_hits, start=1):
+    for rank, vector_hit in enumerate(vector_hits, start=1):
         candidate = candidates.setdefault(
-            hit.chunk_id,
-            _FusionCandidate(chunk=hit, sort_rank=rank),
+            vector_hit.chunk_id,
+            _FusionCandidate(chunk=vector_hit, sort_rank=rank),
         )
         candidate.vector_rank = rank
-        candidate.vector_distance = hit.distance
+        candidate.vector_distance = vector_hit.distance
         candidate.sort_rank = min(candidate.sort_rank, rank)
         candidate.rrf_score += _rrf(rank, rrf_k=rrf_k)
 
-    for rank, hit in enumerate(bm25_hits, start=1):
+    for rank, text_hit in enumerate(bm25_hits, start=1):
         candidate = candidates.setdefault(
-            hit.chunk_id,
-            _FusionCandidate(chunk=_chunk_from_text_hit(hit), sort_rank=rank),
+            text_hit.chunk_id,
+            _FusionCandidate(chunk=_chunk_from_text_hit(text_hit), sort_rank=rank),
         )
         candidate.bm25_rank = rank
-        candidate.bm25_score = hit.bm25
+        candidate.bm25_score = text_hit.bm25
         candidate.sort_rank = min(candidate.sort_rank, rank)
         candidate.rrf_score += _rrf(rank, rrf_k=rrf_k)
 
@@ -243,6 +258,25 @@ def _group_chunks_per_paper(
         if len(chunks) < limit:
             chunks.append(h)
     return grouped
+
+
+def _paper_local_chunks(
+    query_vec: np.ndarray,
+    *,
+    embeddings_store: EmbeddingsStore,
+    paper_id: str,
+    query_text: str | None,
+    pool: int,
+    limit: int,
+    rrf_k: int,
+) -> list[_FusedChunk]:
+    vector_hits = embeddings_store.knn(query_vec, k=pool, paper_ids=[paper_id])
+    bm25_hits = (
+        embeddings_store.bm25(query_text, k=pool, paper_ids=[paper_id])
+        if query_text is not None
+        else []
+    )
+    return _fuse_hits(vector_hits, bm25_hits, rrf_k=rrf_k)[:limit]
 
 
 def _candidate_paper_ids(
