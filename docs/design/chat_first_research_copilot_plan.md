@@ -209,6 +209,28 @@ fake novelty. It outputs:
 - citations for every baseline/module claim
 - missing PDFs or paywalled sources the user must provide
 
+### 2026-05-22 Scope Decision
+
+The product path should be local-first. Users may prepare PDFs in directories
+such as:
+
+```text
+papers/
+  ccf_a/
+  ccf_b/
+  other/
+```
+
+`ccf_a/` is the baseline pool and can also provide modules. `ccf_b/` and
+`other/` are module-only pools. This keeps the core Research Idea Composer from
+getting blocked by web page drift, paywalls, or failed downloads.
+
+For resume/project competitiveness, keep a limited paper-intake workflow as a
+separate capability, not as the required main path. The first useful intake
+scope is DBLP + CVF + OpenReview + arXiv + GitHub verification. IEEE/ACM or
+other restricted publisher pages should degrade to `needs_user_pdf` instead of
+trying to bypass access controls.
+
 ### Discovery Flow
 
 The CCF PDF is a venue whitelist, not a paper database.
@@ -229,11 +251,14 @@ Observed source context:
 ```text
 user field
 -> map to CCF category and A-level venues
--> use DBLP/venue pages/OpenReview/CVF/ACL Anthology/arXiv for recent metadata
--> find candidate baseline papers and module papers
--> download open PDFs when allowed
--> ask user for paywalled PDFs
--> read local PDFs deeply
+-> use DBLP venue/year pages for proceedings metadata
+-> open only official paper links exposed by DBLP or venue pages
+-> inspect official page title/abstract/links before touching PDF
+-> verify code links when exposed on the official page
+-> if no code link is exposed but the paper is relevant, inspect PDF text links
+-> download/index only papers that pass relevance + code + access checks
+-> ask user for paywalled or missing PDFs
+-> read accepted local PDFs deeply
 -> compose grounded ideas
 ```
 
@@ -242,23 +267,112 @@ try to bypass paywalls or rely on logged-in library access. When a PDF is not
 available, the workflow stops cleanly and asks the user to place the PDF in a
 directory.
 
+Different venues have different official pages. The workflow should therefore
+avoid hard-coding one visual page shape. Tools should enumerate links and
+metadata first; the LLM should classify already-extracted candidates instead of
+visually hunting for buttons.
+
+Large DBLP pages should never be sent to the LLM as raw HTML. Cache the HTML,
+parse it into structured paper entries, run title/metadata lexical or embedding
+filtering, then ask the LLM to screen only the top candidate list.
+
+```text
+DBLP venue-year HTML
+-> cached raw HTML
+-> structured entries(title, authors, year, key, ee links, session)
+-> title/metadata filter to top 50-100
+-> LLM screen/rerank to top N
+-> open official pages for only those N papers
+```
+
+Official page handling:
+
+```text
+official paper page
+-> extract title, abstract, venue/year, all links, citation PDF metadata
+-> classify links: pdf / arXiv / project / code / supplementary / dataset
+-> verify code candidates
+-> if verified code exists, continue candidate scoring
+-> otherwise, if paper is still high-value, fetch PDF text and extract links
+-> verify PDF-discovered code candidates
+-> only then download/index the PDF
+```
+
+Paywall/access detection belongs in tools, not in LLM guesswork:
+
+- direct PDF is usable when HTTP fetch succeeds, content type or body is a real
+  PDF, and text extraction can recover the title/abstract region;
+- publisher/login/purchase/subscription/institutional-access pages become
+  `paywalled`, `login_required`, or `publisher_page_only`;
+- before asking the user, try official open alternatives such as arXiv,
+  OpenReview, CVF, author/project PDFs, or other links surfaced by the official
+  page;
+- if no open PDF is found, keep metadata and return `needs_user_pdf`.
+
+### Tool and LLM Responsibilities
+
+Deterministic tools own facts and IO:
+
+- parse the CCF venue list into venue, level, area, and DBLP URL;
+- fetch/cache DBLP venue-year pages;
+- parse DBLP entries and official external links;
+- fetch official paper pages and extract title, abstract, metadata, and links;
+- extract URLs from HTML, PDF text, footnotes, and appendix text;
+- verify code links by checking that a public repository exists and contains
+  credible implementation files, setup instructions, or training/test scripts;
+- check PDF accessibility and paywall/login states;
+- download accepted PDFs into the configured local library;
+- maintain per-paper status such as `accepted_candidate`, `no_code`,
+  `not_relevant`, `paywalled_need_user_pdf`, `code_link_invalid`, and
+  `only_dataset_or_demo`.
+
+The LLM owns bounded semantic judgment:
+
+- map a user research direction to likely CCF areas and venue families;
+- judge topic relevance from title/abstract and compact metadata;
+- classify a candidate as baseline, module, related work, or abandon;
+- decide whether a high-value candidate merits opening PDF text when the page
+  has no code link;
+- classify extracted URLs by meaning when the anchor text is ambiguous;
+- judge whether a baseline has a clear story-worthy weakness;
+- judge whether a module can address that weakness;
+- synthesize and rank final framework candidates with evidence references.
+
+Qwen3.6-flash is acceptable for these bounded classification and synthesis
+steps if the tools provide clean inputs. It should not be treated as a search
+engine or as the component responsible for proving that a page, PDF, or GitHub
+repository exists.
+
 ### Baseline Selection Criteria
 
-A baseline candidate should usually be:
+A baseline is the final starting point for the new framework. It can be either
+one CCF A paper's whole framework or that framework's backbone/baseline plus a
+small set of its own modules. A baseline candidate should usually be:
 
-- CCF A venue or journal, preferably from the last 1-2 years
+- CCF A venue or journal;
+- preferably recent, with newer papers favored when evidence quality is similar;
 - highly aligned with the user's field
-- model/pipeline paper, not only dataset, survey, or pure theory
+- a model/pipeline paper, not only dataset, survey, or pure theory
 - clear architecture and training details
-- strong public baseline or reproducible setup
-- ideally has code, ablations, or enough implementation detail
+- public code and a reproducible setup
+- strong performance or strong adoption, because a high starting point makes
+  downstream improvement more credible
+- explicit limitations or improvement opportunities that can support a good
+  research story
 
 Do not select only by recency. A slightly older but clean and reproducible
 baseline can beat a newer ambiguous paper.
 
+The final workflow chooses one baseline, not several. Baseline search should
+stop as soon as the top candidate is stable enough: CCF A, relevant, strong,
+code-available, evidence-backed, and with a clear weakness to improve.
+
 ### Module Compatibility Criteria
 
-Each module candidate needs structured extraction:
+A module is a detachable method-section component from another paper. Each
+module paper can contribute at most one module. Module papers are not limited to
+CCF A, but code is still required. Each module candidate needs structured
+extraction:
 
 - module name
 - paper source and venue
@@ -269,7 +383,7 @@ Each module candidate needs structured extraction:
 - claimed benefit
 - ablation evidence
 - compute/memory cost
-- code availability if found
+- code availability
 
 Compatibility analysis asks:
 
@@ -278,8 +392,94 @@ Compatibility analysis asks:
 - Does it require a new loss, new data, or new labels?
 - Does it duplicate something the baseline already does?
 - Is there ablation evidence that the module is not cosmetic?
+- Which baseline weakness does this module address?
 - What minimal modification would make it a research hypothesis rather than a
   mechanical copy?
+
+Story quality is a first-class score, not an afterthought. A good module is not
+only technically attachable; it should make a persuasive claim about why the new
+framework improves the baseline and why it is meaningfully different from other
+papers. Modern coding tools can help with integration, but they cannot repair a
+weak research story.
+
+### Paper Budget and Stopping Rules
+
+Do not measure discovery by a fixed number of titles skimmed. Count only deep
+paper reads: method/experiment/limitations/code analysis that consumes LLM and
+PDF-processing budget. Title/abstract filtering, official page metadata checks,
+and code-link verification do not count as deep reads.
+
+Default limits:
+
+```text
+fast mode: <= 20 deep-read papers
+deep mode hard limit: <= 30 deep-read papers
+```
+
+Baseline and module reads share the same budget:
+
+```text
+total_deep_read_budget = 30
+baseline_final = exactly 1 paper
+baseline_search_cap = 5-8 deep reads, but stop earlier when stable
+module_budget = total_deep_read_budget - actual_baseline_deep_reads
+```
+
+If the baseline is fixed after 2 deep reads, the module phase can use up to 28
+deep reads. If baseline search takes 6 reads, the module phase gets 24. Do not
+reserve a fixed 8/20/2 split.
+
+Stopping criteria for baseline:
+
+- top1 is CCF A, code-available, relevant, recent enough, and strong;
+- top1 has a clear weakness that can be improved into a publishable story;
+- top1 is separated from top2/top3 by score or the remaining candidates are
+  near-duplicates;
+- additional candidates are unlikely to change the chosen baseline.
+
+Stopping criteria for modules:
+
+- each selected baseline weakness has at least 2-5 credible module candidates,
+  or the search budget is exhausted;
+- new module candidates are repeating the same mechanism family;
+- adding more modules no longer changes the top framework ranking;
+- the 30-paper hard limit is reached.
+
+At the hard limit, stop discovery and compose the best available top-K
+frameworks with explicit gaps. Do not silently continue reading more papers.
+
+### Combination and Context Control
+
+The LLM should never receive dozens of whole papers in one context. Runtime
+composition should operate over compact cards and cited evidence chunks:
+
+```text
+Baseline card: title, venue, code, performance, architecture, weaknesses
+Gap card: weakness, evidence, why it matters
+Module card: mechanism, attach point, code, ablation, expected benefit
+Framework card: baseline + 2-3 modules + story + risks + ablations
+```
+
+Avoid a full Cartesian product. Use a staged search:
+
+```text
+baseline top 1
+-> baseline weaknesses top 2-4
+-> module candidates per weakness
+-> deterministic/story/implementation scoring
+-> beam top 10-20 framework combinations
+-> LLM final ranking to topK
+```
+
+Expected latency depends on library state:
+
+- indexed papers with existing cards: about 30 seconds to 2 minutes;
+- local PDFs present but not yet read: about 3 to 10 minutes;
+- online discovery plus code/PDF checks: about 5 to 20+ minutes and less stable;
+- paywalled sources stop at `needs_user_pdf`.
+
+The product should therefore expose a fast local-library mode by default and a
+deeper mode only when the user explicitly wants more search.
 
 ### Output Contract
 
@@ -537,14 +737,21 @@ Goal: a bounded workflow for baseline + module ideation.
 
 Deliver:
 
-- CCF PDF parser or cached venue map
-- field-to-venue recommendation
-- DBLP/open metadata discovery
-- open PDF discovery; paywalled PDFs delegated to the user
-- baseline selector
-- module selector
+- local-library-first Composer over user-provided `ccf_a/`, `ccf_b/`, and
+  `other/` PDF directories
+- optional limited paper-intake path: CCF venue map, DBLP metadata, official
+  page metadata, CVF/OpenReview/arXiv open PDF discovery, GitHub code
+  verification, and `needs_user_pdf` for restricted sources
+- baseline selector that chooses exactly one CCF A baseline and stops when the
+  top candidate is stable
+- module selector that uses the remaining deep-read budget, extracts at most one
+  module per paper, and requires public code
 - compatibility analyzer
-- idea composer with citations, risks, and ablation checklist
+- beam-style framework composer that avoids full Cartesian product search
+- idea composer with top-K ranked proposals, citations, risks, and ablation
+  checklist
+- hard budget enforcement: fast mode <= 20 deep-read papers, deep mode <= 30
+  deep-read papers across baseline + modules
 - 2-3 fixed demo tasks with human acceptance notes
 
 ### M20: Local Web UI

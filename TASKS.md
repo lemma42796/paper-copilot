@@ -40,7 +40,7 @@
   (2.03x cost / 2.22x latency,0 quality 上行),story 落盘
   `docs/stories/2026-04-27-model-selection-flash-vs-plus.md`。
 - **当前阶段**:**M18 paper-level RAG gate 已完成,chunk/evidence 级 baseline
-  已补上并暴露缺口;下次先决定是否修 evidence chunk retrieval,再进 M19 最小闭环**。
+  已补上,最终 chunk selector v1 已接入;下一步复跑真实 retrieval eval 或进 M19 最小闭环**。
   截至 2026-05-21,
   chat-first runtime/API 与 macOS-style web shell 已可用;后端 route 已收敛为
   `knowledge_qa` / `framework_composer`,knowledge QA 下有轻量 `task_profile`。
@@ -53,9 +53,9 @@
   ranking。当前 paper mean `precision@5=32.8%`,`precision@10=16.9%`。
   chunk/evidence baseline 当前只覆盖 13 条带 anchor 的 query;eval matching
   已从严格 substring 改为 exact substring + embedding semantic window match。
-  当前 query-mean `evidence_recall@5=82.1%`,`evidence_recall@10=84.6%`,
+  当前 query-mean `evidence_recall@5=87.2%`,`evidence_recall@10=89.7%`,
   说明此前一部分 miss 是“语义相关但不含人工 anchor 原文”的保守计分。
-  当前 evidence anchor precision 为 `@5=43.6%`,`@10=44.4%`;它只衡量
+  当前 evidence anchor precision 为 `@5=44.9%`,`@10=45.3%`;它只衡量
   anchor-labeled paper 返回 chunks 中有多少命中人工 anchor 或语义窗口,不是
   未标注 chunk 的完整相关性判断。
   未做/暂跳过:reranker、paper alias/metadata 检索、retrieval misses/top-k
@@ -63,9 +63,26 @@
   可以继续推进,但要把 evidence chunk recall 作为已知 grounding 风险。
   代码层 evidence chunk selection v1 已完成:top paper 排名不动,每篇内部
   默认取 20 个候选 chunk pool,再返回 3-5 个 evidence chunks。正式复跑后
-  evidence recall 小升、precision 小降;下一步应做最终 chunk selector,不要继续
-  盲目扩大 pool。
-- **最新编码进展**:**embedding cache 已接入**
+  evidence recall 小升、precision 小降;最终 chunk selector v1 已补上,不要继续
+  盲目扩大 pool。正式复跑后 evidence recall/precision 均小幅上升;下一步
+  可以带着已知 grounding 风险进入 M19。
+- **最新编码进展**:**最终 evidence chunk selector v1 已接入**
+  (2026-05-21)。`knowledge.hybrid_search._paper_local_chunks()` 现在不再对
+  每篇 `evidence_pool_per_paper` 候选直接截断前 N 条,而是先保留原有
+  vector + BM25/RRF 候选分,再用 query term 覆盖、BM25/vector 双路命中、
+  method/experiment/result 等 section hint 和 token-overlap redundancy
+  penalty 做确定性最终选择。该改动不改变 top paper ranking、不引入 reranker/
+  LLM/新依赖,也不改变 `search_library` payload contract。已跑
+  `uv run pytest tests/knowledge/test_hybrid_search.py -q`(12 passed)、
+  touched-file `ruff check`、touched source `mypy` 和 `git diff --check`;
+  按用户要求正式复跑
+  `uv run paper-copilot eval retrieval eval/retrieval/queries.yaml`,recorded run:
+  `eval/runs/2026-05-21T10-04-04Z.jsonl`。当前结果:paper mean
+  `recall@5=98.4%`,`recall@10=100.0%`,`precision@5=32.8%`,
+  `precision@10=16.9%`;13 条 evidence-labeled queries 的 query-mean
+  `evidence_recall@5=87.2%`,`evidence_recall@10=89.7%`,
+  `evidence_anchor_precision@5=44.9%`,`evidence_anchor_precision@10=45.3%`。
+- **上一编码进展**:**embedding cache 已接入**
   (2026-05-21)。论文库 chunks 的向量本来就落在
   `~/.paper-copilot/embeddings.db`;本次补的是通用文本向量缓存:
   search/chat/retrieval eval/related/read/reindex 现在通过
@@ -520,13 +537,17 @@
 - **协作偏好更新**(2026-05-19):不要每次改完代码就自动 commit/push。默认只
   修改与验证,等用户明确说“commit / push / 保存进度”再提交推送。本次用户
   明确要求保存进度并 push。
-- **下一个任务建议**:按用户最新选择,跳过 retrieval misses 前端诊断和
-  alias/metadata 检索设计;不要继续为 seed eval 微调 ranking。下次直接进入
-  M19 Research Idea Composer 最小闭环:用默认 34 篇论文库跑一个真实"论文创新
-  方案生成"请求,检查自然语言输入 → 检索证据 → 组合方案 → evidence refs
-  可追溯这条产品主路径。DoD:报告能读、关键结论带引用、明显 unsupported
-  claim 记下来、成本/耗时有记录;除非用户重新要求,继续不跑 `ruff` / `mypy` /
-  `pytest`。
+- **下一个任务建议**:按 2026-05-22 讨论,不要把全自动联网找论文作为 M19
+  主链路。M19 先做 local-library-first Research Idea Composer:用户把 PDF 放入
+  `ccf_a/` / `ccf_b/` / `other/`,系统只对本地论文做 baseline/module/框架组合。
+  规则已落到 `docs/design/chat_first_research_copilot_plan.md`:最终只选 1 篇
+  CCF A baseline;baseline 搜索尽早停,剩余深读预算全部给 module;baseline +
+  module 深读总数 fast mode <=20、deep mode <=30;module 每篇最多抽 1 个,
+  不限 CCF A 但必须有代码;最终输出 topK 新框架并按故事/创新性、可实施性、
+  证据和风险排序。联网 paper-intake 只作为简历亮点/后续可选模块,范围限定为
+  CCF venue map → DBLP → 官方页面摘要/链接 → PDF 文本链接兜底 → GitHub
+  验证 → open PDF/needs_user_pdf,不绕过付费墙。除非用户重新要求,继续不跑
+  `ruff` / `mypy` / `pytest`。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
