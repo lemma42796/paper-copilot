@@ -16,6 +16,7 @@ case is one extra full-table KNN scan per query.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -28,6 +29,48 @@ from paper_copilot.knowledge.embeddings_store import (
 )
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.shared.errors import KnowledgeError
+
+_TOKEN_RE = re.compile(r"[\w]+", flags=re.UNICODE)
+_QUERY_STOPWORDS = frozenset(
+    {
+        "about",
+        "after",
+        "also",
+        "and",
+        "are",
+        "can",
+        "did",
+        "does",
+        "for",
+        "from",
+        "how",
+        "into",
+        "its",
+        "paper",
+        "papers",
+        "show",
+        "shows",
+        "that",
+        "the",
+        "their",
+        "this",
+        "use",
+        "used",
+        "uses",
+        "using",
+        "what",
+        "when",
+        "where",
+        "which",
+        "with",
+    }
+)
+_SELECTOR_LEXICAL_WEIGHT = 0.006
+_SELECTOR_BM25_WEIGHT = 0.004
+_SELECTOR_BOTH_MODALITY_BONUS = 0.002
+_SELECTOR_SECTION_WEIGHT = 0.002
+_SELECTOR_REFERENCE_PENALTY = 0.004
+_SELECTOR_REDUNDANCY_WEIGHT = 0.008
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,7 +319,125 @@ def _paper_local_chunks(
         if query_text is not None
         else []
     )
-    return _fuse_hits(vector_hits, bm25_hits, rrf_k=rrf_k)[:limit]
+    candidates = _fuse_hits(vector_hits, bm25_hits, rrf_k=rrf_k)
+    return _select_evidence_chunks(candidates, query_text=query_text, limit=limit)
+
+
+def _select_evidence_chunks(
+    candidates: list[_FusedChunk],
+    *,
+    query_text: str | None,
+    limit: int,
+) -> list[_FusedChunk]:
+    if limit <= 0:
+        return []
+    if len(candidates) <= limit:
+        return candidates[:limit]
+
+    query_terms = _content_terms(query_text or "")
+    terms_by_chunk = {
+        candidate.chunk.chunk_id: _content_terms(candidate.chunk.text)
+        for candidate in candidates
+    }
+    remaining = list(candidates)
+    selected: list[_FusedChunk] = []
+    while remaining and len(selected) < limit:
+        chosen = max(
+            remaining,
+            key=lambda candidate: (
+                _selector_score(
+                    candidate,
+                    query_terms=query_terms,
+                    chunk_terms=terms_by_chunk[candidate.chunk.chunk_id],
+                )
+                - _redundancy_penalty(
+                    candidate,
+                    selected=selected,
+                    terms_by_chunk=terms_by_chunk,
+                ),
+                -candidate.sort_rank,
+            ),
+        )
+        selected.append(chosen)
+        remaining.remove(chosen)
+    return selected
+
+
+def _selector_score(
+    candidate: _FusedChunk,
+    *,
+    query_terms: frozenset[str],
+    chunk_terms: frozenset[str],
+) -> float:
+    score = candidate.score.rrf_score
+    if query_terms and chunk_terms:
+        score += (
+            _SELECTOR_LEXICAL_WEIGHT
+            * len(query_terms & chunk_terms)
+            / len(query_terms)
+        )
+    if candidate.score.bm25_rank is not None:
+        score += _rank_bonus(candidate.score.bm25_rank, _SELECTOR_BM25_WEIGHT)
+    if candidate.score.vector_rank is not None and candidate.score.bm25_rank is not None:
+        score += _SELECTOR_BOTH_MODALITY_BONUS
+    score += _section_bonus(candidate.chunk.section)
+    return score
+
+
+def _rank_bonus(rank: int, max_bonus: float) -> float:
+    return float(max_bonus / (rank**0.5))
+
+
+def _section_bonus(section: str) -> float:
+    normalized = section.casefold()
+    if "reference" in normalized or "acknowledg" in normalized:
+        return -_SELECTOR_REFERENCE_PENALTY
+    evidence_sections = (
+        "ablation",
+        "analysis",
+        "approach",
+        "evaluation",
+        "experiment",
+        "framework",
+        "method",
+        "model",
+        "result",
+    )
+    if any(term in normalized for term in evidence_sections):
+        return _SELECTOR_SECTION_WEIGHT
+    return 0.0
+
+
+def _redundancy_penalty(
+    candidate: _FusedChunk,
+    *,
+    selected: list[_FusedChunk],
+    terms_by_chunk: dict[int, frozenset[str]],
+) -> float:
+    if not selected:
+        return 0.0
+    candidate_terms = terms_by_chunk[candidate.chunk.chunk_id]
+    if not candidate_terms:
+        return 0.0
+    max_overlap = max(
+        _jaccard(candidate_terms, terms_by_chunk[item.chunk.chunk_id])
+        for item in selected
+    )
+    return _SELECTOR_REDUNDANCY_WEIGHT * max_overlap
+
+
+def _jaccard(left: frozenset[str], right: frozenset[str]) -> float:
+    if not left or not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def _content_terms(text: str) -> frozenset[str]:
+    return frozenset(
+        token
+        for token in _TOKEN_RE.findall(text.casefold())
+        if len(token) >= 3 and token not in _QUERY_STOPWORDS
+    )
 
 
 def _candidate_paper_ids(

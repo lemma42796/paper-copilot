@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from paper_copilot.knowledge import hybrid_search as hs
 from paper_copilot.knowledge.embeddings_store import ChunkRow, EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.knowledge.hybrid_search import ContainsFilter, search
@@ -39,6 +40,39 @@ def _payload(title: str, year: int, method_name: str = "baseline") -> dict[str, 
         "limitations": [],
         "cross_paper_links": [],
     }
+
+
+def _fused_chunk(
+    chunk_id: int,
+    *,
+    text: str,
+    section: str = "Intro",
+    rrf_score: float,
+    vector_rank: int | None,
+    bm25_rank: int | None,
+    sort_rank: int,
+) -> hs._FusedChunk:
+    return hs._FusedChunk(
+        chunk=hs.ChunkHit(
+            chunk_id=chunk_id,
+            paper_id="pA",
+            ord=chunk_id,
+            section=section,
+            page_start=1,
+            page_end=1,
+            text=text,
+            distance=0.0,
+        ),
+        score=hs.ChunkScore(
+            chunk_id=chunk_id,
+            rrf_score=rrf_score,
+            vector_rank=vector_rank,
+            bm25_rank=bm25_rank,
+            vector_distance=0.0 if vector_rank is not None else None,
+            bm25_score=-1.0 if bm25_rank is not None else None,
+        ),
+        sort_rank=sort_rank,
+    )
 
 
 @pytest.fixture
@@ -164,6 +198,70 @@ def test_search_refines_evidence_chunks_within_selected_papers(tmp_path: Path) -
         "paper A nearest chunk",
         "paper A deeper answer evidence",
     ]
+
+
+def test_evidence_selector_promotes_query_matching_chunk() -> None:
+    selected = hs._select_evidence_chunks(
+        [
+            _fused_chunk(
+                1,
+                text="general architecture overview",
+                rrf_score=0.020,
+                vector_rank=1,
+                bm25_rank=None,
+                sort_rank=1,
+            ),
+            _fused_chunk(
+                2,
+                text="soft mask suppresses background regions before matching",
+                section="Method",
+                rrf_score=0.018,
+                vector_rank=4,
+                bm25_rank=3,
+                sort_rank=4,
+            ),
+        ],
+        query_text="soft mask background suppression",
+        limit=1,
+    )
+
+    assert [chunk.chunk.chunk_id for chunk in selected] == [2]
+
+
+def test_evidence_selector_skips_near_duplicate_chunks() -> None:
+    selected = hs._select_evidence_chunks(
+        [
+            _fused_chunk(
+                1,
+                text="contrastive loss improves visual matching",
+                rrf_score=0.030,
+                vector_rank=1,
+                bm25_rank=1,
+                sort_rank=1,
+            ),
+            _fused_chunk(
+                2,
+                text="contrastive loss improves visual matching",
+                rrf_score=0.029,
+                vector_rank=2,
+                bm25_rank=2,
+                sort_rank=2,
+            ),
+            _fused_chunk(
+                3,
+                text="contrastive loss selects cross modal tokens for matching",
+                section="Method",
+                rrf_score=0.028,
+                vector_rank=3,
+                bm25_rank=3,
+                sort_rank=3,
+            ),
+        ],
+        query_text="contrastive loss matching",
+        limit=2,
+    )
+
+    assert [chunk.chunk.chunk_id for chunk in selected] == [1, 3]
 
 
 def test_search_fuses_bm25_candidates(stores) -> None:
