@@ -343,6 +343,37 @@ steps if the tools provide clean inputs. It should not be treated as a search
 engine or as the component responsible for proving that a page, PDF, or GitHub
 repository exists.
 
+### Function Calling Integration Note
+
+The DashScope Function Calling guide is useful as a workflow reference, not as
+copy-paste implementation code for the current stack.
+
+Useful parts:
+
+- the core loop is the same: send user/context plus tool definitions, let the
+  model request a tool call, execute that tool in the app, append the tool
+  result to the conversation, and call the model again for the next step or
+  final answer;
+- tool descriptions and parameter descriptions are prompt surface. Keep them
+  concise, specific, and written to help the model choose the right tool;
+- tool outputs should be explicit status/evidence strings or structured JSON so
+  the next model call can reason over them without guessing;
+- tool count matters because tool definitions consume input tokens. Composer
+  should expose a small relevant tool set instead of dumping every possible
+  operation into one call;
+- production safety rules apply here: deterministic tools own facts and IO,
+  mutating or irreversible actions need human confirmation, and tool failure /
+  timeout states must be returned visibly instead of hidden by the LLM.
+
+Do not directly copy the OpenAI-compatible examples from that guide into this
+repo's current agent path. `LLMClient` talks to DashScope through the
+Anthropic-compatible endpoint, so current tools use Anthropic-style definitions:
+`name`, `description`, and `input_schema`. The OpenAI/DashScope
+`type: function` / `function.parameters` shape is only relevant if a future
+adapter switches `LLMClient` to the Chat Completions or Responses API. If that
+happens, keep the provider-specific mapping inside `LLMClient` or a narrow
+adapter; agents should continue to see one stable internal tool surface.
+
 ### Baseline Selection Criteria
 
 A baseline is the final starting point for the new framework. It can be either

@@ -45,6 +45,38 @@ type EvidenceResponse = {
   text: string;
 };
 
+type ComposerPoolName = "ccf_a" | "ccf_b" | "other";
+
+type ComposerPaper = {
+  pool: ComposerPoolName;
+  paper_id: string;
+  path: string;
+  indexed: boolean;
+  title: string;
+  year: number | null;
+  venue: string | null;
+};
+
+type ComposerPool = {
+  count: number;
+  indexed_count: number;
+  unindexed_count: number;
+  papers: ComposerPaper[];
+  unindexed_pdfs: ComposerPaper[];
+};
+
+type ComposerLibraryResponse = {
+  root: string;
+  required_layout: string[];
+  optional_layout?: string[];
+  flat_root_as_ccf_a: boolean;
+  baseline_pool: ComposerPoolName;
+  module_pool_order: ComposerPoolName[];
+  fallback_rule: string;
+  missing_pools: ComposerPoolName[];
+  pools: Record<ComposerPoolName, ComposerPool>;
+};
+
 type ReportHistoryEntry = {
   id: string;
   request: string;
@@ -112,6 +144,9 @@ export default function Home() {
   const [health, setHealth] = useState<HealthState>("checking");
   const [isRunning, setIsRunning] = useState(false);
   const [isSelectingLibraryDir, setIsSelectingLibraryDir] = useState(false);
+  const [isLoadingLibraryStatus, setIsLoadingLibraryStatus] = useState(false);
+  const [libraryStatus, setLibraryStatus] = useState<ComposerLibraryResponse | null>(null);
+  const [libraryStatusError, setLibraryStatusError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ChatResponse | null>(null);
   const [history, setHistory] = useState<RunHistoryItem[]>([]);
@@ -155,6 +190,13 @@ export default function Home() {
     void loadReports();
   }, [normalizedApiUrl]);
 
+  useEffect(() => {
+    if (health !== "online" || pdfDir.trim().length === 0) {
+      return;
+    }
+    void loadLibraryStatus();
+  }, [health, normalizedApiUrl, pdfDir]);
+
   async function loadReports(): Promise<boolean> {
     try {
       const response = await fetch(`${normalizedApiUrl}/reports`, { method: "GET" });
@@ -172,6 +214,45 @@ export default function Home() {
   async function refreshReports() {
     const ok = await loadReports();
     showNotice(ok ? "历史已刷新" : "刷新失败");
+  }
+
+  async function loadLibraryStatus(): Promise<boolean> {
+    const trimmedDir = pdfDir.trim();
+    if (trimmedDir.length === 0) {
+      setLibraryStatus(null);
+      setLibraryStatusError(null);
+      return false;
+    }
+    setIsLoadingLibraryStatus(true);
+    setLibraryStatusError(null);
+    try {
+      const params = new URLSearchParams({ pdf_dir: trimmedDir });
+      const response = await fetch(`${normalizedApiUrl}/composer/library?${params.toString()}`, {
+        method: "GET"
+      });
+      const raw = (await response.json()) as
+        | ComposerLibraryResponse
+        | { error?: { message?: string } };
+      setHealth("online");
+      if (!response.ok) {
+        const messageText =
+          "error" in raw && raw.error?.message ? raw.error.message : "资料库检查失败。";
+        throw new Error(messageText);
+      }
+      setLibraryStatus(raw as ComposerLibraryResponse);
+      return true;
+    } catch (exc) {
+      setLibraryStatus(null);
+      setLibraryStatusError(exc instanceof Error ? exc.message : "资料库检查失败。");
+      return false;
+    } finally {
+      setIsLoadingLibraryStatus(false);
+    }
+  }
+
+  async function refreshLibraryStatus() {
+    const ok = await loadLibraryStatus();
+    showNotice(ok ? "资料库状态已刷新" : "资料库状态刷新失败");
   }
 
   async function submitRequest(event: FormEvent<HTMLFormElement>) {
@@ -513,6 +594,12 @@ export default function Home() {
                       </button>
                     </div>
                   </div>
+                  <ComposerLibraryPanel
+                    error={libraryStatusError}
+                    isLoading={isLoadingLibraryStatus}
+                    onRefresh={refreshLibraryStatus}
+                    status={libraryStatus}
+                  />
                 </section>
 
                 <section className="settings">
@@ -744,6 +831,79 @@ function EvidenceInspector({
   );
 }
 
+function ComposerLibraryPanel({
+  error,
+  isLoading,
+  onRefresh,
+  status
+}: {
+  error: string | null;
+  isLoading: boolean;
+  onRefresh: () => Promise<void>;
+  status: ComposerLibraryResponse | null;
+}) {
+  return (
+    <section className="library-status" aria-label="资料库状态">
+      <div className="library-status-header">
+        <h3>资料库状态</h3>
+        <button className="copy-button" onClick={() => void onRefresh()} type="button">
+          刷新
+        </button>
+      </div>
+      {isLoading ? <p className="settings-note">正在检查资料库。</p> : null}
+      {error ? <p className="library-status-error">{error}</p> : null}
+      {status ? (
+        <>
+          <p className="settings-note">
+            {status.flat_root_as_ccf_a
+              ? "当前目录直接作为 CCF A 资料池。"
+              : "当前目录使用 ccf_a / ccf_b / other 分层。"}
+          </p>
+          <div className="pool-summary-grid">
+            {(["ccf_a", "ccf_b", "other"] as ComposerPoolName[]).map((poolName) => (
+              <PoolSummary
+                isBaseline={poolName === status.baseline_pool}
+                key={poolName}
+                name={poolName}
+                pool={status.pools[poolName]}
+              />
+            ))}
+          </div>
+          <p className="pool-rule">
+            模块优先级: {status.module_pool_order.map(formatComposerPoolName).join(" -> ")}
+          </p>
+        </>
+      ) : !isLoading && !error ? (
+        <p className="settings-note">连接本地 API 后显示 CCF A / CCF B / Other 状态。</p>
+      ) : null}
+    </section>
+  );
+}
+
+function PoolSummary({
+  isBaseline,
+  name,
+  pool
+}: {
+  isBaseline: boolean;
+  name: ComposerPoolName;
+  pool: ComposerPool;
+}) {
+  return (
+    <div className="pool-summary">
+      <div className="pool-summary-top">
+        <span>{formatComposerPoolName(name)}</span>
+        {isBaseline ? <small>baseline</small> : null}
+      </div>
+      <strong>{pool.count}</strong>
+      <p>
+        indexed {pool.indexed_count}
+        {pool.unindexed_count > 0 ? ` / unread ${pool.unindexed_count}` : ""}
+      </p>
+    </div>
+  );
+}
+
 function MetaItem({
   copyable = false,
   label,
@@ -815,6 +975,17 @@ function formatRoute(route: string | undefined): string {
       return "知识库问答";
     default:
       return route ?? "知识库问答";
+  }
+}
+
+function formatComposerPoolName(pool: ComposerPoolName): string {
+  switch (pool) {
+    case "ccf_a":
+      return "CCF A";
+    case "ccf_b":
+      return "CCF B";
+    case "other":
+      return "Other";
   }
 }
 

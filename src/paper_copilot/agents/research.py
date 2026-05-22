@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 from pydantic import (
@@ -23,6 +23,11 @@ from pydantic import (
     model_validator,
 )
 
+from paper_copilot.agents.composer_library import (
+    ComposerLibrary,
+    ComposerPool,
+    load_composer_library,
+)
 from paper_copilot.agents.llm_client import DEFAULT_MODEL, LLMClient
 from paper_copilot.agents.loop import (
     AssistantMessage,
@@ -169,6 +174,90 @@ class _SearchLibraryInput(BaseModel):
             choices = ", ".join(available_fields())
             raise ValueError(f"unknown field {value!r}; choose from {choices}")
         return value
+
+
+class _ListComposerLibraryInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    limit: StrictInt = Field(default=8, ge=1, le=_MAX_LIST_LIMIT)
+
+
+class _SearchComposerCandidatesInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["baseline", "module"] = Field(
+        description="Use baseline for the one CCF A baseline, module for add-on modules.",
+    )
+    query: str = Field(
+        min_length=1,
+        description="Search query for the baseline or module candidate.",
+    )
+    pool: ComposerPool | None = Field(
+        default=None,
+        description=(
+            "Composer pool to search. Omit for ccf_a. Baseline searches must stay "
+            "in ccf_a. Module searches may use ccf_b only after ccf_a rejection."
+        ),
+    )
+    k: StrictInt = Field(default=5, ge=1, le=_MAX_SEARCH_K)
+    max_chunks_per_paper: StrictInt = Field(
+        default=3,
+        ge=1,
+        le=_MAX_SEARCH_CHUNKS_PER_PAPER,
+    )
+    evidence_pool_per_paper: StrictInt = Field(
+        default=20,
+        ge=1,
+        le=_MAX_EVIDENCE_POOL_PER_PAPER,
+    )
+    rejected_ccf_a_modules: list[str] = Field(
+        default_factory=list,
+        description=(
+            "CCF A module candidates already rejected as unsuitable, incompatible, "
+            "uncoded, or weakly supported. Required before searching ccf_b."
+        ),
+    )
+    rejected_ccf_b_modules: list[str] = Field(
+        default_factory=list,
+        description=(
+            "CCF B module candidates already rejected. Required before searching other."
+        ),
+    )
+    rejection_reason: str | None = Field(
+        default=None,
+        description=(
+            "Concrete reason for falling back to a lower-priority module pool."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _pool_matches_role(self) -> _SearchComposerCandidatesInput:
+        target_pool = self.resolved_pool
+        if self.role == "baseline" and target_pool != "ccf_a":
+            raise ValueError("baseline candidates must come from the ccf_a pool")
+        if self.role == "module" and target_pool == "ccf_b":
+            if not self.rejected_ccf_a_modules or not self.rejection_reason:
+                raise ValueError(
+                    "ccf_b module search requires rejected_ccf_a_modules "
+                    "and rejection_reason"
+                )
+        if self.role == "module" and target_pool == "other":
+            if (
+                not self.rejected_ccf_a_modules
+                or not self.rejected_ccf_b_modules
+                or not self.rejection_reason
+            ):
+                raise ValueError(
+                    "other module search requires rejected_ccf_a_modules, "
+                    "rejected_ccf_b_modules, and rejection_reason"
+                )
+        return self
+
+    @property
+    def resolved_pool(self) -> ComposerPool:
+        if self.pool is not None:
+            return self.pool
+        return "ccf_a"
 
 
 class _InspectPaperInput(BaseModel):
@@ -361,6 +450,29 @@ def research_tools() -> list[dict[str, Any]]:
             _ReadPaperInput,
         ),
         _tool_schema(
+            "list_composer_library",
+            (
+                "List the local Research Idea Composer pools under --pdf-dir. "
+                "The expected layout is ccf_a, ccf_b, and other. ccf_a is the "
+                "only baseline pool. Module search must try ccf_a first, then "
+                "fall back to ccf_b only after rejecting ccf_a modules, and use "
+                "other only after ccf_a and ccf_b are both insufficient."
+            ),
+            _ListComposerLibraryInput,
+        ),
+        _tool_schema(
+            "search_composer_candidates",
+            (
+                "Search a constrained Composer pool. Use role=baseline to search "
+                "only ccf_a. For role=module, search ccf_a first. Searching ccf_b "
+                "requires rejected_ccf_a_modules and rejection_reason. Searching "
+                "other requires rejected_ccf_a_modules, rejected_ccf_b_modules, "
+                "and rejection_reason. Returns citation-grade evidence and "
+                "unindexed PDFs that may need read_paper."
+            ),
+            _SearchComposerCandidatesInput,
+        ),
+        _tool_schema(
             "search_library",
             (
                 "Search the existing local paper library for papers/chunks related "
@@ -423,6 +535,14 @@ def dispatch_research_tool(req: ToolUseRequest, context: ResearchToolContext) ->
             case "read_paper":
                 read_args = _ReadPaperInput.model_validate(req.input)
                 return _ok(_read_paper(read_args, context))
+            case "list_composer_library":
+                composer_args = _ListComposerLibraryInput.model_validate(req.input)
+                return _ok(_list_composer_library(composer_args, context))
+            case "search_composer_candidates":
+                composer_search_args = _SearchComposerCandidatesInput.model_validate(
+                    req.input
+                )
+                return _ok(_search_composer_candidates(composer_search_args, context))
             case "search_library":
                 search_args = _SearchLibraryInput.model_validate(req.input)
                 return _ok(_search_library(search_args, context))
@@ -480,11 +600,21 @@ def _list_pdfs(args: _ListPdfsInput, context: ResearchToolContext) -> dict[str, 
     if not context.pdf_dir.exists():
         raise KnowledgeError(f"pdf_dir does not exist: {context.pdf_dir}")
     term = args.contains.lower() if args.contains is not None else None
-    pdfs = sorted(p for p in context.pdf_dir.iterdir() if p.suffix.lower() == ".pdf")
+    pdfs = _pdfs_under(context.pdf_dir)
     if term is not None:
-        pdfs = [p for p in pdfs if term in p.name.lower()]
+        pdfs = [
+            p
+            for p in pdfs
+            if term in p.name.lower()
+            or term in _relative_pdf_path(p, context.pdf_dir).lower()
+        ]
     rows = [
-        {"filename": p.name, "path": str(p), "paper_id": compute_paper_id(p)}
+        {
+            "filename": p.name,
+            "relative_path": _relative_pdf_path(p, context.pdf_dir),
+            "path": str(p),
+            "paper_id": compute_paper_id(p),
+        }
         for p in pdfs[: args.limit]
     ]
     return {"count": len(pdfs), "returned": len(rows), "pdfs": rows}
@@ -528,12 +658,22 @@ def _resolve_pdf_path(path: Path, context: ResearchToolContext) -> Path:
 def _find_pdf_by_id(paper_id: str, context: ResearchToolContext) -> Path | None:
     if context.pdf_dir is None or not context.pdf_dir.exists():
         return None
-    for path in sorted(context.pdf_dir.iterdir()):
-        if path.suffix.lower() != ".pdf":
-            continue
+    for path in _pdfs_under(context.pdf_dir):
         if compute_paper_id(path) == paper_id:
             return path.resolve()
     return None
+
+
+def _pdfs_under(pdf_dir: Path) -> list[Path]:
+    return sorted(
+        path
+        for path in pdf_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() == ".pdf"
+    )
+
+
+def _relative_pdf_path(path: Path, pdf_dir: Path) -> str:
+    return str(path.resolve().relative_to(pdf_dir.resolve()))
 
 
 def _already_read_payload(row: PaperRow, context: ResearchToolContext) -> dict[str, Any]:
@@ -603,6 +743,118 @@ def _read_paper(args: _ReadPaperInput, context: ResearchToolContext) -> dict[str
         "next_command": command,
         "can_inspect_same_paper": False,
         "paper_budget": _paper_budget_payload(context),
+    }
+
+
+def _list_composer_library(
+    args: _ListComposerLibraryInput,
+    context: ResearchToolContext,
+) -> dict[str, Any]:
+    return _composer_library(context).to_payload(limit=args.limit)
+
+
+def _search_composer_candidates(
+    args: _SearchComposerCandidatesInput,
+    context: ResearchToolContext,
+) -> dict[str, Any]:
+    if context.embeddings_store is None or context.encode_query is None:
+        raise KnowledgeError(
+            "embedding index unavailable; run reindex before search_composer_candidates"
+        )
+    library = _composer_library(context)
+    _require_composer_baseline_pool(library)
+    target_pool = args.resolved_pool
+    candidate_ids = library.indexed_paper_ids(target_pool)
+    if not candidate_ids:
+        return {
+            "role": args.role,
+            "pool": target_pool,
+            "query": args.query,
+            "status": "no_indexed_candidates",
+            "fallback_reason": args.rejection_reason,
+            "selection_rule": _composer_selection_rule(args),
+            "pool_trace": _composer_pool_trace(args),
+            "missing_pools": list(library.missing_pools),
+            "results": [],
+            "evidence": [],
+            "unindexed_pdfs": library.unindexed_payload(target_pool),
+            "next_step": (
+                "Use read_paper for relevant unindexed PDFs, then retry this "
+                "Composer pool search."
+            ),
+        }
+
+    results = search(
+        context.encode_query(args.query),
+        fields_store=context.fields_store,
+        embeddings_store=context.embeddings_store,
+        k=args.k,
+        max_chunks_per_paper=args.max_chunks_per_paper,
+        evidence_pool_per_paper=args.evidence_pool_per_paper,
+        query_text=args.query,
+        paper_ids=candidate_ids,
+    )
+    ranked = list(enumerate(results, start=1))
+    evidence = [
+        {**item, "pool": target_pool}
+        for item in _search_evidence_list(ranked)
+    ]
+    return {
+        "role": args.role,
+        "pool": target_pool,
+        "query": args.query,
+        "status": "ok",
+        "fallback_reason": args.rejection_reason,
+        "citation_format": "[paper_id:chunks[chunk_id]]",
+        "selection_rule": _composer_selection_rule(args),
+        "pool_trace": _composer_pool_trace(args),
+        "missing_pools": list(library.missing_pools),
+        "evidence": evidence,
+        "results": [
+            {
+                **_search_result_payload(result, paper_rank=rank),
+                "pool": target_pool,
+            }
+            for rank, result in ranked
+        ],
+        "unindexed_pdfs": library.unindexed_payload(target_pool),
+    }
+
+
+def _composer_library(context: ResearchToolContext) -> ComposerLibrary:
+    if context.pdf_dir is None:
+        raise KnowledgeError(
+            "framework_composer requires --pdf-dir with ccf_a, ccf_b, and other"
+        )
+    return load_composer_library(context.pdf_dir, context.fields_store)
+
+
+def _require_composer_baseline_pool(library: ComposerLibrary) -> None:
+    if "ccf_a" in library.missing_pools:
+        raise KnowledgeError(
+            f"composer library is missing required ccf_a directory under {library.root}"
+        )
+
+
+def _composer_selection_rule(args: _SearchComposerCandidatesInput) -> str:
+    if args.role == "baseline":
+        return "baseline must be selected from ccf_a"
+    if args.resolved_pool == "ccf_a":
+        return "module search is still in ccf_a; do not fall back yet"
+    if args.resolved_pool == "ccf_b":
+        return "ccf_b is allowed only because ccf_a modules were rejected"
+    return "other is allowed only because ccf_a and ccf_b modules were rejected"
+
+
+def _composer_pool_trace(args: _SearchComposerCandidatesInput) -> dict[str, Any]:
+    return {
+        "role": args.role,
+        "searched_pool": args.resolved_pool,
+        "baseline_pool": "ccf_a",
+        "module_pool_order": ["ccf_a", "ccf_b", "other"],
+        "rejected_ccf_a_modules": args.rejected_ccf_a_modules,
+        "rejected_ccf_b_modules": args.rejected_ccf_b_modules,
+        "fallback_reason": args.rejection_reason,
     }
 
 
@@ -1497,9 +1749,16 @@ def _task_profile_guidance(route: ChatRoute) -> str:
             )
         case "framework_composer":
             return (
-                "Task-specific guidance: use a baseline-first path. Identify one "
-                "strong baseline and 2-3 compatible modules before writing the "
-                "proposal."
+                "Task-specific guidance: use a baseline-first path. Start with "
+                "list_composer_library when --pdf-dir is available. Identify "
+                "exactly one strong CCF A baseline. Preferred tool order: "
+                "list_composer_library, search_composer_candidates with "
+                "role=baseline, inspect_paper for the baseline, then "
+                "search_composer_candidates with role=module and pool=ccf_a. "
+                "Only search CCF B after explaining why CCF A modules are "
+                "unsuitable, and use other only after CCF A and CCF B are both "
+                "insufficient. Inspect selected module papers before writing "
+                "the proposal."
             )
         case "topic_survey":
             return (
@@ -1532,11 +1791,17 @@ def _final_report_guidance(route: ChatRoute) -> str:
             "other papers, then propose a small composition that can be "
             "tested. Baseline should explain why it is a good starting point; "
             "Candidate Modules should name each module, source paper, and "
-            "function; Compatibility should say where each module attaches to "
+            "function. Candidate Modules must follow the pool priority: CCF A "
+            "first, CCF B only when CCF A modules are unsuitable, and other "
+            "only after both CCF A and CCF B are insufficient; "
+            "Compatibility should say where each module attaches to "
             "the baseline and what might conflict; Proposed Composition should "
             "state the actual modification. Experiment Plan should include "
             "dataset/task, baseline, metric, and ablations when the evidence "
             "supports them. "
+            "Evidence must include pool trace: baseline pool, module pool for "
+            "each selected module, and why any selected module did not come "
+            "from a higher-priority pool. "
             f"{evidence_rule} The final answer must be the proposal itself; "
             "keep the whole report under 900 words."
         )

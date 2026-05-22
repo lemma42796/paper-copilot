@@ -477,6 +477,84 @@ input {
   white-space: nowrap;
 }
 
+.library-status {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(32, 43, 56, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.library-status-header,
+.pool-summary-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.library-status-header h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.library-status-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pool-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pool-summary {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(32, 43, 56, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.pool-summary-top span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.pool-summary-top small {
+  color: var(--accent-strong);
+  font-size: 10px;
+  font-weight: 760;
+}
+
+.pool-summary strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.pool-summary p,
+.pool-rule {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.pool-rule {
+  margin-top: -2px;
+}
+
 .error-strip {
   margin: 0;
   padding: 10px 16px;
@@ -943,6 +1021,10 @@ dd {
   }
 
   .usage-groups {
+    grid-template-columns: 1fr;
+  }
+
+  .pool-summary-grid {
     grid-template-columns: 1fr;
   }
 

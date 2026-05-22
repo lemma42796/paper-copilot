@@ -12,9 +12,12 @@ from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from paper_copilot.agents.composer_library import load_composer_library
 from paper_copilot.chat.evidence import EvidenceChunk, lookup_evidence_chunk
 from paper_copilot.chat.history import ChatReportItem, list_chat_reports
 from paper_copilot.chat.runtime import ChatRunResult, handle_chat_request
+from paper_copilot.knowledge.fields_store import FieldsStore
+from paper_copilot.session.paths import default_root
 from paper_copilot.shared.errors import ApiError, PaperCopilotError
 
 
@@ -43,6 +46,14 @@ class EvidenceHttpRequest(BaseModel):
 
     ref: str = Field(min_length=1)
     root: Path | None = None
+
+
+class ComposerLibraryHttpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pdf_dir: Path
+    root: Path | None = None
+    limit: int = Field(default=20, ge=1, le=200)
 
 
 class ChatHttpResponse(BaseModel):
@@ -187,6 +198,20 @@ class _ChatHandler(BaseHTTPRequestHandler):
                 return
             self._write_json(HTTPStatus.OK, response.model_dump(mode="json"))
             return
+        if parsed.path == "/composer/library":
+            try:
+                request = ComposerLibraryHttpRequest.model_validate(
+                    _single_query_values(parsed.query)
+                )
+                response = _composer_library_payload(request)
+            except ValidationError as exc:
+                self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
+                return
+            except PaperCopilotError as exc:
+                self._write_error(HTTPStatus.BAD_REQUEST, exc.__class__.__name__, str(exc))
+                return
+            self._write_json(HTTPStatus.OK, response)
+            return
         self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"unknown path: {parsed.path}")
 
     def do_POST(self) -> None:
@@ -279,6 +304,17 @@ class _ChatHandler(BaseHTTPRequestHandler):
 
 def _single_query_values(query: str) -> dict[str, str]:
     return {key: values[-1] for key, values in parse_qs(query).items() if values}
+
+
+def _composer_library_payload(request: ComposerLibraryHttpRequest) -> dict[str, Any]:
+    pdf_dir = request.pdf_dir.expanduser().resolve()
+    if not pdf_dir.is_dir():
+        raise ApiError(f"pdf_dir does not exist: {pdf_dir}")
+    root = request.root if request.root is not None else default_root()
+    fields_db = root.expanduser() / "fields.db"
+    with FieldsStore.open(fields_db) as fields_store:
+        library = load_composer_library(pdf_dir, fields_store)
+        return library.to_payload(limit=request.limit)
 
 
 def _select_directory() -> Path | None:

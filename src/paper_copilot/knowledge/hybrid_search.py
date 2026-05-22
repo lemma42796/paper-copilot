@@ -112,6 +112,7 @@ def search(
     max_chunks_per_paper: int = 3,
     evidence_pool_per_paper: int = 20,
     query_text: str | None = None,
+    paper_ids: list[str] | set[str] | None = None,
     rrf_k: int = 60,
 ) -> list[SearchResult]:
     if k <= 0:
@@ -128,6 +129,13 @@ def search(
     candidates = _candidate_paper_ids(
         fields_store=fields_store, year=year, contains=contains
     )
+    if paper_ids is not None:
+        explicit_candidates = set(paper_ids)
+        candidates = (
+            explicit_candidates
+            if candidates is None
+            else candidates & explicit_candidates
+        )
     if candidates is not None and not candidates:
         return []
 

@@ -8,7 +8,7 @@
 
 ## Current Status
 
-> 更新于 2026-05-21。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
+> 更新于 2026-05-22。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
 - **已完成**:M1–M15(Session A + B 全部 done)。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
@@ -40,7 +40,8 @@
   (2.03x cost / 2.22x latency,0 quality 上行),story 落盘
   `docs/stories/2026-04-27-model-selection-flash-vs-plus.md`。
 - **当前阶段**:**M18 paper-level RAG gate 已完成,chunk/evidence 级 baseline
-  已补上,最终 chunk selector v1 已接入;下一步复跑真实 retrieval eval 或进 M19 最小闭环**。
+  已补上,最终 chunk selector v1 已接入;M19 local-library-first Composer
+  skeleton 已开始编码**。
   截至 2026-05-21,
   chat-first runtime/API 与 macOS-style web shell 已可用;后端 route 已收敛为
   `knowledge_qa` / `framework_composer`,knowledge QA 下有轻量 `task_profile`。
@@ -65,8 +66,40 @@
   默认取 20 个候选 chunk pool,再返回 3-5 个 evidence chunks。正式复跑后
   evidence recall 小升、precision 小降;最终 chunk selector v1 已补上,不要继续
   盲目扩大 pool。正式复跑后 evidence recall/precision 均小幅上升;下一步
-  可以带着已知 grounding 风险进入 M19。
-- **最新编码进展**:**最终 evidence chunk selector v1 已接入**
+  可以带着已知 grounding 风险进入 M19。M19 第一刀已把
+  `ccf_a`→`ccf_b`→`other` 的本地资料库优先级写进工具约束,但还不是完整
+  Composer 闭环。
+- **最新编码进展**:**M19 Composer 本地资料库工具骨架已接入**
+  (2026-05-22)。新增 `agents.composer_library` 扫描用户 `pdf_dir` 下的
+  `ccf_a/`、`ccf_b/`、`other/` 三个 pool,返回 PDF 的 `paper_id`、路径、
+  indexed 状态和已入库 meta。`knowledge.hybrid_search.search()` 新增可选
+  `paper_ids` 过滤,供 Composer 只在指定 pool 内检索。ResearchAgent 新增
+  `list_composer_library` 与 `search_composer_candidates`:baseline 只能搜
+  `ccf_a`;module 默认先搜 `ccf_a`;只有传入 `rejected_ccf_a_modules` +
+  `rejection_reason` 才能 fallback 到 `ccf_b`;`other` 还要求同时说明
+  `ccf_b` rejection。`framework_composer` prompt 已同步强调 CCF A module
+  优先、CCF B fallback、最终报告解释为什么没选更高优先级 pool。随后补了
+  `list_pdfs` / `read_paper(paper_id=...)` 对嵌套 PDF 的递归扫描,适配
+  `ccf_a/ccf_b/other` 子目录;Composer 候选搜索结果新增 `pool_trace`,prompt
+  明确建议工具顺序:`list_composer_library` → baseline search → baseline
+  inspect → CCF A module search → 必要时 CCF B fallback。用户确认
+  `/Users/a123/paper-copilot-test-pdfs` 里的论文都先按 CCF A 处理,CCF B/other
+  暂空;因此 Composer library 现在支持 flat `pdf_dir` 直接作为 `ccf_a` pool,
+  并按 `paper_id` 去重(显式 `ccf_a/` 优先于根目录重复 PDF)。HTTP API 新增
+  `GET /composer/library?pdf_dir=...`,只扫描目录和 `fields.db`,不读 PDF、
+  不 embedding、不调 LLM,用于前端/手动检查 pool 状态。前端右侧资料库面板
+  已接入该 preview,会展示 flat CCF A 模式、CCF A/CCF B/Other 的 PDF 数与
+  indexed 数,以及 module pool 顺序;该 UI 只检查资料库准备状态,不启动 agent。
+  百炼 Function Calling 文档已判断为"流程有用、接口格式不可直接照搬":当前
+  代码走 DashScope Anthropic-compatible endpoint,工具定义仍是
+  `name` / `description` / `input_schema`,不是 OpenAI/DashScope 的
+  `type:function` / `function.parameters`;可复用的是"LLM 选工具 → 应用端执行
+  工具 → tool result 回灌 → 再调 LLM"的循环、工具描述/token 成本/小工具集/
+  安全边界等生产经验。长期记录见
+  `docs/design/chat_first_research_copilot_plan.md` 的
+  "Function Calling Integration Note"。
+  按用户本轮指令未跑 `ruff` / `mypy` / `pytest` / 真实 `/chat`。
+- **上一编码进展**:**最终 evidence chunk selector v1 已接入**
   (2026-05-21)。`knowledge.hybrid_search._paper_local_chunks()` 现在不再对
   每篇 `evidence_pool_per_paper` 候选直接截断前 N 条,而是先保留原有
   vector + BM25/RRF 候选分,再用 query term 覆盖、BM25/vector 双路命中、
@@ -537,17 +570,16 @@
 - **协作偏好更新**(2026-05-19):不要每次改完代码就自动 commit/push。默认只
   修改与验证,等用户明确说“commit / push / 保存进度”再提交推送。本次用户
   明确要求保存进度并 push。
-- **下一个任务建议**:按 2026-05-22 讨论,不要把全自动联网找论文作为 M19
-  主链路。M19 先做 local-library-first Research Idea Composer:用户把 PDF 放入
-  `ccf_a/` / `ccf_b/` / `other/`,系统只对本地论文做 baseline/module/框架组合。
-  规则已落到 `docs/design/chat_first_research_copilot_plan.md`:最终只选 1 篇
-  CCF A baseline;baseline 搜索尽早停,剩余深读预算全部给 module;baseline +
-  module 深读总数 fast mode <=20、deep mode <=30;module 每篇最多抽 1 个,
-  不限 CCF A 但必须有代码;最终输出 topK 新框架并按故事/创新性、可实施性、
-  证据和风险排序。联网 paper-intake 只作为简历亮点/后续可选模块,范围限定为
-  CCF venue map → DBLP → 官方页面摘要/链接 → PDF 文本链接兜底 → GitHub
-  验证 → open PDF/needs_user_pdf,不绕过付费墙。除非用户重新要求,继续不跑
-  `ruff` / `mypy` / `pytest`。
+- **下一个任务建议**:把 M19 Composer 从"工具骨架 + prompt 约束"推进到
+  "可控闭环"。下一刀优先做一个 deterministic composer plan/state 层:固定
+  baseline → CCF A module search → module suitability/compatibility check →
+  必要时带 rejection reason fallback 到 CCF B/other → structured final report,
+  避免只靠 LLM 自由规划遵守池优先级。当前测试资料库是
+  `/Users/a123/paper-copilot-test-pdfs`,全部先按 flat CCF A 处理,CCF B/other
+  暂空;真实试跑建议用 ReID query,不要用 medical segmentation 默认例子。百炼
+  Function Calling 文档只作为 tool-loop 设计参考,不要把 OpenAI-compatible
+  `type:function` schema 直接改进当前 Anthropic-compatible agent path。除非用户
+  重新要求,继续不跑 `ruff` / `mypy` / `pytest` / 真实 `/chat`。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。
