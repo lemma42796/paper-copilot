@@ -20,6 +20,7 @@ from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.knowledge.graph_store import append_links
 from paper_copilot.schemas import CrossPaperLink
 from paper_copilot.session import FinalOutput, Message, SessionStore, ToolResult, ToolUse
+from paper_copilot.session.paths import compute_paper_id
 
 DIM = 4
 
@@ -365,6 +366,186 @@ def test_dispatch_list_pdfs_reports_candidate_ids(tmp_path: Path) -> None:
     assert result.is_error is False
     assert data["pdfs"][0]["filename"] == "paper.pdf"
     assert len(data["pdfs"][0]["paper_id"]) == 12
+
+
+def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    baseline_pdf = pdf_dir / "baseline.pdf"
+    module_pdf = pdf_dir / "module.pdf"
+    baseline_pdf.write_bytes(b"%PDF fake baseline")
+    module_pdf.write_bytes(b"%PDF fake module")
+    baseline_id = compute_paper_id(baseline_pdf)
+    module_id = compute_paper_id(module_pdf)
+
+    with (
+        FieldsStore.open(tmp_path / "fields.db") as fs,
+        EmbeddingsStore.open(tmp_path / "embeddings.db", dim=DIM) as es,
+    ):
+        fs.upsert(
+            baseline_id,
+            _payload("Baseline Paper", method_name="Strong Baseline"),
+            datetime.now(UTC).isoformat(),
+        )
+        fs.upsert(
+            module_id,
+            _payload("Module Paper", method_name="Compatible Module"),
+            datetime.now(UTC).isoformat(),
+        )
+        es.replace_paper(
+            baseline_id,
+            [_chunk(baseline_id, "strong reproducible baseline", ord_=0)],
+            np.array([[1, 0, 0, 0]], dtype=np.float32),
+        )
+        es.replace_paper(
+            module_id,
+            [_chunk(module_id, "compatible module trick", ord_=0)],
+            np.array([[1, 0.1, 0, 0]], dtype=np.float32),
+        )
+        context = ResearchToolContext(
+            fields_store=fs,
+            embeddings_store=es,
+            encode_query=lambda _query: np.array([1, 0, 0, 0], dtype=np.float32),
+            pdf_dir=pdf_dir,
+        )
+
+        blocked = dispatch_research_tool(
+            ToolUseRequest(
+                id="blocked",
+                name="search_composer_candidates",
+                input={"role": "baseline", "query": "baseline", "k": 2},
+            ),
+            context,
+        )
+        listed = dispatch_research_tool(
+            ToolUseRequest(id="list", name="list_composer_library", input={}),
+            context,
+        )
+        baseline_search = dispatch_research_tool(
+            ToolUseRequest(
+                id="baseline",
+                name="search_composer_candidates",
+                input={"role": "baseline", "query": "baseline", "k": 2},
+            ),
+            context,
+        )
+        premature_module_search = dispatch_research_tool(
+            ToolUseRequest(
+                id="module-early",
+                name="search_composer_candidates",
+                input={"role": "module", "query": "module", "k": 2},
+            ),
+            context,
+        )
+        dispatch_research_tool(
+            ToolUseRequest(
+                id="inspect-baseline",
+                name="inspect_paper",
+                input={"paper_id": baseline_id},
+            ),
+            context,
+        )
+        selected = dispatch_research_tool(
+            ToolUseRequest(
+                id="select-baseline",
+                name="update_composer_plan",
+                input={
+                    "action": "select_baseline",
+                    "paper_id": baseline_id,
+                    "rationale": "Strong reproducible baseline in CCF A.",
+                    "evidence_refs": [f"[{baseline_id}:methods[0]]"],
+                },
+            ),
+            context,
+        )
+        premature_fallback = dispatch_research_tool(
+            ToolUseRequest(
+                id="fallback-early",
+                name="search_composer_candidates",
+                input={
+                    "role": "module",
+                    "pool": "ccf_b",
+                    "query": "module",
+                    "rejected_ccf_a_modules": [module_id],
+                    "rejection_reason": "CCF A modules are incompatible.",
+                },
+            ),
+            context,
+        )
+        module_search = dispatch_research_tool(
+            ToolUseRequest(
+                id="module",
+                name="search_composer_candidates",
+                input={"role": "module", "query": "module", "k": 2},
+            ),
+            context,
+        )
+        dispatch_research_tool(
+            ToolUseRequest(
+                id="inspect-module",
+                name="inspect_paper",
+                input={"paper_id": module_id},
+            ),
+            context,
+        )
+        accepted = dispatch_research_tool(
+            ToolUseRequest(
+                id="accept-module",
+                name="update_composer_plan",
+                input={
+                    "action": "accept_module",
+                    "paper_id": module_id,
+                    "pool": "ccf_a",
+                    "rationale": "The module can attach to the baseline encoder.",
+                    "evidence_refs": [f"[{module_id}:methods[0]]"],
+                    "attachment_point": "baseline encoder",
+                    "compatibility_notes": "Both methods operate on token features.",
+                },
+            ),
+            context,
+        )
+        duplicate_module = dispatch_research_tool(
+            ToolUseRequest(
+                id="accept-duplicate-module",
+                name="update_composer_plan",
+                input={
+                    "action": "accept_module",
+                    "paper_id": module_id,
+                    "pool": "ccf_a",
+                    "rationale": "Trying to reuse the same paper for another module.",
+                    "evidence_refs": [f"[{module_id}:methods[0]]"],
+                    "attachment_point": "baseline classifier",
+                    "compatibility_notes": "This should be rejected as a duplicate.",
+                },
+            ),
+            context,
+        )
+
+    assert blocked.is_error is True
+    assert "list_composer_library" in json.loads(blocked.output)["error"]
+    assert listed.is_error is False
+    assert json.loads(listed.output)["composer_plan"]["current_step"] == (
+        "search_ccf_a_baseline"
+    )
+    assert baseline_search.is_error is False
+    assert json.loads(baseline_search.output)["composer_plan"]["current_step"] == (
+        "inspect_and_select_baseline"
+    )
+    assert premature_module_search.is_error is True
+    premature_module_error = json.loads(premature_module_search.output)["error"]
+    assert "select a CCF A baseline" in premature_module_error
+    assert selected.is_error is False
+    assert premature_fallback.is_error is True
+    assert "close ccf_a" in json.loads(premature_fallback.output)["error"]
+    assert module_search.is_error is False
+    assert accepted.is_error is False
+    assert duplicate_module.is_error is True
+    assert "at most one module" in json.loads(duplicate_module.output)["error"]
+    accepted_payload = json.loads(accepted.output)
+    assert accepted_payload["composer_plan"]["report_ready"] is False
+    assert accepted_payload["composer_plan"]["current_step"] == (
+        "check_or_close_ccf_a_modules"
+    )
 
 
 def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:

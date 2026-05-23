@@ -28,6 +28,10 @@ from paper_copilot.agents.composer_library import (
     ComposerPool,
     load_composer_library,
 )
+from paper_copilot.agents.composer_plan import (
+    ComposerDecisionAction,
+    ComposerPlanState,
+)
 from paper_copilot.agents.llm_client import DEFAULT_MODEL, LLMClient
 from paper_copilot.agents.loop import (
     AssistantMessage,
@@ -102,6 +106,7 @@ class ResearchToolContext:
     max_papers: int = 5
     touched_paper_ids: set[str] = dataclass_field(default_factory=set)
     worker_costs: list[CostSnapshot] = dataclass_field(default_factory=list)
+    composer_plan: ComposerPlanState = dataclass_field(default_factory=ComposerPlanState)
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +265,58 @@ class _SearchComposerCandidatesInput(BaseModel):
         return "ccf_a"
 
 
+class _UpdateComposerPlanInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: ComposerDecisionAction = Field(
+        description=(
+            "Record a deterministic Composer decision. Use select_baseline after "
+            "inspecting the CCF A baseline, accept_module after inspecting a "
+            "compatible module, reject_module for unsuitable module candidates, "
+            "and close_module_pool before falling back to a lower-priority pool."
+        ),
+    )
+    paper_id: str | None = Field(default=None, min_length=1)
+    pool: ComposerPool | None = Field(default=None)
+    rationale: str = Field(
+        min_length=8,
+        description="Concrete evidence-grounded reason for this decision.",
+    )
+    evidence_refs: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Citation refs supporting the decision, such as "
+            "[paper_id:methods[0]] or [paper_id:chunks[12]]."
+        ),
+    )
+    rejected_module_ids: list[str] = Field(
+        default_factory=list,
+        description="Module paper_ids already rejected before closing a pool.",
+    )
+    attachment_point: str | None = Field(
+        default=None,
+        description="Where an accepted module attaches to the selected baseline.",
+    )
+    compatibility_notes: str | None = Field(
+        default=None,
+        description="Compatibility or conflict notes for an accepted module.",
+    )
+
+    @model_validator(mode="after")
+    def _required_fields_match_action(self) -> _UpdateComposerPlanInput:
+        if self.action in {"select_baseline", "accept_module", "reject_module"}:
+            if self.paper_id is None:
+                raise ValueError(f"{self.action} requires paper_id")
+        if self.action in {"accept_module", "reject_module", "close_module_pool"}:
+            if self.pool is None:
+                raise ValueError(f"{self.action} requires pool")
+        if self.action == "select_baseline" and self.pool not in {None, "ccf_a"}:
+            raise ValueError("select_baseline must use the ccf_a pool")
+        if self.action == "close_module_pool" and self.paper_id is not None:
+            raise ValueError("close_module_pool records a pool, not one paper_id")
+        return self
+
+
 class _InspectPaperInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -403,6 +460,7 @@ async def run_research(
             "quality": quality,
             "cost": asdict(cost.snapshot()),
             "paper_budget": _paper_budget_payload(context),
+            "composer_plan": context.composer_plan.to_payload(),
             "termination_summary": asdict(termination_summary),
         }
     )
@@ -471,6 +529,17 @@ def research_tools() -> list[dict[str, Any]]:
                 "unindexed PDFs that may need read_paper."
             ),
             _SearchComposerCandidatesInput,
+        ),
+        _tool_schema(
+            "update_composer_plan",
+            (
+                "Record deterministic Composer plan decisions. Use it after "
+                "inspecting/selecting the CCF A baseline, after rejecting or "
+                "accepting module candidates, and before falling back from ccf_a "
+                "to ccf_b or from ccf_b to other. This tool enforces the workflow "
+                "state used by search_composer_candidates."
+            ),
+            _UpdateComposerPlanInput,
         ),
         _tool_schema(
             "search_library",
@@ -543,6 +612,9 @@ def dispatch_research_tool(req: ToolUseRequest, context: ResearchToolContext) ->
                     req.input
                 )
                 return _ok(_search_composer_candidates(composer_search_args, context))
+            case "update_composer_plan":
+                composer_plan_args = _UpdateComposerPlanInput.model_validate(req.input)
+                return _ok(_update_composer_plan(composer_plan_args, context))
             case "search_library":
                 search_args = _SearchLibraryInput.model_validate(req.input)
                 return _ok(_search_library(search_args, context))
@@ -750,22 +822,33 @@ def _list_composer_library(
     args: _ListComposerLibraryInput,
     context: ResearchToolContext,
 ) -> dict[str, Any]:
-    return _composer_library(context).to_payload(limit=args.limit)
+    context.composer_plan.mark_library_listed()
+    payload = _composer_library(context).to_payload(limit=args.limit)
+    payload["composer_plan"] = context.composer_plan.to_payload()
+    return payload
 
 
 def _search_composer_candidates(
     args: _SearchComposerCandidatesInput,
     context: ResearchToolContext,
 ) -> dict[str, Any]:
+    library = _composer_library(context)
+    _require_composer_baseline_pool(library)
+    target_pool = args.resolved_pool
+    context.composer_plan.require_search_allowed(role=args.role, pool=target_pool)
     if context.embeddings_store is None or context.encode_query is None:
         raise KnowledgeError(
             "embedding index unavailable; run reindex before search_composer_candidates"
         )
-    library = _composer_library(context)
-    _require_composer_baseline_pool(library)
-    target_pool = args.resolved_pool
     candidate_ids = library.indexed_paper_ids(target_pool)
     if not candidate_ids:
+        context.composer_plan.mark_search(
+            role=args.role,
+            pool=target_pool,
+            query=args.query,
+            status="no_indexed_candidates",
+            paper_ids=[],
+        )
         return {
             "role": args.role,
             "pool": target_pool,
@@ -775,6 +858,7 @@ def _search_composer_candidates(
             "selection_rule": _composer_selection_rule(args),
             "pool_trace": _composer_pool_trace(args),
             "missing_pools": list(library.missing_pools),
+            "composer_plan": context.composer_plan.to_payload(),
             "results": [],
             "evidence": [],
             "unindexed_pdfs": library.unindexed_payload(target_pool),
@@ -795,6 +879,14 @@ def _search_composer_candidates(
         paper_ids=candidate_ids,
     )
     ranked = list(enumerate(results, start=1))
+    result_paper_ids = [result.paper_id for result in results]
+    context.composer_plan.mark_search(
+        role=args.role,
+        pool=target_pool,
+        query=args.query,
+        status="ok",
+        paper_ids=result_paper_ids,
+    )
     evidence = [
         {**item, "pool": target_pool}
         for item in _search_evidence_list(ranked)
@@ -809,6 +901,7 @@ def _search_composer_candidates(
         "selection_rule": _composer_selection_rule(args),
         "pool_trace": _composer_pool_trace(args),
         "missing_pools": list(library.missing_pools),
+        "composer_plan": context.composer_plan.to_payload(),
         "evidence": evidence,
         "results": [
             {
@@ -819,6 +912,54 @@ def _search_composer_candidates(
         ],
         "unindexed_pdfs": library.unindexed_payload(target_pool),
     }
+
+
+def _update_composer_plan(
+    args: _UpdateComposerPlanInput,
+    context: ResearchToolContext,
+) -> dict[str, Any]:
+    match args.action:
+        case "select_baseline":
+            assert args.paper_id is not None
+            decision = context.composer_plan.select_baseline(
+                paper_id=args.paper_id,
+                rationale=args.rationale,
+                evidence_refs=args.evidence_refs,
+            )
+            result: dict[str, Any] = {"decision": decision.to_payload()}
+        case "accept_module":
+            assert args.paper_id is not None and args.pool is not None
+            decision = context.composer_plan.accept_module(
+                paper_id=args.paper_id,
+                pool=args.pool,
+                rationale=args.rationale,
+                evidence_refs=args.evidence_refs,
+                attachment_point=args.attachment_point,
+                compatibility_notes=args.compatibility_notes,
+            )
+            result = {"decision": decision.to_payload()}
+        case "reject_module":
+            assert args.paper_id is not None and args.pool is not None
+            decision = context.composer_plan.reject_module(
+                paper_id=args.paper_id,
+                pool=args.pool,
+                rationale=args.rationale,
+                evidence_refs=args.evidence_refs,
+            )
+            result = {"decision": decision.to_payload()}
+        case "close_module_pool":
+            assert args.pool is not None
+            closure = context.composer_plan.close_module_pool(
+                pool=args.pool,
+                rationale=args.rationale,
+                rejected_module_ids=args.rejected_module_ids,
+                evidence_refs=args.evidence_refs,
+            )
+            result = {"closure": closure.to_payload()}
+        case _:
+            raise ValueError(f"unknown composer plan action: {args.action}")
+    result["composer_plan"] = context.composer_plan.to_payload()
+    return result
 
 
 def _composer_library(context: ResearchToolContext) -> ComposerLibrary:
@@ -979,6 +1120,7 @@ def _inspect_paper(args: _InspectPaperInput, context: ResearchToolContext) -> di
     if row is None:
         raise KnowledgeError(f"paper_id not found: {args.paper_id}")
     _reserve_papers(context, [row.paper_id])
+    context.composer_plan.mark_inspected(row.paper_id)
     payload: dict[str, Any] = {
         "paper_id": row.paper_id,
         "paper_budget": _paper_budget_payload(context),
@@ -1676,8 +1818,7 @@ def _build_initial_user_text(
         "read_paper call touches that paper_id, but you may still inspect_paper "
         "the same paper_id afterward; do not describe the one-paper limit as "
         "exhausted for same-paper follow-up.\n\n"
-        "Tool-use guidance: call list_papers once at the start unless you need a "
-        "specific filter, then inspect or compare the selected paper_ids. If a "
+        f"{_tool_entry_guidance(route)} If a "
         "relevant PDF is only present in PDF directory results, call read_paper "
         "with the list_pdfs path before making claims about it, then inspect the "
         "same paper_id before writing the final report so the report can cite "
@@ -1696,6 +1837,19 @@ def _build_initial_user_text(
         f"{_final_report_guidance(route)} "
         "Do not include process narration such as 'I have inspected...', 'Now I "
         "will...', or 'Let me compile...'."
+    )
+
+
+def _tool_entry_guidance(route: ChatRoute) -> str:
+    if route.task_profile == "framework_composer":
+        return (
+            "Tool-use guidance: start with list_composer_library, then follow "
+            "composer_plan.allowed_next_tools; use list_papers only for "
+            "non-Composer side checks."
+        )
+    return (
+        "Tool-use guidance: call list_papers once at the start unless you need a "
+        "specific filter, then inspect or compare the selected paper_ids."
     )
 
 
@@ -1751,14 +1905,20 @@ def _task_profile_guidance(route: ChatRoute) -> str:
             return (
                 "Task-specific guidance: use a baseline-first path. Start with "
                 "list_composer_library when --pdf-dir is available. Identify "
-                "exactly one strong CCF A baseline. Preferred tool order: "
+                "exactly one high-performing CCF A baseline that still has a "
+                "clear improvement opening or story-worthy weakness. Preferred "
+                "tool order: "
                 "list_composer_library, search_composer_candidates with "
                 "role=baseline, inspect_paper for the baseline, then "
+                "update_composer_plan with action=select_baseline. Next call "
                 "search_composer_candidates with role=module and pool=ccf_a. "
-                "Only search CCF B after explaining why CCF A modules are "
-                "unsuitable, and use other only after CCF A and CCF B are both "
-                "insufficient. Inspect selected module papers before writing "
-                "the proposal."
+                "For each module candidate, inspect_paper before accepting it, "
+                "then record accept_module or reject_module with "
+                "update_composer_plan. Only search CCF B after "
+                "close_module_pool records why CCF A modules are unsuitable, "
+                "and use other only after CCF A and CCF B are both closed. "
+                "Follow the composer_plan.allowed_next_tools returned by each "
+                "Composer tool."
             )
         case "topic_survey":
             return (
@@ -1769,6 +1929,7 @@ def _task_profile_guidance(route: ChatRoute) -> str:
 
 
 def _final_report_guidance(route: ChatRoute) -> str:
+    language_rule = "The final report must be written in Chinese."
     evidence_rule = (
         "Prefer search_library evidence citation_ref values, inspect_paper "
         "evidence_summary and suggested_citations for final-report claims. In "
@@ -1786,12 +1947,17 @@ def _final_report_guidance(route: ChatRoute) -> str:
             "these sections: Problem, Baseline, Candidate Modules, "
             "Compatibility, Proposed Composition, Experiment Plan, Risks, "
             "Evidence. This is a baseline-first workflow: first identify one "
-            "strong, reproducible baseline paper or method from the local "
-            "library, then identify 2-3 compatible modules or tricks from "
-            "other papers, then propose a small composition that can be "
-            "tested. Baseline should explain why it is a good starting point; "
-            "Candidate Modules should name each module, source paper, and "
-            "function. Candidate Modules must follow the pool priority: CCF A "
+            "high-performing, reproducible baseline paper or method from the local "
+            "library, then identify exactly 3 compatible modules or tricks from other "
+            "papers, then propose a small composition that can be tested. Baseline "
+            "must explain both why its performance makes it a high starting point "
+            "and what clear improvement opening or story-worthy weakness remains; "
+            "Candidate Modules must contain exactly 3 accepted modules unless all "
+            "module pools have been searched and the final report is explicitly a "
+            "gap report. Each module must come from a distinct paper_id; one module "
+            "paper can contribute at most one module. Candidate Modules should name "
+            "each module, source paper, and function. Candidate Modules must follow "
+            "the pool priority: CCF A "
             "first, CCF B only when CCF A modules are unsuitable, and other "
             "only after both CCF A and CCF B are insufficient; "
             "Compatibility should say where each module attaches to "
@@ -1801,9 +1967,12 @@ def _final_report_guidance(route: ChatRoute) -> str:
             "supports them. "
             "Evidence must include pool trace: baseline pool, module pool for "
             "each selected module, and why any selected module did not come "
-            "from a higher-priority pool. "
+            "from a higher-priority pool. Do not write the final proposal until "
+            "the latest composer_plan report_ready value is true, unless every "
+            "module pool has been searched and the final report is explicitly "
+            "a gap report. "
             f"{evidence_rule} The final answer must be the proposal itself; "
-            "keep the whole report under 900 words."
+            f"{language_rule} Keep the whole report under 900 words."
         )
 
     return (
@@ -1812,7 +1981,7 @@ def _final_report_guidance(route: ChatRoute) -> str:
         "Gaps, Next Steps. For concrete Findings claims, either include "
         "bracket references inline or mirror the claim in Evidence with "
         f"bracket references. {evidence_rule} The final answer must be the "
-        "report itself; keep the whole report under 900 words."
+        f"report itself; {language_rule} Keep the whole report under 900 words."
     )
 
 

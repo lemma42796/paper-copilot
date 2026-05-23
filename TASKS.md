@@ -8,7 +8,7 @@
 
 ## Current Status
 
-> 更新于 2026-05-22。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
+> 更新于 2026-05-23。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
 - **已完成**:M1–M15(Session A + B 全部 done)。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
@@ -41,7 +41,7 @@
   `docs/stories/2026-04-27-model-selection-flash-vs-plus.md`。
 - **当前阶段**:**M18 paper-level RAG gate 已完成,chunk/evidence 级 baseline
   已补上,最终 chunk selector v1 已接入;M19 local-library-first Composer
-  skeleton 已开始编码**。
+  skeleton + deterministic plan/state 已开始编码**。
   截至 2026-05-21,
   chat-first runtime/API 与 macOS-style web shell 已可用;后端 route 已收敛为
   `knowledge_qa` / `framework_composer`,knowledge QA 下有轻量 `task_profile`。
@@ -67,9 +67,93 @@
   evidence recall 小升、precision 小降;最终 chunk selector v1 已补上,不要继续
   盲目扩大 pool。正式复跑后 evidence recall/precision 均小幅上升;下一步
   可以带着已知 grounding 风险进入 M19。M19 第一刀已把
-  `ccf_a`→`ccf_b`→`other` 的本地资料库优先级写进工具约束,但还不是完整
-  Composer 闭环。
-- **最新编码进展**:**M19 Composer 本地资料库工具骨架已接入**
+  `ccf_a`→`ccf_b`→`other` 的本地资料库优先级写进工具约束;本轮补上
+  deterministic plan/state 骨架,已经能拦截未按顺序 fallback;严格 3-module
+  真实重跑已通过,但还不是完整 proposal 质量评审/checker 闭环。
+- **最新编码进展**:**M19 deterministic Composer plan/state 骨架已接入**
+  (2026-05-22)。新增 `agents.composer_plan` 记录 Composer workflow state:
+  `list_composer_library` → CCF A baseline search → baseline inspect/select →
+  CCF A module search → module suitability/compatibility decision → 必要时
+  close pool 后 fallback 到 CCF B/other → structured proposal。`ResearchToolContext`
+  现在携带 `composer_plan`;`list_composer_library` 会初始化/回传 plan,
+  `search_composer_candidates` 会按 plan 拦截越级搜索,`inspect_paper` 会记录
+  已 inspect 的 paper_id,新增 `update_composer_plan` 工具用于记录
+  `select_baseline` / `accept_module` / `reject_module` /
+  `close_module_pool`。现在 CCF B 搜索除了需要 LLM 输入 rejected list/reason,
+  还必须先在 plan 里关闭 CCF A;`other` 同理必须先关闭 CCF A 与 CCF B。
+  `composer_plan` 会进工具结果和 final session payload,并带
+  `allowed_next_tools` / `report_ready` / final report contract。prompt 已更新为
+  跟随 `composer_plan.allowed_next_tools`,且不要在 `report_ready=true` 前写最终
+  proposal(除非所有 module pool 已查完并明确写 gap report)。补了一条 focused
+  dispatch 测试作为行为说明。按当前验证策略未运行 `ruff` / `mypy` / `pytest`;
+  实现后已跑 `py_compile`,并做了一次真实 research 重跑(见下一条)。
+- **最新真实重跑**:**M19 Composer ReID strict 3-module trace audit 通过**
+  (2026-05-23)。命令:
+  `uv run paper-copilot research "基于可见光-红外行人重识别（VI-ReID），帮我找一个可做的创新点：先选一个性能强但仍有改进故事的强基线，再从本地 CCF A 论文里找 3 个可兼容模块，要求每篇 module 论文最多取一个模块，给出中文实验方案" --pdf-dir /Users/a123/paper-copilot-test-pdfs --max-turns 16 --budget-cny 1.2 --max-papers 6 --no-record-quality --no-update-report`。
+  成功结束:`termination=end_turn`,`cost=¥1.253052`,`events=44`,`papers=6/6`。
+  注意:预算参数为 `¥1.2`,最终因最后一次 LLM 调用后结算略超,说明 budget gate
+  仍是调用边界检查而不是严格预扣。
+  trace 顺序符合 stricter plan:
+  `list_composer_library` → `search_composer_candidates(role=baseline,pool=ccf_a)`
+  → 多篇 `inspect_paper` → `update_composer_plan(select_baseline)` →
+  `search_composer_candidates(role=module,pool=ccf_a)` → 多篇 `inspect_paper` →
+  三次 `update_composer_plan(accept_module)` → final。最终
+  `composer_plan.current_step=write_structured_proposal`,`report_ready=true`,
+  `allowed_next_tools=[write_final_proposal]`,未触发 CCF B/other fallback。
+  产出方案为 IDKL(`6e870fa58055`) 强 baseline,加 3 个来自不同 CCF A 论文的
+  module:HSL(`80877d60f969`),SFTS(`1e77e94f507f`),CIM(`9e5acb459b0e`)。
+  session:
+  `/Users/a123/.paper-copilot/papers/research-20260523T080934995962Z-f1574e90/session.jsonl`;
+  report:
+  `/Users/a123/.paper-copilot/papers/research-20260523T080934995962Z-f1574e90/research-report.md`。
+  人工看报告结论:流程验证合格,但报告质量还没到最终交付标准。具体问题包括:
+  开头残留"报告已准备好"这类 agent 过程话术;section 标题仍是英文
+  `Problem` / `Baseline` / `Candidate Modules`;`训练数据标注成本高`、CIM
+  复杂度从 `O(n²)` 降到线性、`MRIC-like联合优化`、`+1~2%` /
+  `+2~4%` 预期提升等 claim 没有足够 citation/structured-field 支撑。
+  仍缺的下一刀:proposal quality/checker 需要确定性检查中文 final report、baseline
+  性能强证据 + improvement/story opening、3 个 distinct module papers、每个 module
+  attachment point、以及 unsupported implementation specifics;对预期指标提升
+  只能标为 hypothesis/expected observation,不能写成事实结论。
+- **上一真实试跑**:**M19 Composer ReID trace audit 通过主流程**
+  (2026-05-22)。命令:
+  `uv run paper-copilot research "基于可见光-红外行人重识别（VI-ReID），帮我找一个可做的创新点：先选一个强基线，再从本地 CCF A 论文里找 1-2 个可兼容模块，给出实验方案" --pdf-dir /Users/a123/paper-copilot-test-pdfs --max-turns 10 --budget-cny 0.8 --max-papers 4 --no-record-quality --no-update-report`。
+  成功结束:`termination=end_turn`,`cost=¥0.320442`,`events=23`,`papers=2/4`。
+  trace 顺序符合 plan:
+  `list_composer_library` → `search_composer_candidates(role=baseline,pool=ccf_a)`
+  → `inspect_paper` → `update_composer_plan(select_baseline)` →
+  `search_composer_candidates(role=module,pool=ccf_a)` → `inspect_paper` →
+  `update_composer_plan(accept_module)` → final。最终 `composer_plan.current_step`
+  为 `write_structured_proposal`,`report_ready=true`,未触发 CCF B/other fallback。
+  产出方案为 DiVE(`c8258c808553`) + IEEE/AAAI-22 CIM/REM/3M Loss
+  (`9e5acb459b0e`)。session:
+  `/Users/a123/.paper-copilot/papers/research-20260522T150546222461Z-c0b73f7b/session.jsonl`;
+  report:
+  `/Users/a123/.paper-copilot/papers/research-20260522T150546222461Z-c0b73f7b/research-report.md`。
+  暴露的问题:报告有 `AdamW/lr/batch size/120 epochs` 等实现细节没有被
+  citation/checker 约束,说明下一刀需要 proposal quality/checker 抓
+  unsupported implementation specifics,不能只看 heuristic evidence coverage。
+- **Baseline 标准校正**(2026-05-23):按用户纠正,baseline 选择口径不是泛泛
+  "强/可复现",而是 **性能强、高起点,但仍有可以改进或容易讲研究故事的地方**。
+  已同步到 `docs/design/chat_first_research_copilot_plan.md` 的 Baseline
+  Selection Criteria、`framework_composer` prompt,以及 `composer_plan`
+  final report contract。下一刀 checker/scorer 需要把这条做成硬检查:
+  baseline 必须有性能强证据 + improvement/story opening 证据。
+- **Module 数量校正**(2026-05-23):按用户纠正,最终方案目标不是 1-3 或
+  2-3 个 module,而是 **3 个 accepted modules**。已同步
+  `framework_composer` prompt、`composer_plan` final report contract 和
+  `report_ready`:除非所有 module pool 都已搜完并明确写 gap report,否则
+  `accepted_modules` 少于 3 个时不能进入 ready/final proposal 状态。
+- **Module 来源约束补强**(2026-05-23):设计文档早已写明
+  "Each module paper can contribute at most one module",但上一轮代码/prompt 没有
+  硬约束,导致旧 ReID trace 从同一篇 IEEE/AAAI-22 paper 里拿 CIM/REM/3M Loss
+  三个组件。已补成硬规则:3 个 accepted modules 必须来自 3 个不同
+  `paper_id`;`accept_module` 重复接受同一 module paper 会报错,final report
+  contract/prompt 也明确 one paper at most one module。
+- **最终报告语言校正**(2026-05-23):最终 report/proposal 必须用中文输出。
+  已同步 `ResearchAgent` final report guidance、`composer_plan` final report
+  contract 和 M19 设计文档;后续 checker 应把非中文 final report 视为不合格。
+- **上一编码进展**:**M19 Composer 本地资料库工具骨架已接入**
   (2026-05-22)。新增 `agents.composer_library` 扫描用户 `pdf_dir` 下的
   `ccf_a/`、`ccf_b/`、`other/` 三个 pool,返回 PDF 的 `paper_id`、路径、
   indexed 状态和已入库 meta。`knowledge.hybrid_search.search()` 新增可选
@@ -449,7 +533,7 @@
   未跑真实 `/chat` / LLM。
 - **Composer 语义校正**(2026-05-19):按用户纠正,Research Idea Composer
   不是泛泛“缝合论文”,而是 baseline-first workflow:先找可复现 baseline,
-  再找 2-3 个可接入模块/技巧,最后形成可验证的组合改进方案和消融计划。
+  再找 3 个可接入模块/技巧,最后形成可验证的组合改进方案和消融计划。
   已把 router 关键词、ResearchAgent idea prompt、前端默认示例同步到该语义。
 - **主页使用提示与右侧折叠**(2026-05-19):前端主页新增“可以这样用”提示区,
   分两类入口:知识库问答(解释单篇论文、多篇论文对比、研究问题询问)与
@@ -570,14 +654,15 @@
 - **协作偏好更新**(2026-05-19):不要每次改完代码就自动 commit/push。默认只
   修改与验证,等用户明确说“commit / push / 保存进度”再提交推送。本次用户
   明确要求保存进度并 push。
-- **下一个任务建议**:把 M19 Composer 从"工具骨架 + prompt 约束"推进到
-  "可控闭环"。下一刀优先做一个 deterministic composer plan/state 层:固定
-  baseline → CCF A module search → module suitability/compatibility check →
-  必要时带 rejection reason fallback 到 CCF B/other → structured final report,
-  避免只靠 LLM 自由规划遵守池优先级。当前测试资料库是
-  `/Users/a123/paper-copilot-test-pdfs`,全部先按 flat CCF A 处理,CCF B/other
-  暂空;真实试跑建议用 ReID query,不要用 medical segmentation 默认例子。百炼
-  Function Calling 文档只作为 tool-loop 设计参考,不要把 OpenAI-compatible
+- **下一个任务建议**:M19 下一刀从"trace audit 已通过"推进到"proposal
+  quality/checker"。优先补一个 deterministic checker 层,检查 final report 是否
+  包含 baseline、module attachment、compatibility、fallback reason 和 citations,
+  并把未引用/未由 structured fields 支持的训练超参、指标提升、实现细节标成
+  unsupported 或移到 Risks/Gaps。checker 还要剔除 agent 过程话术,要求中文
+  section 标题,并把 guessed improvement numbers 降级成 hypothesis。
+  当前测试资料库是 `/Users/a123/paper-copilot-test-pdfs`,全部先按 flat CCF A
+  处理,CCF B/other 暂空;真实试跑继续不要用 medical segmentation 默认例子。
+  百炼 Function Calling 文档只作为 tool-loop 设计参考,不要把 OpenAI-compatible
   `type:function` schema 直接改进当前 Anthropic-compatible agent path。除非用户
   重新要求,继续不跑 `ruff` / `mypy` / `pytest` / 真实 `/chat`。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录

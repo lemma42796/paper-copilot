@@ -193,7 +193,7 @@ This is the guardrail for future ranking changes.
 
 ## Research Idea Composer
 
-Goal: given a user research field, suggest one strong baseline and 2-3
+Goal: given a user research field, suggest one strong baseline and 3
 compatible modules from recent papers, then propose small, testable modifications
 and an experiment plan.
 
@@ -386,17 +386,17 @@ small set of its own modules. A baseline candidate should usually be:
 - a model/pipeline paper, not only dataset, survey, or pure theory
 - clear architecture and training details
 - public code and a reproducible setup
-- strong performance or strong adoption, because a high starting point makes
-  downstream improvement more credible
-- explicit limitations or improvement opportunities that can support a good
-  research story
+- strong performance, because the new idea should start from a high baseline
+- a clear improvement opening or story-worthy weakness; the baseline should be
+  strong but not "already solved"
 
 Do not select only by recency. A slightly older but clean and reproducible
 baseline can beat a newer ambiguous paper.
 
 The final workflow chooses one baseline, not several. Baseline search should
-stop as soon as the top candidate is stable enough: CCF A, relevant, strong,
-code-available, evidence-backed, and with a clear weakness to improve.
+stop as soon as the top candidate is stable enough: CCF A, relevant,
+high-performing, code-available, evidence-backed, and with a clear improvement
+opening or story-worthy weakness.
 
 ### Module Compatibility Criteria
 
@@ -488,7 +488,7 @@ composition should operate over compact cards and cited evidence chunks:
 Baseline card: title, venue, code, performance, architecture, weaknesses
 Gap card: weakness, evidence, why it matters
 Module card: mechanism, attach point, code, ablation, expected benefit
-Framework card: baseline + 2-3 modules + story + risks + ablations
+Framework card: baseline + 3 modules + story + risks + ablations
 ```
 
 Avoid a full Cartesian product. Use a staged search:
@@ -626,7 +626,7 @@ There are two primary modes:
 - **knowledge_qa**: explain a paper, compare multiple papers, summarize a topic
   from the local library, or answer research questions with evidence.
 - **framework_composer**: given a research direction, first choose a strong
-  reproducible baseline, then find 2-3 compatible modules or tricks from local
+  reproducible baseline, then find 3 compatible modules or tricks from local
   papers, then propose a verifiable model framework with ablations.
 
 Short term, a deterministic keyword router is enough. It should recognize
@@ -781,9 +781,26 @@ Deliver:
 - beam-style framework composer that avoids full Cartesian product search
 - idea composer with top-K ranked proposals, citations, risks, and ablation
   checklist
+- Chinese final reports by default
 - hard budget enforcement: fast mode <= 20 deep-read papers, deep mode <= 30
   deep-read papers across baseline + modules
 - 2-3 fixed demo tasks with human acceptance notes
+
+Implementation checkpoint (2026-05-22): the local-library-first skeleton now has
+a deterministic `composer_plan` state layer. Tool outputs expose
+`allowed_next_tools`, `report_ready`, and the final report contract; lower-priority
+module pools are blocked until the previous pool is closed with recorded
+rejections. This is still a control-plane skeleton, not a validated proposal
+quality gate.
+
+Strict trace checkpoint (2026-05-23): a VI-ReID run selected one strong CCF A
+baseline and three modules from three distinct CCF A papers, and the
+`composer_plan` reached `report_ready=true`. Human report review still found
+quality gaps: process chatter at the top of the report, English section
+headings despite the Chinese-report contract, and unsupported specifics such as
+unverified complexity reductions, ad-hoc framework labels, and guessed metric
+improvements. The next implementation slice should be a deterministic proposal
+checker before more prompt tuning.
 
 ### M20: Local Web UI
 
