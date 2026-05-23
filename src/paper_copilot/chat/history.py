@@ -24,6 +24,8 @@ class ChatReportItem:
     cost_cny: float | None
     events_count: int | None
     paper_budget: dict[str, object]
+    composer_plan: dict[str, Any] | None
+    proposal_check: dict[str, Any] | None
 
 
 def list_chat_reports(*, root: Path | None = None, limit: int = 20) -> list[ChatReportItem]:
@@ -60,6 +62,8 @@ def _read_report(report_path: Path) -> ChatReportItem:
         cost_cny=_cost_field(payload.get("cost")),
         events_count=_events_count_field(payload.get("termination_summary")),
         paper_budget=_object_dict_field(payload.get("paper_budget")),
+        composer_plan=_optional_object_dict_field(payload.get("composer_plan")),
+        proposal_check=_optional_object_dict_field(payload.get("proposal_check")),
     )
 
 
@@ -127,4 +131,10 @@ def _events_count_field(value: object) -> int | None:
 def _object_dict_field(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         return {}
+    return {str(key): item for key, item in value.items()}
+
+
+def _optional_object_dict_field(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
     return {str(key): item for key, item in value.items()}

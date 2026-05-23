@@ -71,8 +71,46 @@
   deterministic plan/state 骨架,已经能拦截未按顺序 fallback;严格 3-module
   真实重跑已通过。M19 proposal checker/remediation v1 已接入 session/report;
   checker 启用后的 ReID 真实重跑已原生通过质量门:`proposal_check.passed=true`,
-  无 issues、无过程话术清理 warning。
-- **最新编码进展**:**M19 proposal remediation v1 已接入**
+  无 issues、无过程话术清理 warning。按用户 2026-05-23 决策,暂跳过
+  2-3 个固定 Composer 任务的多任务验收套件;当前只能声明 ReID 单例 demo
+  clean 通过,不能声明 M19 已跨任务稳定泛化。后续继续推进时,把该风险作为
+  已知边界,不要再为跳过的验收补跑真实任务,除非用户重新要求。
+- **最新编码进展**:**报告 Markdown 表格渲染已接入**
+  (2026-05-23)。Next.js 简易 Markdown renderer 现在支持 GFM 风格表格:
+  `| header |` + `|---|` 会渲染成横向可滚动的 `<table>`,单元格里的 evidence refs
+  仍走同一套可点击证据反查。已用历史 ReID demo 报告验证 `候选模块` 表格显示为
+  1 个 table,表头为 `# / 模块名称 / 来源论文 / 功能描述`,3 个模块行正常;
+  console 无 error。验证:`npm run typecheck`(apps/web) 通过。未跑
+  `pytest` / `ruff` / `mypy`,未触发真实 `/chat` / LLM。
+- **上一编码进展**:**Composer 风险与缺口已接入右侧摘要**
+  (2026-05-23)。Next.js 右侧 Composer 摘要现在会从已生成的报告 Markdown 中提取
+  `风险与缺口` 小节,把待验证假设/风险条目直接显示在运行信息里;其中的 field
+  refs 仍可点击并打开右侧证据面板。该实现只做前端历史报告展示增强,未改变
+  后端 final payload contract。验证:`npm run typecheck`(apps/web) 通过;浏览器
+  已确认历史 ReID 报告显示 `风险与缺口`、点击风险条目中的 field ref 可打开字段
+  证据,console 无 error。未跑 `pytest` / `ruff` / `mypy`,未触发真实 `/chat` / LLM。
+- **上一编码进展**:**field evidence ref 反查已接入前端证据面板**
+  (2026-05-23)。`/evidence` 现在同时支持 chunk refs 与 field refs:
+  `[paper_id:chunks[12]]` 仍返回 chunk 原文,`[paper_id:methods[0]]` /
+  `[paper_id:experiments[0]]` / `[paper_id:contributions[1].claim]` 等 field refs
+  会从 `fields.db` 的 paper JSON 中解析对应字段并返回可读文本。前端报告正文和
+  Composer 摘要里的 field refs 现在都可点击,右侧证据面板会显示论文标题、年份、
+  字段路径与字段内容;Composer 摘要中的 evidence ref 按钮也从"复制"改为"打开"。
+  已用本地 `8766` API 验证 field lookup,并在浏览器中点击历史 ReID 报告的
+  `[c8258c808553:methods[0]]` 打开字段详情成功,console 无 error。验证:
+  `uv run python -m py_compile ...` 通过,`npm run typecheck` 通过;未跑
+  `pytest` / `ruff` / `mypy`,未触发真实 `/chat` / LLM。
+- **上一编码进展**:**M19 Composer 产品侧/报告侧展示收口已接入**
+  (2026-05-23)。`/chat` 与 `/reports` API 现在会把 session final payload 中的
+  `composer_plan` / `proposal_check` 传给前端;历史报告也能显示已落盘的
+  Composer 结构化状态。Next.js 右侧运行信息新增 Composer 摘要:展示
+  checker 通过/需处理状态、accepted module 计数、distinct paper 约束、
+  unsupported specific 计数、baseline paper、3 个 module 的 paper_id / pool /
+  rationale / attachment / compatibility / evidence refs。前端默认 Composer
+  prompt 已从 medical segmentation 例子改成当前 ReID 3-module demo 口径,
+  避免继续误导真实试跑。按本轮策略未跑 `pytest` / `ruff` / `mypy` / 真实
+  `/chat`;仅做代码层自查,不新增 LLM 调用。
+- **上一编码进展**:**M19 proposal remediation v1 已接入**
   (2026-05-23)。在 checker 基础上继续收紧 Composer final report prompt 与
   `composer_plan.final_report_contract`:跨论文拼出来的新损失组合、新框架命名、
   指标提升、复杂度变化、optimizer/lr/batch/epoch 等 implementation specifics,
@@ -723,17 +761,14 @@
 - **协作偏好更新**(2026-05-19):不要每次改完代码就自动 commit/push。默认只
   修改与验证,等用户明确说“commit / push / 保存进度”再提交推送。本次用户
   明确要求保存进度并 push。
-- **下一个任务建议**:M19 下一刀从"trace audit 已通过"推进到"proposal
-  quality/checker"。优先补一个 deterministic checker 层,检查 final report 是否
-  包含 baseline、module attachment、compatibility、fallback reason 和 citations,
-  并把未引用/未由 structured fields 支持的训练超参、指标提升、实现细节标成
-  unsupported 或移到 Risks/Gaps。checker 还要剔除 agent 过程话术,要求中文
-  section 标题,并把 guessed improvement numbers 降级成 hypothesis。
-  当前测试资料库是 `/Users/a123/paper-copilot-test-pdfs`,全部先按 flat CCF A
-  处理,CCF B/other 暂空;真实试跑继续不要用 medical segmentation 默认例子。
-  百炼 Function Calling 文档只作为 tool-loop 设计参考,不要把 OpenAI-compatible
-  `type:function` schema 直接改进当前 Anthropic-compatible agent path。除非用户
-  重新要求,继续不跑 `ruff` / `mypy` / `pytest` / 真实 `/chat`。
+- **下一个任务建议**:M19 checker/remediation、前端 Composer 摘要展示、field
+  evidence ref 反查、风险与缺口右侧摘要、Markdown 表格渲染都已完成,且用户已决定跳过多任务验收套件。下一刀不要
+  回头调 RAG ranking、扩大 evidence pool 或补 baseline/module recall;优先
+  让用户人工看当前 ReID demo 报告与前端展示是否顺眼。若继续编码,只做极小的
+  前端可用性修正,不要再扩大 M19 范围。当前测试资料库是
+  `/Users/a123/paper-copilot-test-pdfs`,全部先按 flat CCF A 处理,CCF B/other
+  暂空;真实试跑继续不要用 medical segmentation 默认例子。除非用户重新要求,
+  继续不跑 `ruff` / `mypy` / `pytest` / 真实 `/chat`。
 - **后续路线规划**:`docs/design/chat_first_research_copilot_plan.md` 记录
   M16 之后的总方向:Harness Engineering 第一准则、Evidence-grounded RAG
   升级、Research Idea Composer、单输入框 Chat UX、后端/前端分阶段落地。

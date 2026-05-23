@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlparse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from paper_copilot.agents.composer_library import load_composer_library
-from paper_copilot.chat.evidence import EvidenceChunk, lookup_evidence_chunk
+from paper_copilot.chat.evidence import EvidenceChunk, EvidenceField, lookup_evidence_ref
 from paper_copilot.chat.history import ChatReportItem, list_chat_reports
 from paper_copilot.chat.runtime import ChatRunResult, handle_chat_request
 from paper_copilot.knowledge.fields_store import FieldsStore
@@ -68,6 +68,8 @@ class ChatHttpResponse(BaseModel):
     cost_cny: float
     events_count: int
     paper_budget: dict[str, object]
+    composer_plan: dict[str, Any] | None
+    proposal_check: dict[str, Any] | None
 
     @classmethod
     def from_result(cls, result: ChatRunResult) -> ChatHttpResponse:
@@ -87,6 +89,8 @@ class ChatHttpResponse(BaseModel):
             cost_cny=result.cost_cny,
             events_count=result.events_count,
             paper_budget=result.paper_budget,
+            composer_plan=result.composer_plan,
+            proposal_check=result.proposal_check,
         )
 
 
@@ -102,6 +106,8 @@ class ChatReportHttpItem(BaseModel):
     cost_cny: float | None
     events_count: int | None
     paper_budget: dict[str, object]
+    composer_plan: dict[str, Any] | None
+    proposal_check: dict[str, Any] | None
 
     @classmethod
     def from_item(cls, item: ChatReportItem) -> ChatReportHttpItem:
@@ -117,6 +123,8 @@ class ChatReportHttpItem(BaseModel):
             cost_cny=item.cost_cny,
             events_count=item.events_count,
             paper_budget=item.paper_budget,
+            composer_plan=item.composer_plan,
+            proposal_check=item.proposal_check,
         )
 
 
@@ -133,19 +141,22 @@ class DirectorySelectionHttpResponse(BaseModel):
 
 
 class EvidenceHttpResponse(BaseModel):
+    kind: str
     citation_ref: str
     paper_id: str
     title: str
     year: int | None
-    chunk_id: int
-    section: str
-    page_start: int
-    page_end: int
+    chunk_id: int | None
+    section: str | None
+    page_start: int | None
+    page_end: int | None
+    field: str | None
     text: str
 
     @classmethod
     def from_chunk(cls, chunk: EvidenceChunk) -> EvidenceHttpResponse:
         return cls(
+            kind="chunk",
             citation_ref=chunk.citation_ref,
             paper_id=chunk.paper_id,
             title=chunk.title,
@@ -154,8 +165,33 @@ class EvidenceHttpResponse(BaseModel):
             section=chunk.section,
             page_start=chunk.page_start,
             page_end=chunk.page_end,
+            field=None,
             text=chunk.text,
         )
+
+    @classmethod
+    def from_field(cls, field: EvidenceField) -> EvidenceHttpResponse:
+        return cls(
+            kind="field",
+            citation_ref=field.citation_ref,
+            paper_id=field.paper_id,
+            title=field.title,
+            year=field.year,
+            chunk_id=None,
+            section=None,
+            page_start=None,
+            page_end=None,
+            field=field.field,
+            text=field.text,
+        )
+
+    @classmethod
+    def from_evidence(
+        cls, evidence: EvidenceChunk | EvidenceField
+    ) -> EvidenceHttpResponse:
+        if isinstance(evidence, EvidenceChunk):
+            return cls.from_chunk(evidence)
+        return cls.from_field(evidence)
 
 
 def serve_http_api(host: str = "127.0.0.1", port: int = 8765) -> None:
@@ -188,8 +224,8 @@ class _ChatHandler(BaseHTTPRequestHandler):
         if parsed.path == "/evidence":
             try:
                 request = EvidenceHttpRequest.model_validate(_single_query_values(parsed.query))
-                chunk = lookup_evidence_chunk(request.ref, root=request.root)
-                response = EvidenceHttpResponse.from_chunk(chunk)
+                evidence = lookup_evidence_ref(request.ref, root=request.root)
+                response = EvidenceHttpResponse.from_evidence(evidence)
             except ValidationError as exc:
                 self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
                 return

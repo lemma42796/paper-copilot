@@ -55,6 +55,8 @@ def test_chat_http_response_serializes_chat_result() -> None:
         cost_cny=0.12,
         events_count=3,
         paper_budget={"touched_count": 2, "max_papers": 5},
+        composer_plan={"baseline": {"paper_id": "paperA"}},
+        proposal_check={"passed": True, "issues": []},
     )
 
     response = ChatHttpResponse.from_result(result).model_dump(mode="json")
@@ -63,6 +65,8 @@ def test_chat_http_response_serializes_chat_result() -> None:
     assert response["session_path"] == "/tmp/session.jsonl"
     assert response["quality_run_path"] == "/tmp/runs/r1.jsonl"
     assert response["paper_budget"]["touched_count"] == 2
+    assert response["composer_plan"]["baseline"]["paper_id"] == "paperA"
+    assert response["proposal_check"]["passed"] is True
 
 
 def test_reports_response_serializes_history(tmp_path: Path) -> None:
@@ -84,6 +88,11 @@ def test_reports_response_serializes_history(tmp_path: Path) -> None:
             "cost": {"cost_cny": 0.0123},
             "paper_budget": {"touched_count": 2, "max_papers": 5},
             "termination_summary": {"events_count": 7},
+            "composer_plan": {
+                "baseline": {"paper_id": "paperA"},
+                "accepted_modules": [],
+            },
+            "proposal_check": {"passed": True, "issues": []},
         }
     )
     report_path = store.path.parent / "research-report.md"
@@ -99,6 +108,8 @@ def test_reports_response_serializes_history(tmp_path: Path) -> None:
     assert response["reports"][0]["report_markdown"] == "# Findings\n\nEvidence."
     assert response["reports"][0]["cost_cny"] == 0.0123
     assert response["reports"][0]["events_count"] == 7
+    assert response["reports"][0]["composer_plan"]["baseline"]["paper_id"] == "paperA"
+    assert response["reports"][0]["proposal_check"]["passed"] is True
 
 
 def test_directory_selection_response_serializes_selected_path() -> None:

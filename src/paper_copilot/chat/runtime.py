@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from paper_copilot.agents.llm_client import LLMClient
 from paper_copilot.agents.loop import LLMClientProtocol
@@ -33,6 +35,8 @@ class ChatRunResult:
     cost_cny: float
     events_count: int
     paper_budget: dict[str, object]
+    composer_plan: dict[str, Any] | None
+    proposal_check: dict[str, Any] | None
 
 
 async def handle_chat_request(
@@ -168,8 +172,16 @@ def _persist_chat_result(
         cost_cny=run.cost.cost_cny,
         events_count=len(run.events),
         paper_budget=run.termination_summary.paper_budget,
+        composer_plan=_optional_payload_dict(run.final_payload.get("composer_plan")),
+        proposal_check=_optional_payload_dict(run.final_payload.get("proposal_check")),
     )
 
 
 def _read_client(llm: LLMClientProtocol) -> LLMClient | None:
     return llm if isinstance(llm, LLMClient) else None
+
+
+def _optional_payload_dict(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    return {str(key): item for key, item in value.items()}

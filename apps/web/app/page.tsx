@@ -11,6 +11,40 @@ type ChatRoute = {
   reason?: string;
 };
 
+type ComposerPoolName = "ccf_a" | "ccf_b" | "other";
+
+type ComposerDecision = {
+  action?: string;
+  paper_id: string;
+  pool: ComposerPoolName;
+  rationale: string;
+  evidence_refs: string[];
+  attachment_point: string | null;
+  compatibility_notes: string | null;
+};
+
+type ComposerPlan = {
+  current_step?: string;
+  report_ready?: boolean;
+  baseline: ComposerDecision | null;
+  accepted_modules: ComposerDecision[];
+};
+
+type ComposerProposalIssue = {
+  code: string;
+  severity: string;
+  message: string;
+  evidence: string | null;
+};
+
+type ComposerProposalCheck = {
+  method: string;
+  passed: boolean;
+  issues: ComposerProposalIssue[];
+  removed_process_chatter: string[];
+  counts: Record<string, number>;
+};
+
 type ChatResponse = {
   request: string;
   route: ChatRoute;
@@ -23,6 +57,8 @@ type ChatResponse = {
   cost_cny: number;
   events_count: number;
   paper_budget: Record<string, unknown>;
+  composer_plan: ComposerPlan | null;
+  proposal_check: ComposerProposalCheck | null;
 };
 
 type ReportHistoryResponse = {
@@ -34,18 +70,18 @@ type DirectorySelectionResponse = {
 };
 
 type EvidenceResponse = {
+  kind: "chunk" | "field";
   citation_ref: string;
   paper_id: string;
   title: string;
   year: number | null;
-  chunk_id: number;
-  section: string;
-  page_start: number;
-  page_end: number;
+  chunk_id: number | null;
+  section: string | null;
+  page_start: number | null;
+  page_end: number | null;
+  field: string | null;
   text: string;
 };
-
-type ComposerPoolName = "ccf_a" | "ccf_b" | "other";
 
 type ComposerPaper = {
   pool: ComposerPoolName;
@@ -89,6 +125,8 @@ type ReportHistoryEntry = {
   cost_cny: number | null;
   events_count: number | null;
   paper_budget: Record<string, unknown>;
+  composer_plan: ComposerPlan | null;
+  proposal_check: ComposerProposalCheck | null;
 };
 
 type RunHistoryItem = {
@@ -103,6 +141,8 @@ type RunHistoryItem = {
   terminationReason: string;
   eventsCount: number | null;
   paperBudget: Record<string, unknown>;
+  composerPlan: ComposerPlan | null;
+  proposalCheck: ComposerProposalCheck | null;
 };
 
 type UsageTip = {
@@ -114,7 +154,7 @@ type UsageTip = {
 const DEFAULT_API_URL = "http://127.0.0.1:8765";
 const DEFAULT_LIBRARY_DIR = "/Users/a123/paper-copilot-test-pdfs";
 const DEFAULT_PROMPT =
-  "基于医学图像分割，先找一个可复现 baseline，再找 2-3 个可接入模块，给出实验方案和证据引用。";
+  "基于可见光-红外行人重识别（VI-ReID），先选一个性能强但仍有改进故事的强基线，再从本地 CCF A 论文里找 3 个可兼容模块，给出中文实验方案。";
 const LIBRARY_DIR_STORAGE_KEY = "paper-copilot.libraryDir";
 const USAGE_TIPS: UsageTip[] = [
   {
@@ -130,9 +170,9 @@ const USAGE_TIPS: UsageTip[] = [
     title: "新论文模型框架",
     description: "根据研究方向先找 baseline，再找可接入模块，组合成可验证方案。",
     examples: [
-      "基于医学图像分割，先找一个可复现 baseline，再找 2-3 个可接入模块，给出新模型框架、消融实验和证据引用。",
-      "针对行人重识别，先选一个 strong baseline，再从近年论文找可插拔模块，组合成可验证改进方案。",
-      "基于 diffusion model 和医学图像分割，找 baseline、模块、兼容性风险和实验计划。"
+      "基于可见光-红外行人重识别（VI-ReID），先选一个性能强但仍有改进故事的强基线，再从本地 CCF A 论文里找 3 个可兼容模块，给出中文实验方案。",
+      "针对行人重识别，先选一个 strong baseline，再从近年论文找 3 个可插拔模块，组合成可验证改进方案。",
+      "基于 diffusion model 的视觉任务，找强 baseline、3 个模块、兼容性风险和实验计划。"
     ]
   }
 ];
@@ -376,11 +416,6 @@ export default function Home() {
   }
 
   async function openEvidence(ref: string) {
-    if (!isChunkEvidenceRef(ref)) {
-      const ok = await copyText(ref);
-      showNotice(ok ? "字段引用已复制" : "暂不支持反查该引用");
-      return;
-    }
     setIsLoadingEvidence(true);
     setEvidenceError(null);
     setSelectedEvidence(null);
@@ -503,7 +538,7 @@ export default function Home() {
               <textarea
                 id="message"
                 onChange={(event) => setMessage(event.target.value)}
-                placeholder="例如：先找一个 baseline，再找可接入模块，组合成可验证的改进方案。"
+                placeholder="例如：先找一个强 baseline，再找 3 个可接入模块，组合成可验证的改进方案。"
                 rows={4}
                 value={message}
               />
@@ -615,6 +650,11 @@ export default function Home() {
                 </section>
 
                 <RunMetadata onCopy={copyWithNotice} result={result} />
+                <ComposerSummary
+                  onCopy={copyWithNotice}
+                  onEvidenceRefClick={openEvidence}
+                  result={result}
+                />
                 <EvidenceInspector
                   error={evidenceError}
                   evidence={selectedEvidence}
@@ -663,7 +703,9 @@ function historyItemFromChatResult(result: ChatResponse): RunHistoryItem {
     updatedAt: new Date().toISOString(),
     terminationReason: result.termination_reason,
     eventsCount: result.events_count,
-    paperBudget: result.paper_budget
+    paperBudget: result.paper_budget,
+    composerPlan: result.composer_plan ?? null,
+    proposalCheck: result.proposal_check ?? null
   };
 }
 
@@ -679,7 +721,9 @@ function historyItemFromReport(entry: ReportHistoryEntry): RunHistoryItem {
     updatedAt: entry.updated_at,
     terminationReason: entry.termination_reason,
     eventsCount: entry.events_count,
-    paperBudget: entry.paper_budget
+    paperBudget: entry.paper_budget,
+    composerPlan: entry.composer_plan ?? null,
+    proposalCheck: entry.proposal_check ?? null
   };
 }
 
@@ -695,7 +739,9 @@ function chatResponseFromHistoryItem(item: RunHistoryItem): ChatResponse {
     termination_reason: item.terminationReason,
     cost_cny: item.cost ?? 0,
     events_count: item.eventsCount ?? 0,
-    paper_budget: item.paperBudget
+    paper_budget: item.paperBudget,
+    composer_plan: item.composerPlan,
+    proposal_check: item.proposalCheck
   };
 }
 
@@ -789,6 +835,182 @@ function RunMetadata({
   );
 }
 
+function ComposerSummary({
+  onCopy,
+  onEvidenceRefClick,
+  result
+}: {
+  onCopy: (value: string, label: string) => Promise<void>;
+  onEvidenceRefClick: (ref: string) => void | Promise<void>;
+  result: ChatResponse | null;
+}) {
+  const plan = result?.composer_plan ?? null;
+  const check = result?.proposal_check ?? null;
+  const riskItems =
+    result === null ? [] : extractMarkdownSectionItems(result.report_markdown, ["风险与缺口"]);
+  const visibleRiskItems = riskItems.slice(0, 5);
+  const hiddenRiskCount = riskItems.length - visibleRiskItems.length;
+  if (plan === null && check === null) {
+    return null;
+  }
+
+  const modules = plan?.accepted_modules ?? [];
+  const distinctModuleCount = new Set(modules.map((module) => module.paper_id)).size;
+  const acceptedModuleCount = check?.counts.accepted_module_count ?? modules.length;
+  const requiredModuleCount = 3;
+  const distinctOk =
+    acceptedModuleCount === requiredModuleCount && distinctModuleCount === acceptedModuleCount;
+
+  return (
+    <section className="composer-summary">
+      <div className="composer-summary-header">
+        <h2>Composer</h2>
+        <span className={check?.passed ? "status-pill passed" : "status-pill"}>
+          {check === null ? "未检查" : check.passed ? "通过" : "需处理"}
+        </span>
+      </div>
+
+      <div className="composer-check-grid">
+        <ComposerCheckMetric label="模块" value={`${acceptedModuleCount}/${requiredModuleCount}`} />
+        <ComposerCheckMetric label="来源" value={distinctOk ? "不同 paper" : "需核查"} />
+        <ComposerCheckMetric
+          label="未支撑细节"
+          value={String(check?.counts.unsupported_specific_count ?? 0)}
+        />
+      </div>
+
+      {plan?.baseline ? (
+        <ComposerDecisionSummary
+          decision={plan.baseline}
+          label="Baseline"
+          onCopy={onCopy}
+          onEvidenceRefClick={onEvidenceRefClick}
+        />
+      ) : (
+        <p className="settings-note">尚未记录 baseline。</p>
+      )}
+
+      {modules.length > 0 ? (
+        <div className="composer-module-list">
+          {modules.map((module, index) => (
+            <ComposerDecisionSummary
+              decision={module}
+              key={`${module.paper_id}-${index}`}
+              label={`Module ${index + 1}`}
+              onCopy={onCopy}
+              onEvidenceRefClick={onEvidenceRefClick}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      {check && check.issues.length > 0 ? (
+        <div className="composer-issues">
+          <p>质量检查问题</p>
+          <ul>
+            {check.issues.map((issue) => (
+              <li key={`${issue.code}-${issue.evidence ?? issue.message}`}>
+                <strong>{issue.code}</strong>
+                <span>{issue.message}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className="settings-note">质量检查无 issues。</p>
+      )}
+
+      {visibleRiskItems.length > 0 ? (
+        <div className="composer-risks">
+          <p>风险与缺口</p>
+          <ul>
+            {visibleRiskItems.map((item, index) => (
+              <li key={`${item}-${index}`}>{renderInlineText(item, onEvidenceRefClick)}</li>
+            ))}
+          </ul>
+          {hiddenRiskCount > 0 ? (
+            <p className="settings-note">另有 {hiddenRiskCount} 条见报告正文。</p>
+          ) : null}
+        </div>
+      ) : (
+        <p className="settings-note">报告正文未提取到风险与缺口小节。</p>
+      )}
+    </section>
+  );
+}
+
+function ComposerCheckMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="composer-check-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function ComposerDecisionSummary({
+  decision,
+  label,
+  onCopy,
+  onEvidenceRefClick
+}: {
+  decision: ComposerDecision;
+  label: string;
+  onCopy: (value: string, label: string) => Promise<void>;
+  onEvidenceRefClick: (ref: string) => void | Promise<void>;
+}) {
+  return (
+    <div className="composer-decision">
+      <div className="composer-decision-top">
+        <span>{label}</span>
+        <button
+          className="copy-button"
+          onClick={() => void onCopy(decision.paper_id, "paper_id")}
+          type="button"
+        >
+          {decision.paper_id}
+        </button>
+      </div>
+      <p className="composer-decision-meta">{formatComposerPoolName(decision.pool)}</p>
+      <p>{decision.rationale}</p>
+      {decision.attachment_point ? (
+        <p className="composer-decision-detail">接入点: {decision.attachment_point}</p>
+      ) : null}
+      {decision.compatibility_notes ? (
+        <p className="composer-decision-detail">兼容性: {decision.compatibility_notes}</p>
+      ) : null}
+      <EvidenceRefButtons refs={decision.evidence_refs} onEvidenceRefClick={onEvidenceRefClick} />
+    </div>
+  );
+}
+
+function EvidenceRefButtons({
+  onEvidenceRefClick,
+  refs
+}: {
+  onEvidenceRefClick: (ref: string) => void | Promise<void>;
+  refs: string[];
+}) {
+  if (refs.length === 0) {
+    return null;
+  }
+  return (
+    <div className="composer-ref-list">
+      {refs.map((ref) => (
+        <button
+          className="evidence-ref composer-ref"
+          key={ref}
+          onClick={() => void onEvidenceRefClick(ref)}
+          title={isChunkEvidenceRef(ref) ? "打开证据原文" : "打开字段证据"}
+          type="button"
+        >
+          {ref}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function EvidenceInspector({
   error,
   evidence,
@@ -819,13 +1041,12 @@ function EvidenceInspector({
           </div>
           <p className="evidence-meta">
             {evidence.year ? `${evidence.year} · ` : ""}
-            {evidence.section} · {formatPageRange(evidence.page_start, evidence.page_end)} ·{" "}
-            chunk {evidence.chunk_id}
+            {formatEvidenceMeta(evidence)}
           </p>
           <pre>{evidence.text}</pre>
         </div>
       ) : !isLoading && !error ? (
-        <p className="settings-note">点击报告中的 chunk 证据引用查看原文。</p>
+        <p className="settings-note">点击报告中的证据引用查看字段详情或 chunk 原文。</p>
       ) : null}
     </section>
   );
@@ -1007,8 +1228,21 @@ function formatPageRange(start: number, end: number): string {
   return start === end ? `p.${start}` : `p.${start}-${end}`;
 }
 
+function formatEvidenceMeta(evidence: EvidenceResponse): string {
+  if (evidence.kind === "field") {
+    return evidence.field ? `字段 ${evidence.field}` : "字段证据";
+  }
+  const page =
+    evidence.page_start !== null && evidence.page_end !== null
+      ? formatPageRange(evidence.page_start, evidence.page_end)
+      : "页码未知";
+  return `${evidence.section ?? "section unknown"} · ${page} · chunk ${
+    evidence.chunk_id ?? "unknown"
+  }`;
+}
+
 function isChunkEvidenceRef(ref: string): boolean {
-  return /^\[[A-Za-z0-9_-]{3,64}:chunks\[\d+\]\]$/.test(ref);
+  return /^\[\s*[A-Za-z0-9_-]{3,64}\s*:\s*chunks\[\d+\]\s*\]$/.test(ref);
 }
 
 function MarkdownReport({
@@ -1045,6 +1279,33 @@ function MarkdownReport({
                 <code>{block.text}</code>
               </pre>
             );
+          case "table":
+            return (
+              <div className="markdown-table-wrap" key={index}>
+                <table>
+                  <thead>
+                    <tr>
+                      {block.headers.map((header, headerIndex) => (
+                        <th key={`${header}-${headerIndex}`}>
+                          {renderInlineText(header, onEvidenceRefClick)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {block.rows.map((row, rowIndex) => (
+                      <tr key={rowIndex}>
+                        {block.headers.map((_header, cellIndex) => (
+                          <td key={`${rowIndex}-${cellIndex}`}>
+                            {renderInlineText(row[cellIndex] ?? "", onEvidenceRefClick)}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
           case "rule":
             return <hr key={index} />;
           case "paragraph":
@@ -1061,7 +1322,7 @@ function renderInlineText(
 ): ReactNode[] {
   const parts: ReactNode[] = [];
   const refPattern =
-    /(\[[A-Za-z0-9_-]{3,64}:chunks\[\d+\]\]|\[[A-Za-z0-9_-]+:[^\]\s][^\]]*\])/g;
+    /(\[\s*[A-Za-z0-9_-]{3,64}\s*:\s*(?:chunks\[\d+\]|[A-Za-z_][A-Za-z0-9_]*(?:\[\d+\])?(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\[\d+\])?)*)\s*\])/g;
   let lastIndex = 0;
   for (const match of text.matchAll(refPattern)) {
     const matchIndex = match.index ?? 0;
@@ -1074,7 +1335,7 @@ function renderInlineText(
         className="evidence-ref"
         key={`${ref}-${matchIndex}`}
         onClick={() => void (onEvidenceRefClick ? onEvidenceRefClick(ref) : copyText(ref))}
-        title={isChunkEvidenceRef(ref) ? "打开证据原文" : "复制证据引用"}
+        title={isChunkEvidenceRef(ref) ? "打开证据原文" : "打开字段证据"}
         type="button"
       >
         {ref}
@@ -1086,6 +1347,89 @@ function renderInlineText(
     parts.push(text.slice(lastIndex));
   }
   return parts.length > 0 ? parts : [text];
+}
+
+function extractMarkdownSectionItems(markdown: string, headings: string[]): string[] {
+  const targets = new Set(headings.map(normalizeMarkdownHeadingText));
+  const lines = markdown.split(/\r?\n/);
+  const items: string[] = [];
+  let paragraph: string[] = [];
+  let inSection = false;
+  let sectionLevel = 0;
+
+  function flushParagraph() {
+    if (paragraph.length === 0) {
+      return;
+    }
+    items.push(normalizeSummaryText(paragraph.join(" ")));
+    paragraph = [];
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const heading = /^(#{1,6})\s+(.+)$/.exec(trimmed);
+    if (heading !== null) {
+      if (inSection) {
+        flushParagraph();
+        if (heading[1].length <= sectionLevel) {
+          break;
+        }
+      }
+      if (targets.has(normalizeMarkdownHeadingText(heading[2]))) {
+        inSection = true;
+        sectionLevel = heading[1].length;
+      }
+      continue;
+    }
+
+    if (!inSection) {
+      continue;
+    }
+
+    if (trimmed.length === 0) {
+      flushParagraph();
+      continue;
+    }
+
+    const listItem = /^[-*]\s+(.+)$/.exec(trimmed) ?? /^\d+[.)]\s+(.+)$/.exec(trimmed);
+    if (listItem !== null) {
+      flushParagraph();
+      items.push(normalizeSummaryText(listItem[1]));
+      continue;
+    }
+
+    if (trimmed.startsWith("|")) {
+      flushParagraph();
+      const cells = trimmed
+        .split("|")
+        .map((cell) => cell.trim())
+        .filter((cell) => cell.length > 0);
+      if (cells.length > 0 && !cells.every((cell) => /^:?-{3,}:?$/.test(cell))) {
+        items.push(normalizeSummaryText(cells.join(" / ")));
+      }
+      continue;
+    }
+
+    paragraph.push(trimmed);
+  }
+
+  flushParagraph();
+  return items.filter((item) => item.length > 0);
+}
+
+function normalizeMarkdownHeadingText(text: string): string {
+  return text
+    .replace(/^\d+[.)、]\s*/, "")
+    .replace(/[*_`]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function normalizeSummaryText(text: string): string {
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .trim();
 }
 
 async function copyText(value: string): Promise<boolean> {
@@ -1105,6 +1449,7 @@ type MarkdownBlock =
   | { kind: "paragraph"; text: string }
   | { kind: "list"; items: string[] }
   | { kind: "code"; text: string }
+  | { kind: "table"; headers: string[]; rows: string[][] }
   | { kind: "rule" };
 
 function parseMarkdown(markdown: string): MarkdownBlock[] {
@@ -1128,7 +1473,8 @@ function parseMarkdown(markdown: string): MarkdownBlock[] {
     }
   }
 
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
     if (line.trim().startsWith("```")) {
       if (code === null) {
         flushParagraph();
@@ -1147,6 +1493,7 @@ function parseMarkdown(markdown: string): MarkdownBlock[] {
     }
 
     const trimmed = line.trim();
+    const nextTrimmed = lines[lineIndex + 1]?.trim() ?? "";
     if (trimmed.length === 0) {
       flushParagraph();
       flushList();
@@ -1157,6 +1504,25 @@ function parseMarkdown(markdown: string): MarkdownBlock[] {
       flushParagraph();
       flushList();
       blocks.push({ kind: "rule" });
+      continue;
+    }
+
+    if (isMarkdownTableRow(trimmed) && isMarkdownTableSeparator(nextTrimmed)) {
+      flushParagraph();
+      flushList();
+      const headers = parseMarkdownTableCells(trimmed);
+      const rows: string[][] = [];
+      lineIndex += 2;
+      while (lineIndex < lines.length) {
+        const rowText = lines[lineIndex].trim();
+        if (!isMarkdownTableRow(rowText) || isMarkdownTableSeparator(rowText)) {
+          lineIndex -= 1;
+          break;
+        }
+        rows.push(normalizeMarkdownTableRow(parseMarkdownTableCells(rowText), headers.length));
+        lineIndex += 1;
+      }
+      blocks.push({ kind: "table", headers, rows });
       continue;
     }
 
@@ -1189,4 +1555,31 @@ function parseMarkdown(markdown: string): MarkdownBlock[] {
     blocks.push({ kind: "code", text: code.join("\n") });
   }
   return blocks;
+}
+
+function isMarkdownTableRow(line: string): boolean {
+  return line.startsWith("|") && line.includes("|", 1);
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  if (!isMarkdownTableRow(line)) {
+    return false;
+  }
+  const cells = parseMarkdownTableCells(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")));
+}
+
+function parseMarkdownTableCells(line: string): string[] {
+  return line
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function normalizeMarkdownTableRow(cells: string[], length: number): string[] {
+  if (cells.length >= length) {
+    return cells.slice(0, length);
+  }
+  return [...cells, ...Array.from({ length: length - cells.length }, () => "")];
 }

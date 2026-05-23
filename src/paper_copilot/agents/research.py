@@ -124,6 +124,7 @@ class ResearchRun:
     cost: CostSnapshot
     session_path: Path
     events: tuple[Event, ...]
+    final_payload: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -492,6 +493,7 @@ async def run_research(
         cost=cost.snapshot(),
         session_path=store.path,
         events=tuple(events),
+        final_payload=final_payload,
     )
 
 
