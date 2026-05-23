@@ -802,6 +802,33 @@ unverified complexity reductions, ad-hoc framework labels, and guessed metric
 improvements. The next implementation slice should be a deterministic proposal
 checker before more prompt tuning.
 
+Checker checkpoint (2026-05-23): `agents.composer_proposal` adds a deterministic
+proposal checker at the final-output boundary. It strips known leading process
+chatter, records `final_output.proposal_check`, and appends a Chinese `质量检查`
+section when the proposal fails or was cleaned. The v1 rules check Chinese
+section headings, baseline strength plus improvement opening, exactly three
+distinct module papers, per-module citation and attachment/compatibility text,
+fallback pool closure, and unsupported implementation specifics such as guessed
+metric gains, training hyperparameters, complexity claims, or ad-hoc framework
+labels. A checker-enabled strict ReID rerun reached a valid Composer plan and
+Chinese report structure, then failed on one real unsupported implementation
+choice: combining MRIC loss from HOS-Net with 3M loss from the IEEE/AAAI module
+paper without citation support or hypothesis wording. Metric-claim checking was
+then narrowed so cited measured results are allowed; uncited or non-hypothesis
+projected gains still fail.
+
+Remediation checkpoint (2026-05-23): the final-report prompt and
+`composer_plan.final_report_contract` now require implementation specifics
+such as loss combinations, framework names, projected metric gains, complexity
+changes, optimizer choices, learning rates, batch sizes, and epoch counts to be
+either directly cited or moved to `风险与缺口` as `待验证假设` / expected
+observation. The checker uses the same boundary. Citation parsing now tolerates
+spaces inside brackets because the real rerun emitted `[ paper_id:field ]`; the
+same report passes after offline recomputation, with only a warning for stripped
+process chatter. The final clean strict ReID rerun now passes natively:
+`proposal_check.passed=true`, no issues, no stripped-chatter warning, exactly
+three distinct CCF A modules, and zero unsupported implementation specifics.
+
 ### M20: Local Web UI
 
 Goal: same agent, nicer shell.

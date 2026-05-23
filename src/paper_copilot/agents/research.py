@@ -32,6 +32,11 @@ from paper_copilot.agents.composer_plan import (
     ComposerDecisionAction,
     ComposerPlanState,
 )
+from paper_copilot.agents.composer_proposal import (
+    append_composer_check_section,
+    check_composer_proposal,
+    strip_leading_process_chatter,
+)
 from paper_copilot.agents.llm_client import DEFAULT_MODEL, LLMClient
 from paper_copilot.agents.loop import (
     AssistantMessage,
@@ -87,7 +92,8 @@ _REPORT_FALLBACK = (
     "Review the session trace for the last tool call and termination reason."
 )
 _EVIDENCE_REF_RE = re.compile(
-    r"\[(?P<paper_id>[A-Za-z0-9_-]{3,64}):(?P<field>[A-Za-z_][A-Za-z0-9_.\[\]-]*)\]"
+    r"\[\s*(?P<paper_id>[A-Za-z0-9_-]{3,64})\s*:\s*"
+    r"(?P<field>[A-Za-z_][A-Za-z0-9_.\[\]-]*)\s*\]"
 )
 _CLAIM_BOUNDARY_RE = re.compile(r"(?<=[.!?。！？])\s+")  # noqa: RUF001
 
@@ -447,23 +453,37 @@ async def run_research(
         events=events,
         context=context,
     )
+    removed_process_chatter: tuple[str, ...] = ()
+    if route.output_profile == "framework_composer":
+        report_markdown, removed_process_chatter = strip_leading_process_chatter(
+            report_markdown
+        )
     evidence_refs = _extract_evidence_refs(report_markdown)
     quality = _quality_summary(report_markdown, evidence_refs)
+    proposal_check = None
+    if route.output_profile == "framework_composer":
+        proposal_check = check_composer_proposal(
+            report_markdown,
+            context.composer_plan,
+            removed_process_chatter=removed_process_chatter,
+        )
+        report_markdown = append_composer_check_section(report_markdown, proposal_check)
 
-    store.append_final_output(
-        {
-            "topic": topic,
-            "request_route": route.to_payload(),
-            "termination_reason": termination_reason,
-            "report_markdown": report_markdown,
-            "evidence_refs": evidence_refs,
-            "quality": quality,
-            "cost": asdict(cost.snapshot()),
-            "paper_budget": _paper_budget_payload(context),
-            "composer_plan": context.composer_plan.to_payload(),
-            "termination_summary": asdict(termination_summary),
-        }
-    )
+    final_payload = {
+        "topic": topic,
+        "request_route": route.to_payload(),
+        "termination_reason": termination_reason,
+        "report_markdown": report_markdown,
+        "evidence_refs": evidence_refs,
+        "quality": quality,
+        "cost": asdict(cost.snapshot()),
+        "paper_budget": _paper_budget_payload(context),
+        "composer_plan": context.composer_plan.to_payload(),
+        "termination_summary": asdict(termination_summary),
+    }
+    if proposal_check is not None:
+        final_payload["proposal_check"] = proposal_check.to_payload()
+    store.append_final_output(final_payload)
     return ResearchRun(
         topic=topic,
         report_markdown=report_markdown,
@@ -1608,7 +1628,17 @@ def _quality_summary(
 
 
 def _quality_claim_section(report_markdown: str) -> str:
-    for title in ("Findings", "Proposed Composition", "Idea", "Why It Might Work"):
+    for title in (
+        "Findings",
+        "Proposed Composition",
+        "Idea",
+        "Why It Might Work",
+        "组合方案",
+        "核心方案",
+        "创新点",
+        "为什么可行",
+        "候选模块",
+    ):
         section = _markdown_section(report_markdown, title)
         if section:
             return section
@@ -1943,34 +1973,44 @@ def _final_report_guidance(route: ChatRoute) -> str:
     if route.output_profile == "framework_composer":
         return (
             "Task profile: framework_composer. When you have enough information, "
-            "stop calling tools and write a concise Markdown proposal with "
-            "these sections: Problem, Baseline, Candidate Modules, "
-            "Compatibility, Proposed Composition, Experiment Plan, Risks, "
-            "Evidence. This is a baseline-first workflow: first identify one "
+            "stop calling tools and write a concise Chinese Markdown proposal with "
+            "these Chinese sections: 问题定义, 强基线, 候选模块, "
+            "兼容性, 组合方案, 实验方案, 风险与缺口, 证据. "
+            "This is a baseline-first workflow: first identify one "
             "high-performing, reproducible baseline paper or method from the local "
             "library, then identify exactly 3 compatible modules or tricks from other "
             "papers, then propose a small composition that can be tested. Baseline "
             "must explain both why its performance makes it a high starting point "
             "and what clear improvement opening or story-worthy weakness remains; "
-            "Candidate Modules must contain exactly 3 accepted modules unless all "
+            "候选模块 must contain exactly 3 accepted modules unless all "
             "module pools have been searched and the final report is explicitly a "
             "gap report. Each module must come from a distinct paper_id; one module "
-            "paper can contribute at most one module. Candidate Modules should name "
-            "each module, source paper, and function. Candidate Modules must follow "
+            "paper can contribute at most one module. 候选模块 should name "
+            "each module, source paper, and function. 候选模块 must follow "
             "the pool priority: CCF A "
             "first, CCF B only when CCF A modules are unsuitable, and other "
             "only after both CCF A and CCF B are insufficient; "
-            "Compatibility should say where each module attaches to "
-            "the baseline and what might conflict; Proposed Composition should "
-            "state the actual modification. Experiment Plan should include "
-            "dataset/task, baseline, metric, and ablations when the evidence "
-            "supports them. "
-            "Evidence must include pool trace: baseline pool, module pool for "
+            "兼容性 should say where each module attaches to "
+            "the baseline and what might conflict; every 兼容性 row or bullet "
+            "must include the source paper_id so the checker can tie the "
+            "attachment point to the accepted module. 组合方案 should "
+            "state only modifications directly supported by citations. "
+            "实验方案 should include dataset/task, baseline, metric, and "
+            "ablations when the evidence supports them. Do not present "
+            "cross-paper loss combinations, new framework names, projected "
+            "metric gains, complexity changes, optimizer choices, learning "
+            "rates, batch sizes, or epoch counts as facts unless the exact "
+            "choice has a citation. If such a detail is useful but not "
+            "directly supported, move it to 风险与缺口 and label it as "
+            "待验证假设 / expected observation, not as the proposed method. "
+            "证据 must include pool trace: baseline pool, module pool for "
             "each selected module, and why any selected module did not come "
             "from a higher-priority pool. Do not write the final proposal until "
             "the latest composer_plan report_ready value is true, unless every "
             "module pool has been searched and the final report is explicitly "
             "a gap report. "
+            "Do not add any preamble such as 'Now I will write the proposal', "
+            "'报告已准备好', or markdown separators before the proposal title. "
             f"{evidence_rule} The final answer must be the proposal itself; "
             f"{language_rule} Keep the whole report under 900 words."
         )

@@ -669,7 +669,7 @@ def test_run_research_routes_framework_composer_prompt(tmp_path: Path) -> None:
     final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
 
     assert "Task profile: framework_composer" in initial.text
-    assert "Problem, Baseline, Candidate Modules" in initial.text
+    assert "问题定义, 强基线, 候选模块" in initial.text
     assert "baseline-first workflow" in initial.text
     assert final.payload["request_route"] == {
         "kind": "framework_composer",
@@ -678,6 +678,7 @@ def test_run_research_routes_framework_composer_prompt(tmp_path: Path) -> None:
         "reason": "matched_framework_composer_keyword",
     }
     assert final.payload["quality"]["findings_claim_count"] == 1
+    assert final.payload["proposal_check"]["passed"] is False
 
 
 def test_run_research_prefers_inspect_after_read_paper(tmp_path: Path) -> None:

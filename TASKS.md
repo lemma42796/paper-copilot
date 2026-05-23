@@ -69,8 +69,77 @@
   可以带着已知 grounding 风险进入 M19。M19 第一刀已把
   `ccf_a`→`ccf_b`→`other` 的本地资料库优先级写进工具约束;本轮补上
   deterministic plan/state 骨架,已经能拦截未按顺序 fallback;严格 3-module
-  真实重跑已通过,但还不是完整 proposal 质量评审/checker 闭环。
-- **最新编码进展**:**M19 deterministic Composer plan/state 骨架已接入**
+  真实重跑已通过。M19 proposal checker/remediation v1 已接入 session/report;
+  checker 启用后的 ReID 真实重跑已原生通过质量门:`proposal_check.passed=true`,
+  无 issues、无过程话术清理 warning。
+- **最新编码进展**:**M19 proposal remediation v1 已接入**
+  (2026-05-23)。在 checker 基础上继续收紧 Composer final report prompt 与
+  `composer_plan.final_report_contract`:跨论文拼出来的新损失组合、新框架命名、
+  指标提升、复杂度变化、optimizer/lr/batch/epoch 等 implementation specifics,
+  必须有 exact citation 支撑;否则只能放进 `风险与缺口` 并明确标为
+  `待验证假设` / `expected observation`,不能写成主方案事实。checker 同步改成
+  同一边界:无引用联合损失会 hard fail,但引用支撑或 hypothesis/risk 写法可通过。
+  同时把 evidence ref 解析从严格 `[paper_id:field]` 放宽为可容忍 bracket 内空格
+  的 `[ paper_id:field ]`,并扩展过程话术清理以覆盖"报告已准备就绪"和紧随的
+  markdown 分隔线。随后又补强兼容性检查:checker 可通过模块名/缩写把 compatibility
+  表格行关联回 accepted module;prompt/contract 要求每个 compatibility row/bullet
+  写 source paper_id。focused tests 增至 5 条,覆盖 spaced citation、chatter strip、
+  compatibility table mapping、无引用联合损失 fail、hypothesis pass。验证:
+  `uv run python -m py_compile ...` 通过,
+  `uv run pytest tests/agents/test_composer_proposal.py -q`(5 passed);未跑整套
+  `pytest` / `ruff` / `mypy`。
+- **最新真实重跑**:**M19 Composer remediation clean ReID rerun 通过质量门**
+  (2026-05-23)。命令同 strict 3-module ReID 任务:
+  `uv run paper-copilot research "基于可见光-红外行人重识别（VI-ReID），帮我找一个可做的创新点：先选一个性能强但仍有改进故事的强基线，再从本地 CCF A 论文里找 3 个可兼容模块，要求每篇 module 论文最多取一个模块，给出中文实验方案" --pdf-dir /Users/a123/paper-copilot-test-pdfs --max-turns 16 --budget-cny 1.2 --max-papers 6 --no-record-quality --no-update-report`。
+  成功结束:`termination=end_turn`,`cost=¥0.649416`,`events=35`,`papers=4/6`。
+  `proposal_check.passed=true`,`issues=[]`,`removed_process_chatter=[]`,
+  counts:`accepted_module_count=3`,`distinct_module_paper_count=3`,
+  `citation_paper_count=4`,`english_heading_count=0`,`unsupported_specific_count=0`。
+  `composer_plan.current_step=write_structured_proposal`,`report_ready=true`。
+  baseline 为 DiVE(`c8258c808553`),3 个 module 为
+  IDKL/IP(`6e870fa58055`)、HOS-Net/HSL(`80877d60f969`)、TokenMatcher/DTM
+  (`bf1ea703e53c`),均来自 CCF A 且不同 paper。最终 report 没有 `质量检查`
+  失败小节;损失融合/复杂度/资源需求等均转入 `风险与缺口` 并标为 hypothesis。
+  session:
+  `/Users/a123/.paper-copilot/papers/research-20260523T101050194694Z-f1574e90/session.jsonl`;
+  report:
+  `/Users/a123/.paper-copilot/papers/research-20260523T101050194694Z-f1574e90/research-report.md`。
+- **上一编码进展**:**M19 proposal quality checker v1 已接入**
+  (2026-05-23)。新增 `agents.composer_proposal` 纯规则 checker,只在
+  `framework_composer` final output 边界运行,不新增 LLM call 或依赖。checker 会
+  先移除最终报告开头的已知 agent 过程话术,再检查:中文 report + 中文 section
+  标题、baseline 是否有性能强证据与 improvement/story opening、accepted modules
+  是否正好 3 个且来自不同 paper、每个 module 是否在 report 中带 citation 与
+  attachment/compatibility 说明、低优先级 pool 是否有 fallback 关闭记录、以及
+  指标提升/训练超参/复杂度变化/MRIC-like 等 implementation specifics 是否缺
+  citation 或没有标成 hypothesis/expected observation。检查结果写入
+  `final_output.proposal_check`;未通过或移除过过程话术时会在 `research-report.md`
+  末尾追加 `质量检查` 小节。Composer final report contract 和 prompt 已改为中文
+  section:问题定义 / 强基线 / 候选模块 / 兼容性 / 组合方案 / 实验方案 /
+  风险与缺口 / 证据。
+  补了 focused checker tests 作为规则说明。按当前验证策略只跑了
+  `uv run python -m py_compile ...` 和
+  `uv run pytest tests/agents/test_composer_proposal.py -q`(2 passed);未跑整套
+  `pytest` / `ruff` / `mypy`。
+- **上一失败重跑**:**M19 Composer checker-enabled ReID rerun 未过质量门**
+  (2026-05-23)。命令:
+  `uv run paper-copilot research "基于可见光-红外行人重识别（VI-ReID），帮我找一个可做的创新点：先选一个性能强但仍有改进故事的强基线，再从本地 CCF A 论文里找 3 个可兼容模块，要求每篇 module 论文最多取一个模块，给出中文实验方案" --pdf-dir /Users/a123/paper-copilot-test-pdfs --max-turns 16 --budget-cny 1.2 --max-papers 6 --no-record-quality --no-update-report`。
+  成功结束:`termination=end_turn`,`cost=¥0.8191068`,`events=35`,`papers=4/6`。
+  trace 最终 `composer_plan.current_step=write_structured_proposal`,
+  `report_ready=true`;baseline 为 DiVE(`c8258c808553`),3 个 module 为
+  HSL(`80877d60f969`)、IP(`6e870fa58055`)、CIM(`9e5acb459b0e`),均来自不同
+  CCF A 论文。输出已是中文 section,没有开头过程话术,accepted modules 数量与
+  distinct paper 约束通过。原始落盘 checker 报 3 条 unsupported,其中两条是带
+  citation 的真实性能数字误报;随后已把 checker 收窄为"metric claim 只有在缺
+  citation 且未标成 hypothesis/expected observation 时才拦",并对同一 report
+  离线重算为 1 条 true issue:`联合优化:融合 MRIC 损失(来自 HOS-Net)与 3M 损失
+  (来自 IEEE)` 没有 citation/structured-field 支撑,也没有标为假设。session:
+  `/Users/a123/.paper-copilot/papers/research-20260523T090430390070Z-f1574e90/session.jsonl`;
+  report:
+  `/Users/a123/.paper-copilot/papers/research-20260523T090430390070Z-f1574e90/research-report.md`。
+  下一刀应让 final report 生成/后处理把这种跨论文损失拼接和新框架命名降级为
+  hypothesis/risk,或要求每个具体 implementation choice 都带引用。
+- **上一编码进展**:**M19 deterministic Composer plan/state 骨架已接入**
   (2026-05-22)。新增 `agents.composer_plan` 记录 Composer workflow state:
   `list_composer_library` → CCF A baseline search → baseline inspect/select →
   CCF A module search → module suitability/compatibility decision → 必要时

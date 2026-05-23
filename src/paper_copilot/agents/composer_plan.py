@@ -295,25 +295,32 @@ class ComposerPlanState:
             "inspected_paper_ids": sorted(self.inspected_paper_ids),
             "final_report_contract": {
                 "sections": [
-                    "Problem",
-                    "Baseline",
-                    "Candidate Modules",
-                    "Compatibility",
-                    "Proposed Composition",
-                    "Experiment Plan",
-                    "Risks",
-                    "Evidence",
+                    "问题定义",
+                    "强基线",
+                    "候选模块",
+                    "兼容性",
+                    "组合方案",
+                    "实验方案",
+                    "风险与缺口",
+                    "证据",
                 ],
                 "must_include": [
-                    "Chinese-language final report",
+                    "Chinese-language final report with Chinese section headings",
                     "baseline paper_id and pool",
                     "baseline performance strength",
                     "baseline improvement opening or story-worthy weakness",
                     "exactly 3 selected module paper_ids and pools",
                     "each accepted module comes from a distinct paper_id",
                     "attachment point for each accepted module",
+                    "source paper_id in every compatibility row or bullet",
                     "fallback reason for any module below ccf_a",
                     "citation refs for concrete claims",
+                    (
+                        "implementation specifics such as new loss combinations, "
+                        "framework names, metric gains, training hyperparameters, "
+                        "or complexity changes must be cited or explicitly marked "
+                        "as hypotheses/gaps"
+                    ),
                 ],
             },
         }
