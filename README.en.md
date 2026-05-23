@@ -22,6 +22,7 @@ ideas are easier to verify.
 
 ## Contents
 
+- [Frontend Demo](#frontend-demo)
 - [Status](#status)
 - [Features](#features)
 - [Quick Start](#quick-start)
@@ -35,20 +36,49 @@ ideas are easier to verify.
 - [Known Limitations](#known-limitations)
 - [Contributing](#contributing)
 
+## Frontend Demo
+
+The screenshots below cover the main frontend surface: natural-language
+research input, local-library status, report history, Research Idea Composer,
+evidence lookup, and knowledge-QA reports.
+
+### Research Workbench and Local Library
+
+![Paper Copilot research workbench: natural-language input, report history, local-library status, and API connection status](docs/assets/paper-copilot-workbench.jpg)
+
+### Research Idea Composer
+
+![Paper Copilot Composer: Chinese research proposal, candidate-module table, and structured Composer summary](docs/assets/paper-copilot-composer.jpg)
+
+### Evidence Reference Lookup
+
+![Paper Copilot evidence panel: clicking an evidence ref in the report opens field evidence details](docs/assets/paper-copilot-evidence.jpg)
+
+### Knowledge-QA Report
+
+![Paper Copilot knowledge-QA report: cross-paper answer, run metadata, and report history](docs/assets/paper-copilot-qa-report.jpg)
+
 ## Status
 
-Current status is synced from `TASKS.md`, last updated on 2026-05-21.
+Current status is synced from `TASKS.md`, last updated on 2026-05-23.
 
 Paper Copilot has moved toward a local chat-first research assistant:
 
 - The local API runs via `paper-copilot serve`; the main runtime endpoint is
   `POST /chat`.
 - `apps/web/` contains a Next.js macOS-style chat shell with library selection,
-  report history, route/status display, cost display, and evidence inspection.
+  report history, route/status display, cost display, Composer summaries, and
+  evidence inspection.
 - Retrieval now uses DashScope `text-embedding-v4` with FTS5/BM25 + vector RRF +
   multi-chunk evidence; previously computed text embeddings are reused from a
   local cache to avoid repeated model calls.
 - The current local test library contains 34 papers / 2066 chunks.
+- M19 Research Idea Composer now includes local-library-first tool constraints,
+  deterministic plan/state, a proposal checker, field/chunk evidence lookup, and
+  Markdown table rendering in reports.
+- Current validation boundary: the VI-ReID single-case demo passes the quality
+  gate cleanly; the 2-3 fixed-task cross-task acceptance suite was intentionally
+  skipped, so this is not claimed as stable across tasks yet.
 
 Current retrieval gate:
 
@@ -58,9 +88,10 @@ Current retrieval gate:
 | paper `recall@10` | 100.0% | Paper-level recall is good enough for now |
 | paper `precision@5` | 32.8% | Relevant papers among topK |
 | paper `precision@10` | 16.9% | Expected to drop as topK expands |
-| evidence `recall@5` | 82.1% | Mean over 13 anchor-labeled queries; exact + semantic window match |
-| evidence `recall@10` | 84.6% | Evidence chunk coverage still needs work after paper-level hits |
-| evidence anchor `precision@5` | 43.6% | Anchor/semantic-window hit metric, not full relevance |
+| evidence `recall@5` | 87.2% | Mean over 13 anchor-labeled queries; exact + semantic window match |
+| evidence `recall@10` | 89.7% | Evidence chunk coverage remains a known grounding risk |
+| evidence anchor `precision@5` | 44.9% | Anchor/semantic-window hit metric, not full relevance |
+| evidence anchor `precision@10` | 45.3% | Same metric boundary; unlabeled chunks are not full relevance judgments |
 
 This is still an experimental, local-first, personal-library tool. The intended
 scale is roughly 50-100 papers, not a hosted SaaS, multi-user platform, or
@@ -95,10 +126,16 @@ open-ended autonomous literature reviewer.
 Given a research direction, Paper Copilot can:
 
 1. Select a strong baseline.
-2. Find 2-3 potentially compatible modules from the local library.
-3. Analyze compatibility and risks.
-4. Compose a baseline + modules model-framework draft.
-5. Suggest ablations and cite evidence.
+2. Search candidate modules with a CCF A -> CCF B -> Other local-library-first
+   priority.
+3. Use deterministic Composer plan/state to constrain baseline selection, module
+   selection, and fallback order.
+4. Analyze compatibility, attachment points, and risks.
+5. Compose a baseline + modules model-framework draft with ablations and
+   evidence citations.
+6. Use a proposal checker to catch unsupported metric gains, training
+   hyperparameters, complexity changes, and similar claims, then downgrade
+   uncertain content into hypotheses.
 
 The output is a verifiable research draft, not a finished paper and not proof of
 effectiveness.
@@ -355,11 +392,12 @@ Near-term work is tracked in [TASKS.md](TASKS.md).
 
 Current priorities:
 
-1. Improve evidence chunk selection before changing paper-level ranking.
-2. Track evidence pool recall, final evidence recall, and evidence anchor
-   precision together.
-3. After grounding risk is bounded, continue the M19 minimum loop for more
-   stable "research direction -> model-framework draft" generation.
+1. Freeze the current feature surface and focus on README, demo screenshots, and
+   resume-ready project framing.
+2. Keep the local-library-first Composer ReID demo easy to show, while naming the
+   cross-task generalization boundary clearly.
+3. If development continues, add fixed Composer task acceptance, frontend
+   retrieval miss/top-k diagnostics, and manual unsupported-claim sampling.
 
 ## Known Limitations
 
@@ -367,8 +405,10 @@ Current priorities:
 - No internet paper discovery in the core runtime; it works from local PDFs and
   local indexes.
 - No cross-encoder or LLM reranker in the active retrieval path.
-- Evidence chunk selection is still a weak point; generated claims are not all
-  fully grounded yet.
+- Evidence grounding is still a known risk; generated claims are not all fully
+  grounded yet.
+- Research Idea Composer currently has one clean VI-ReID demo, but no multi-task
+  stability acceptance suite.
 - Some eval suites depend on local PDFs that are not shipped with the repository.
 
 ## Contributing
