@@ -44,19 +44,19 @@ evidence lookup, and knowledge-QA reports.
 
 ### Research Workbench and Local Library
 
-![Paper Copilot research workbench: natural-language input, report history, local-library status, and API connection status](docs/assets/paper-copilot-workbench.jpg)
+![Paper Copilot research workbench: natural-language input, report history, local-library status, and API connection status](docs/assets/paper-copilot-workbench.png)
 
 ### Research Idea Composer
 
-![Paper Copilot Composer: Chinese research proposal, candidate-module table, and structured Composer summary](docs/assets/paper-copilot-composer.jpg)
+![Paper Copilot Composer: Chinese research proposal, candidate-module table, and structured Composer summary](docs/assets/paper-copilot-composer.png)
 
 ### Evidence Reference Lookup
 
-![Paper Copilot evidence panel: clicking an evidence ref in the report opens field evidence details](docs/assets/paper-copilot-evidence.jpg)
+![Paper Copilot evidence panel: clicking an evidence ref in the report opens field evidence details](docs/assets/paper-copilot-evidence.png)
 
 ### Knowledge-QA Report
 
-![Paper Copilot knowledge-QA report: cross-paper answer, run metadata, and report history](docs/assets/paper-copilot-qa-report.jpg)
+![Paper Copilot knowledge-QA report: cross-paper answer, run metadata, and report history](docs/assets/paper-copilot-qa-report.png)
 
 ## Status
 

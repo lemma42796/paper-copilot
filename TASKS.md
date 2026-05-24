@@ -8,7 +8,7 @@
 
 ## Current Status
 
-> 更新于 2026-05-23。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
+> 更新于 2026-05-24。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
 - **已完成**:M1–M15(Session A + B 全部 done)。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
@@ -75,7 +75,16 @@
   2-3 个固定 Composer 任务的多任务验收套件;当前只能声明 ReID 单例 demo
   clean 通过,不能声明 M19 已跨任务稳定泛化。后续继续推进时,把该风险作为
   已知边界,不要再为跳过的验收补跑真实任务,除非用户重新要求。
-- **最新编码进展**:**报告 Markdown 表格渲染已接入**
+- **最新交接**:**README demo 截图已换成 4K PNG**
+  (2026-05-24)。`README.md` / `README.en.md` 的 4 张前端截图已从
+  1280x720 JPG 切到 3840x2160 PNG:`paper-copilot-workbench.png` /
+  `paper-copilot-composer.png` / `paper-copilot-evidence.png` /
+  `paper-copilot-qa-report.png`。截图来自本地 production Next.js 页面 +
+  `paper-copilot serve` API,复用了历史报告/证据数据,没有触发新的真实
+  `/chat` 或 LLM 调用。验证:`npm run build`(apps/web) 通过,
+  `git diff --check -- README.md README.en.md` 通过;未跑 `pytest` /
+  `ruff` / `mypy`。旧 1280x720 JPG 已不再被 README 引用。
+- **上一编码进展**:**报告 Markdown 表格渲染已接入**
   (2026-05-23)。Next.js 简易 Markdown renderer 现在支持 GFM 风格表格:
   `| header |` + `|---|` 会渲染成横向可滚动的 `<table>`,单元格里的 evidence refs
   仍走同一套可点击证据反查。已用历史 ReID demo 报告验证 `候选模块` 表格显示为
