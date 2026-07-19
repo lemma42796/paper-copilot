@@ -8,8 +8,11 @@ from typing import Any
 
 from paper_copilot.agents.llm_client import LLMClient
 from paper_copilot.agents.loop import LLMClientProtocol
-from paper_copilot.agents.research import ResearchRun, ResearchToolContext, run_research
-from paper_copilot.chat.router import ChatRoute, route_chat_request
+from paper_copilot.agents.paper_copilot import (
+    PaperCopilotContext,
+    PaperCopilotRun,
+    run_paper_copilot,
+)
 from paper_copilot.eval._paths import default_report_path
 from paper_copilot.eval.report import write_report
 from paper_copilot.eval.runs import load_history, write_research_quality_run
@@ -25,7 +28,6 @@ from paper_copilot.shared.errors import KnowledgeError
 @dataclass(frozen=True, slots=True)
 class ChatRunResult:
     request: str
-    route: ChatRoute
     report_markdown: str
     session_path: Path
     report_path: Path
@@ -64,13 +66,6 @@ async def handle_chat_request(
     fields_db = home / "fields.db"
     embeddings_db = home / "embeddings.db"
     meta_path = home / "embeddings_meta.json"
-    if not fields_db.exists() and library_dir is None:
-        raise KnowledgeError(
-            f"index missing at {fields_db}. "
-            "Run `paper-copilot reindex --pdf-dir <dir>` first."
-        )
-
-    route = route_chat_request(request)
     embedder: EmbeddingEncoder | None = None
     with ExitStack() as stack:
         fields_store = stack.enter_context(FieldsStore.open(fields_db))
@@ -105,7 +100,7 @@ async def handle_chat_request(
 
         client = llm if llm is not None else LLMClient()
         read_client = read_llm if read_llm is not None else _read_client(client)
-        context = ResearchToolContext(
+        context = PaperCopilotContext(
             fields_store=fields_store,
             embeddings_store=embeddings_store,
             encode_query=(
@@ -116,8 +111,8 @@ async def handle_chat_request(
             root=home,
             max_papers=max_papers,
         )
-        run = await run_research(
-            topic=request,
+        run = await run_paper_copilot(
+            prompt=request,
             llm=client,
             read_llm=read_client,
             context=context,
@@ -128,7 +123,6 @@ async def handle_chat_request(
 
     return _persist_chat_result(
         request=request,
-        route=route,
         run=run,
         record_quality=record_quality,
         update_report=update_report,
@@ -140,8 +134,7 @@ async def handle_chat_request(
 def _persist_chat_result(
     *,
     request: str,
-    route: ChatRoute,
-    run: ResearchRun,
+    run: PaperCopilotRun,
     record_quality: bool,
     update_report: bool,
     runs_dir: Path | None,
@@ -152,7 +145,7 @@ def _persist_chat_result(
 
     quality_run_path: Path | None = None
     eval_report_path: Path | None = None
-    if record_quality:
+    if record_quality and run.tool_names:
         quality_run_path = write_research_quality_run(run.session_path, runs_dir=runs_dir)
         if update_report:
             eval_report_path = write_report(
@@ -162,7 +155,6 @@ def _persist_chat_result(
 
     return ChatRunResult(
         request=request,
-        route=route,
         report_markdown=run.report_markdown,
         session_path=run.session_path,
         report_path=report_path,

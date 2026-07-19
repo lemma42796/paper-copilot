@@ -1,4 +1,4 @@
-"""Reusable single-paper read pipeline for CLI and ResearchAgent tools."""
+"""Reusable single-paper read pipeline for CLI and Paper Copilot tools."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Literal
 
 from paper_copilot.agents.llm_client import LLMClient
 from paper_copilot.agents.loop import LLMResponse
-from paper_copilot.agents.main import MainAgent
+from paper_copilot.agents.read_paper_tool import ReadPaperTool
 from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.knowledge.graph_store import append_links
@@ -51,8 +51,8 @@ async def run_read_pipeline(
     paper_id = compute_paper_id(pdf_path)
     home = root if root is not None else default_root()
 
-    agent = MainAgent(client, root=home)
-    run = await agent.run(
+    tool = ReadPaperTool(client, root=home)
+    run = await tool.run(
         pdf_path,
         language=language,
         embedder=embedder,

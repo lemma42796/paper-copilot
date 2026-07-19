@@ -1,6 +1,6 @@
 """Single convergence point for all LLM calls (Dashscope Anthropic-compat endpoint).
 
-All agents in this project route LLM calls through `LLMClient.generate`. The
+Paper Copilot and its LLM-backed tools call models through `LLMClient.generate`. The
 model id is pinned here as a `Final[str]`; any other module hard-coding
 'qwen3.6-flash' is a boundary violation (see ARCHITECTURE.md "Cost discipline").
 

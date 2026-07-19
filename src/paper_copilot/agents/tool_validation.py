@@ -22,7 +22,7 @@ class ValidatedToolCall[T: BaseModel]:
 async def call_validated_tool[ToolInputT: BaseModel](
     client: LLMClient,
     *,
-    agent_name: str,
+    component_name: str,
     model: str,
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
@@ -44,7 +44,12 @@ async def call_validated_tool[ToolInputT: BaseModel](
             max_tokens=max_tokens,
         )
         responses.append(response)
-        _record_response(store, agent_name=agent_name, model=model, response=response)
+        _record_response(
+            store,
+            component_name=component_name,
+            model=model,
+            response=response,
+        )
 
         block = _single_tool_block(response, tool_name)
         try:
@@ -59,7 +64,7 @@ async def call_validated_tool[ToolInputT: BaseModel](
                 )
             if attempt >= max_schema_retries:
                 raise SchemaValidationError(
-                    f"{agent_name} schema validation failed for {tool_name!r} "
+                    f"{component_name} schema validation failed for {tool_name!r} "
                     f"after {attempt + 1} attempts: {error}"
                 ) from exc
             if store is not None:
@@ -80,7 +85,7 @@ async def call_validated_tool[ToolInputT: BaseModel](
 def _record_response(
     store: SessionStore | None,
     *,
-    agent_name: str,
+    component_name: str,
     model: str,
     response: LLMResponse,
 ) -> None:
@@ -88,7 +93,7 @@ def _record_response(
         return
     usage: UsageLike = response.usage if response.usage is not None else {}
     store.append_llm_call(
-        agent=agent_name,
+        agent=component_name,
         model=model,
         usage=usage,
         latency_ms=response.latency_ms,

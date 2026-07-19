@@ -6,8 +6,8 @@ original PDF path, so embeddings reindex is opt-in: the caller points at
 a directory, we hash-match each PDF to its ``paper_id`` (same sha1 scheme
 as ``compute_paper_id``) and re-extract sections on the fly.
 
-Skeleton is recovered from the SkimAgent's ``emit_skim`` tool_use entry
-inside ``session.jsonl``. That avoids paying for another SkimAgent run,
+Skeleton is recovered from SkimPaperTool's ``emit_skim`` tool_use entry
+inside ``session.jsonl``. That avoids paying for another SkimPaperTool run,
 and keeps reindex a pure index-rebuild step (no LLM cost).
 
 Tolerates schema drift in historical payloads — fields_store holds raw

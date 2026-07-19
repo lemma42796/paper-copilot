@@ -1,4 +1,4 @@
-"""ResearchAgent: bounded tool loop for chat-first research tasks."""
+"""Paper Copilot's bounded tool loop."""
 
 from __future__ import annotations
 
@@ -47,11 +47,11 @@ from paper_copilot.agents.loop import (
     TextBlock,
     ToolResult,
     ToolResultData,
+    ToolUse,
     ToolUseRequest,
     run_agent_loop,
 )
 from paper_copilot.agents.read_pipeline import ReadPipelineRun, run_read_pipeline
-from paper_copilot.chat.router import ChatRoute, route_chat_request
 from paper_copilot.knowledge.compare import build_compare_payload
 from paper_copilot.knowledge.embeddings_store import ChunkHit, EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore, PaperRow, available_fields
@@ -69,26 +69,33 @@ from paper_copilot.shared.embedding_cache import EmbeddingEncoder
 from paper_copilot.shared.errors import KnowledgeError, PaperCopilotError
 
 __all__ = [
-    "ResearchRun",
-    "ResearchTerminationSummary",
-    "ResearchToolContext",
-    "dispatch_research_tool",
-    "dispatch_research_tool_async",
-    "research_tools",
-    "run_research",
+    "PaperCopilotContext",
+    "PaperCopilotRun",
+    "PaperCopilotTerminationSummary",
+    "dispatch_paper_copilot_tool",
+    "dispatch_paper_copilot_tool_async",
+    "paper_copilot_tools",
+    "run_paper_copilot",
 ]
 
-_AGENT_NAME = "ResearchAgent"
+_AGENT_NAME = "PaperCopilot"
 _MAX_LIST_LIMIT = 20
 _MAX_SEARCH_K = 10
 _MAX_SEARCH_CHUNKS_PER_PAPER = 5
 _MAX_EVIDENCE_POOL_PER_PAPER = 50
 _MAX_INSPECT_ITEMS = 8
 _MAX_RELATED_K = 10
-_RESEARCH_MAX_TOKENS = 3000
+_MAX_TOKENS = 3000
+_COMPOSER_TOOL_NAMES = frozenset(
+    {
+        "list_composer_library",
+        "search_composer_candidates",
+        "update_composer_plan",
+    }
+)
 _REPORT_FALLBACK = (
     "## Incomplete\n\n"
-    "The research loop stopped before producing a final synthesis report. "
+    "Paper Copilot stopped before producing a final response. "
     "Review the session trace for the last tool call and termination reason."
 )
 _EVIDENCE_REF_RE = re.compile(
@@ -102,7 +109,7 @@ type QueryEncoder = Callable[[str], np.ndarray]
 
 
 @dataclass(frozen=True, slots=True)
-class ResearchToolContext:
+class PaperCopilotContext:
     fields_store: FieldsStore
     embeddings_store: EmbeddingsStore | None = None
     encode_query: QueryEncoder | None = None
@@ -116,19 +123,21 @@ class ResearchToolContext:
 
 
 @dataclass(frozen=True, slots=True)
-class ResearchRun:
-    topic: str
+class PaperCopilotRun:
+    prompt: str
     report_markdown: str
     termination_reason: str
-    termination_summary: ResearchTerminationSummary
+    termination_summary: PaperCopilotTerminationSummary
     cost: CostSnapshot
     session_path: Path
     events: tuple[Event, ...]
+    tool_names: tuple[str, ...]
+    composer_used: bool
     final_payload: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
-class ResearchTerminationSummary:
+class PaperCopilotTerminationSummary:
     reason: str
     cost_cny: float
     events_count: int
@@ -390,26 +399,26 @@ class _ReadTarget:
     pdf_path: Path | None
 
 
-async def run_research(
+async def run_paper_copilot(
     *,
-    topic: str,
+    prompt: str,
     llm: LLMClientProtocol,
-    context: ResearchToolContext,
+    context: PaperCopilotContext,
     root: Path | None = None,
     max_turns: int = 16,
     max_budget_cny: float = 2.0,
     read_llm: LLMClient | None = None,
-) -> ResearchRun:
-    session_id = _research_session_id(topic)
+) -> PaperCopilotRun:
+    session_id = _paper_copilot_session_id(prompt)
     store = SessionStore.create(
         session_id,
         model=DEFAULT_MODEL,
         agent=_AGENT_NAME,
         root=root,
     )
-    route = route_chat_request(topic)
-    initial_user_text = _build_initial_user_text(topic, context, route)
-    store.append_message(role="user", text=initial_user_text)
+    system_prompt = _build_system_prompt(context)
+    store.append_system_message(system_prompt)
+    store.append_message(role="user", text=prompt)
 
     cost = CostTracker(pricing=pricing_for_model(DEFAULT_MODEL))
     events: list[Event] = []
@@ -417,7 +426,7 @@ async def run_research(
     report_markdown = _REPORT_FALLBACK
 
     async def dispatch(req: ToolUseRequest) -> ToolResultData:
-        return await dispatch_research_tool_async(
+        return await dispatch_paper_copilot_tool_async(
             req,
             context,
             read_llm=read_llm,
@@ -426,12 +435,12 @@ async def run_research(
         )
 
     async for event in run_agent_loop(
-        messages=[{"role": "user", "content": initial_user_text}],
-        tools=research_tools(),
+        messages=[{"role": "user", "content": prompt}],
+        tools=paper_copilot_tools(),
         config=LoopConfig(
             max_turns=max_turns,
             max_budget_cny=max_budget_cny,
-            max_tokens=_RESEARCH_MAX_TOKENS,
+            max_tokens=_MAX_TOKENS,
         ),
         llm=llm,
         dispatch_tool=dispatch,
@@ -439,6 +448,7 @@ async def run_research(
         store=store,
         agent_name=_AGENT_NAME,
         model=DEFAULT_MODEL,
+        system=system_prompt,
     ):
         events.append(event)
         if isinstance(event, AssistantMessage):
@@ -454,15 +464,17 @@ async def run_research(
         events=events,
         context=context,
     )
+    tool_names = tuple(event.name for event in events if isinstance(event, ToolUse))
+    composer_used = any(name in _COMPOSER_TOOL_NAMES for name in tool_names)
     removed_process_chatter: tuple[str, ...] = ()
-    if route.output_profile == "framework_composer":
+    if composer_used:
         report_markdown, removed_process_chatter = strip_leading_process_chatter(
             report_markdown
         )
     evidence_refs = _extract_evidence_refs(report_markdown)
-    quality = _quality_summary(report_markdown, evidence_refs)
+    quality = _quality_summary(report_markdown, evidence_refs) if tool_names else None
     proposal_check = None
-    if route.output_profile == "framework_composer":
+    if composer_used:
         proposal_check = check_composer_proposal(
             report_markdown,
             context.composer_plan,
@@ -471,33 +483,37 @@ async def run_research(
         report_markdown = append_composer_check_section(report_markdown, proposal_check)
 
     final_payload = {
-        "topic": topic,
-        "request_route": route.to_payload(),
+        "prompt": prompt,
         "termination_reason": termination_reason,
         "report_markdown": report_markdown,
         "evidence_refs": evidence_refs,
-        "quality": quality,
+        "tool_names": list(tool_names),
         "cost": asdict(cost.snapshot()),
         "paper_budget": _paper_budget_payload(context),
-        "composer_plan": context.composer_plan.to_payload(),
         "termination_summary": asdict(termination_summary),
     }
+    if quality is not None:
+        final_payload["quality"] = quality
+    if composer_used:
+        final_payload["composer_plan"] = context.composer_plan.to_payload()
     if proposal_check is not None:
         final_payload["proposal_check"] = proposal_check.to_payload()
     store.append_final_output(final_payload)
-    return ResearchRun(
-        topic=topic,
+    return PaperCopilotRun(
+        prompt=prompt,
         report_markdown=report_markdown,
         termination_reason=termination_reason,
         termination_summary=termination_summary,
         cost=cost.snapshot(),
         session_path=store.path,
         events=tuple(events),
+        tool_names=tool_names,
+        composer_used=composer_used,
         final_payload=final_payload,
     )
 
 
-def research_tools() -> list[dict[str, Any]]:
+def paper_copilot_tools() -> list[dict[str, Any]]:
     return [
         _tool_schema(
             "list_papers",
@@ -603,7 +619,7 @@ def research_tools() -> list[dict[str, Any]]:
         _tool_schema(
             "find_related_papers",
             (
-                "Find papers already linked to an indexed paper by RelatedAgent. "
+                "Find papers already linked by LinkRelatedPapersTool. "
                 "Reads the local cross-paper link graph and fields index without "
                 "calling an LLM. Use this to expand from one relevant paper to "
                 "nearby candidates before inspecting or comparing them; do not use "
@@ -614,7 +630,10 @@ def research_tools() -> list[dict[str, Any]]:
     ]
 
 
-def dispatch_research_tool(req: ToolUseRequest, context: ResearchToolContext) -> ToolResultData:
+def dispatch_paper_copilot_tool(
+    req: ToolUseRequest,
+    context: PaperCopilotContext,
+) -> ToolResultData:
     try:
         match req.name:
             case "list_papers":
@@ -655,16 +674,16 @@ def dispatch_research_tool(req: ToolUseRequest, context: ResearchToolContext) ->
         return _err(str(exc))
 
 
-async def dispatch_research_tool_async(
+async def dispatch_paper_copilot_tool_async(
     req: ToolUseRequest,
-    context: ResearchToolContext,
+    context: PaperCopilotContext,
     *,
     read_llm: LLMClient | None,
     cost: CostTracker,
     max_budget_cny: float,
 ) -> ToolResultData:
     if req.name != "read_paper":
-        return dispatch_research_tool(req, context)
+        return dispatch_paper_copilot_tool(req, context)
     try:
         read_args = _ReadPaperInput.model_validate(req.input)
         payload = await _read_paper_async(
@@ -679,7 +698,7 @@ async def dispatch_research_tool_async(
         return _err(str(exc))
 
 
-def _list_papers(args: _ListPapersInput, context: ResearchToolContext) -> dict[str, Any]:
+def _list_papers(args: _ListPapersInput, context: PaperCopilotContext) -> dict[str, Any]:
     rows = context.fields_store.list_all(year=args.year)
     return {
         "count": len(rows),
@@ -688,7 +707,7 @@ def _list_papers(args: _ListPapersInput, context: ResearchToolContext) -> dict[s
     }
 
 
-def _list_pdfs(args: _ListPdfsInput, context: ResearchToolContext) -> dict[str, Any]:
+def _list_pdfs(args: _ListPdfsInput, context: PaperCopilotContext) -> dict[str, Any]:
     if context.pdf_dir is None:
         raise KnowledgeError("no --pdf-dir was provided for this research run")
     if not context.pdf_dir.exists():
@@ -714,7 +733,7 @@ def _list_pdfs(args: _ListPdfsInput, context: ResearchToolContext) -> dict[str, 
     return {"count": len(pdfs), "returned": len(rows), "pdfs": rows}
 
 
-def _resolve_read_target(args: _ReadPaperInput, context: ResearchToolContext) -> _ReadTarget:
+def _resolve_read_target(args: _ReadPaperInput, context: PaperCopilotContext) -> _ReadTarget:
     if args.pdf_path is not None:
         pdf_path = _resolve_pdf_path(args.pdf_path, context)
         return _ReadTarget(paper_id=compute_paper_id(pdf_path), pdf_path=pdf_path)
@@ -728,7 +747,7 @@ def _resolve_read_target(args: _ReadPaperInput, context: ResearchToolContext) ->
     )
 
 
-def _resolve_pdf_path(path: Path, context: ResearchToolContext) -> Path:
+def _resolve_pdf_path(path: Path, context: PaperCopilotContext) -> Path:
     if context.pdf_dir is None:
         raise KnowledgeError("read_paper requires --pdf-dir for pdf_path inputs")
     pdf_dir = context.pdf_dir.resolve()
@@ -749,7 +768,7 @@ def _resolve_pdf_path(path: Path, context: ResearchToolContext) -> Path:
     return candidate
 
 
-def _find_pdf_by_id(paper_id: str, context: ResearchToolContext) -> Path | None:
+def _find_pdf_by_id(paper_id: str, context: PaperCopilotContext) -> Path | None:
     if context.pdf_dir is None or not context.pdf_dir.exists():
         return None
     for path in _pdfs_under(context.pdf_dir):
@@ -770,7 +789,7 @@ def _relative_pdf_path(path: Path, pdf_dir: Path) -> str:
     return str(path.resolve().relative_to(pdf_dir.resolve()))
 
 
-def _already_read_payload(row: PaperRow, context: ResearchToolContext) -> dict[str, Any]:
+def _already_read_payload(row: PaperRow, context: PaperCopilotContext) -> dict[str, Any]:
     pdir = paper_dir(row.paper_id, context.root)
     report_path = pdir / "report.md"
     session_path = pdir / "session.jsonl"
@@ -793,7 +812,7 @@ def _needs_user_action_payload(
     paper_id: str,
     *,
     reason: str,
-    context: ResearchToolContext,
+    context: PaperCopilotContext,
     pdf_path: Path | None = None,
 ) -> dict[str, Any]:
     command = (
@@ -817,7 +836,7 @@ def _record_read_cost(cost: CostTracker, read_run: ReadPipelineRun) -> None:
             cost.record(response.usage)
 
 
-def _read_paper(args: _ReadPaperInput, context: ResearchToolContext) -> dict[str, Any]:
+def _read_paper(args: _ReadPaperInput, context: PaperCopilotContext) -> dict[str, Any]:
     target = _resolve_read_target(args, context)
     _reserve_papers(context, [target.paper_id])
 
@@ -842,7 +861,7 @@ def _read_paper(args: _ReadPaperInput, context: ResearchToolContext) -> dict[str
 
 def _list_composer_library(
     args: _ListComposerLibraryInput,
-    context: ResearchToolContext,
+    context: PaperCopilotContext,
 ) -> dict[str, Any]:
     context.composer_plan.mark_library_listed()
     payload = _composer_library(context).to_payload(limit=args.limit)
@@ -852,7 +871,7 @@ def _list_composer_library(
 
 def _search_composer_candidates(
     args: _SearchComposerCandidatesInput,
-    context: ResearchToolContext,
+    context: PaperCopilotContext,
 ) -> dict[str, Any]:
     library = _composer_library(context)
     _require_composer_baseline_pool(library)
@@ -938,7 +957,7 @@ def _search_composer_candidates(
 
 def _update_composer_plan(
     args: _UpdateComposerPlanInput,
-    context: ResearchToolContext,
+    context: PaperCopilotContext,
 ) -> dict[str, Any]:
     match args.action:
         case "select_baseline":
@@ -984,7 +1003,7 @@ def _update_composer_plan(
     return result
 
 
-def _composer_library(context: ResearchToolContext) -> ComposerLibrary:
+def _composer_library(context: PaperCopilotContext) -> ComposerLibrary:
     if context.pdf_dir is None:
         raise KnowledgeError(
             "framework_composer requires --pdf-dir with ccf_a, ccf_b, and other"
@@ -1023,7 +1042,7 @@ def _composer_pool_trace(args: _SearchComposerCandidatesInput) -> dict[str, Any]
 
 async def _read_paper_async(
     args: _ReadPaperInput,
-    context: ResearchToolContext,
+    context: PaperCopilotContext,
     *,
     read_llm: LLMClient | None,
     cost: CostTracker,
@@ -1104,7 +1123,7 @@ async def _read_paper_async(
     }
 
 
-def _search_library(args: _SearchLibraryInput, context: ResearchToolContext) -> dict[str, Any]:
+def _search_library(args: _SearchLibraryInput, context: PaperCopilotContext) -> dict[str, Any]:
     if context.embeddings_store is None or context.encode_query is None:
         raise KnowledgeError("embedding index unavailable; run reindex before search_library")
     if (args.field is None) != (args.contains is None):
@@ -1137,7 +1156,7 @@ def _search_library(args: _SearchLibraryInput, context: ResearchToolContext) -> 
     }
 
 
-def _inspect_paper(args: _InspectPaperInput, context: ResearchToolContext) -> dict[str, Any]:
+def _inspect_paper(args: _InspectPaperInput, context: PaperCopilotContext) -> dict[str, Any]:
     row = context.fields_store.get(args.paper_id)
     if row is None:
         raise KnowledgeError(f"paper_id not found: {args.paper_id}")
@@ -1159,7 +1178,7 @@ def _inspect_paper(args: _InspectPaperInput, context: ResearchToolContext) -> di
     return payload
 
 
-def _recommended_followups(row: PaperRow, context: ResearchToolContext) -> list[dict[str, Any]]:
+def _recommended_followups(row: PaperRow, context: PaperCopilotContext) -> list[dict[str, Any]]:
     followups: list[dict[str, Any]] = []
     if len(context.touched_paper_ids) < context.max_papers:
         followups.append(
@@ -1340,7 +1359,7 @@ def _experiment_text(item: dict[str, Any]) -> str:
     return "; ".join(parts)
 
 
-def _compare_papers(args: _ComparePapersInput, context: ResearchToolContext) -> dict[str, Any]:
+def _compare_papers(args: _ComparePapersInput, context: PaperCopilotContext) -> dict[str, Any]:
     row_a = context.fields_store.get(args.paper_id_a)
     row_b = context.fields_store.get(args.paper_id_b)
     missing = [
@@ -1359,7 +1378,7 @@ def _compare_papers(args: _ComparePapersInput, context: ResearchToolContext) -> 
 
 def _find_related_papers(
     args: _FindRelatedPapersInput,
-    context: ResearchToolContext,
+    context: PaperCopilotContext,
 ) -> dict[str, Any]:
     target = context.fields_store.get(args.paper_id)
     if target is None:
@@ -1527,7 +1546,7 @@ def _add_related_candidate(
     seen.add(candidate_id)
 
 
-def _reserve_papers(context: ResearchToolContext, paper_ids: list[str]) -> None:
+def _reserve_papers(context: PaperCopilotContext, paper_ids: list[str]) -> None:
     if context.max_papers <= 0:
         raise KnowledgeError("max_papers must be positive")
     proposed = set(context.touched_paper_ids)
@@ -1543,7 +1562,7 @@ def _reserve_papers(context: ResearchToolContext, paper_ids: list[str]) -> None:
     context.touched_paper_ids.update(paper_ids)
 
 
-def _paper_budget_payload(context: ResearchToolContext) -> dict[str, Any]:
+def _paper_budget_payload(context: PaperCopilotContext) -> dict[str, Any]:
     return {
         "max_papers": context.max_papers,
         "touched_count": len(context.touched_paper_ids),
@@ -1568,9 +1587,9 @@ def _build_termination_summary(
     reason: str,
     cost: CostSnapshot,
     events: list[Event],
-    context: ResearchToolContext,
-) -> ResearchTerminationSummary:
-    return ResearchTerminationSummary(
+    context: PaperCopilotContext,
+) -> PaperCopilotTerminationSummary:
+    return PaperCopilotTerminationSummary(
         reason=reason,
         cost_cny=cost.cost_cny,
         events_count=len(events),
@@ -1828,21 +1847,19 @@ def _distance_score(distance: float) -> float:
     return round(1.0 / (1.0 + max(distance, 0.0)), 6)
 
 
-def _build_initial_user_text(
-    topic: str,
-    context: ResearchToolContext,
-    route: ChatRoute,
-) -> str:
+def _build_system_prompt(context: PaperCopilotContext) -> str:
     pdf_dir = str(context.pdf_dir) if context.pdf_dir is not None else "(not provided)"
     return (
-        "You are Paper Copilot ResearchAgent, a bounded planner/controller. "
-        "Use the available tools to inspect the local paper library before "
-        "answering. Do not invent citations or claim that an unread PDF was "
-        "analyzed. If evidence is missing, say exactly what is missing.\n\n"
-        f"Research topic: {topic}\n"
-        f"Request route: {route.kind} ({route.reason})\n"
-        f"Output profile: {route.output_profile}\n"
-        f"Task profile: {route.task_profile}\n"
+        "You are Paper Copilot, the only agent in this system. On each turn, "
+        "decide for yourself whether to answer directly or call one or more "
+        "tools. Greetings, casual conversation, and questions that do not need "
+        "the local paper library should be answered directly with no tool call. "
+        "Do not call a tool merely to classify the request. When the request "
+        "needs local papers, PDF analysis, comparisons, citations, or proposal "
+        "evidence, select the tools and their order based on the request. Do not "
+        "invent citations or claim that an unread PDF was analyzed. If required "
+        "evidence is missing, say exactly what is missing. Answer in the user's "
+        "language.\n\n"
         f"PDF directory: {pdf_dir}\n\n"
         f"Paper touch limit: at most {context.max_papers} unique paper_ids may be "
         "inspected or compared in this run. Reusing the same paper_id is allowed; "
@@ -1850,8 +1867,11 @@ def _build_initial_user_text(
         "read_paper call touches that paper_id, but you may still inspect_paper "
         "the same paper_id afterward; do not describe the one-paper limit as "
         "exhausted for same-paper follow-up.\n\n"
-        f"{_tool_entry_guidance(route)} If a "
-        "relevant PDF is only present in PDF directory results, call read_paper "
+        "When using paper tools, call list_papers only when listing the library "
+        "helps resolve the request; use search_library for semantic evidence, "
+        "inspect_paper for one paper's structured fields, and compare_papers for "
+        "a direct pairwise comparison. If a relevant PDF is only present in PDF "
+        "directory results, call read_paper "
         "with the list_pdfs path before making claims about it, then inspect the "
         "same paper_id before writing the final report so the report can cite "
         "meta, contributions, methods, or experiments. For normal research tasks, "
@@ -1865,103 +1885,13 @@ def _build_initial_user_text(
         "expand from an already relevant paper to nearby candidates. "
         "Tool inputs must match the JSON schema exactly; "
         "numbers such as year, k, limit, and max_items must be JSON numbers.\n\n"
-        f"{_task_profile_guidance(route)}\n\n"
-        f"{_final_report_guidance(route)} "
+        f"{_response_guidance()} "
         "Do not include process narration such as 'I have inspected...', 'Now I "
         "will...', or 'Let me compile...'."
     )
 
 
-def _tool_entry_guidance(route: ChatRoute) -> str:
-    if route.task_profile == "framework_composer":
-        return (
-            "Tool-use guidance: start with list_composer_library, then follow "
-            "composer_plan.allowed_next_tools; use list_papers only for "
-            "non-Composer side checks."
-        )
-    return (
-        "Tool-use guidance: call list_papers once at the start unless you need a "
-        "specific filter, then inspect or compare the selected paper_ids."
-    )
-
-
-def _task_profile_guidance(route: ChatRoute) -> str:
-    match route.task_profile:
-        case "single_paper_focus":
-            return (
-                "Task-specific guidance: resolve one target paper, then use "
-                "inspect_paper for its structured fields. Do not call "
-                "find_related_papers or compare_papers unless the user explicitly "
-                "asks for related work or comparison."
-            )
-        case "fixed_set_compare":
-            return (
-                "Task-specific guidance: stay inside the papers or methods named "
-                "by the user. Resolve and inspect each target, then use "
-                "compare_papers for direct pairwise comparison. Do not expand to "
-                "extra papers unless a named target cannot be resolved."
-            )
-        case "evidence_lookup":
-            return (
-                "Task-specific guidance: prioritize search_library evidence "
-                "entries, inspect_paper suggested_citations, and clear hit/miss "
-                "evidence. The final answer must separate evidence found from "
-                "evidence still missing."
-            )
-        case "claim_check":
-            return (
-                "Task-specific guidance: search for supporting and conflicting "
-                "evidence before answering. The final answer must label the claim "
-                "as supported, partially supported, or unsupported by the local "
-                "library."
-            )
-        case "experiment_extraction":
-            return (
-                "Task-specific guidance: prioritize methods and experiments fields. "
-                "Extract datasets, metrics, baselines, training details, and "
-                "ablations when present; mark missing items as gaps."
-            )
-        case "timeline_synthesis":
-            return (
-                "Task-specific guidance: inspect multiple relevant papers and use "
-                "year/title/method evidence to order the synthesis. Use "
-                "compare_papers only for key transitions, not every possible pair."
-            )
-        case "gap_analysis":
-            return (
-                "Task-specific guidance: focus on limitations, experiment gaps, "
-                "and cross-paper disagreements. Do not switch into proposing a new "
-                "model framework unless the user asks for a proposal."
-            )
-        case "framework_composer":
-            return (
-                "Task-specific guidance: use a baseline-first path. Start with "
-                "list_composer_library when --pdf-dir is available. Identify "
-                "exactly one high-performing CCF A baseline that still has a "
-                "clear improvement opening or story-worthy weakness. Preferred "
-                "tool order: "
-                "list_composer_library, search_composer_candidates with "
-                "role=baseline, inspect_paper for the baseline, then "
-                "update_composer_plan with action=select_baseline. Next call "
-                "search_composer_candidates with role=module and pool=ccf_a. "
-                "For each module candidate, inspect_paper before accepting it, "
-                "then record accept_module or reject_module with "
-                "update_composer_plan. Only search CCF B after "
-                "close_module_pool records why CCF A modules are unsuitable, "
-                "and use other only after CCF A and CCF B are both closed. "
-                "Follow the composer_plan.allowed_next_tools returned by each "
-                "Composer tool."
-            )
-        case "topic_survey":
-            return (
-                "Task-specific guidance: gather a small evidence set with "
-                "search_library or find_related_papers, inspect each selected paper, "
-                "then synthesize only claims that have evidence references."
-            )
-
-
-def _final_report_guidance(route: ChatRoute) -> str:
-    language_rule = "The final report must be written in Chinese."
+def _response_guidance() -> str:
     evidence_rule = (
         "Prefer search_library evidence citation_ref values, inspect_paper "
         "evidence_summary and suggested_citations for final-report claims. In "
@@ -1972,12 +1902,15 @@ def _final_report_guidance(route: ChatRoute) -> str:
         "suggested_citations / compare_papers output. Keep every concrete claim "
         "tied to a paper_id or explicitly mark it as a gap."
     )
-    if route.output_profile == "framework_composer":
-        return (
-            "Task profile: framework_composer. When you have enough information, "
-            "stop calling tools and write a concise Chinese Markdown proposal with "
-            "these Chinese sections: 问题定义, 强基线, 候选模块, "
-            "兼容性, 组合方案, 实验方案, 风险与缺口, 证据. "
+    composer_rule = (
+        "If you decide the request needs a new research proposal or model "
+        "framework, use the Composer tools instead of merely describing a "
+        "possible idea. Start with list_composer_library and follow each "
+        "composer_plan.allowed_next_tools value. When you have enough "
+        "information, "
+        "stop calling tools and write a concise Chinese Markdown proposal with "
+        "these Chinese sections: 问题定义, 强基线, 候选模块, "
+        "兼容性, 组合方案, 实验方案, 风险与缺口, 证据. "
             "This is a baseline-first workflow: first identify one "
             "high-performing, reproducible baseline paper or method from the local "
             "library, then identify exactly 3 compatible modules or tricks from other "
@@ -2014,16 +1947,22 @@ def _final_report_guidance(route: ChatRoute) -> str:
             "Do not add any preamble such as 'Now I will write the proposal', "
             "'报告已准备好', or markdown separators before the proposal title. "
             f"{evidence_rule} The final answer must be the proposal itself; "
-            f"{language_rule} Keep the whole report under 900 words."
-        )
+            "write it in Chinese and keep it under 900 words."
+    )
 
-    return (
-        "When you have enough information, stop calling tools and write a "
+    research_rule = (
+        "After using non-Composer paper tools, stop calling tools when you have "
+        "enough information and write a "
         "concise Markdown report with these sections: Findings, Evidence, "
         "Gaps, Next Steps. For concrete Findings claims, either include "
         "bracket references inline or mirror the claim in Evidence with "
-        f"bracket references. {evidence_rule} The final answer must be the "
-        f"report itself; {language_rule} Keep the whole report under 900 words."
+        f"bracket references. {evidence_rule} The final answer must be the report "
+        "itself, written in the user's language and under 900 words."
+    )
+    return (
+        "For a direct answer with no tools, respond naturally and do not force "
+        "report headings or citations. "
+        f"{research_rule} {composer_rule}"
     )
 
 
@@ -2031,10 +1970,10 @@ def _assistant_text(event: AssistantMessage) -> str:
     return "\n".join(block.text for block in event.content if isinstance(block, TextBlock)).strip()
 
 
-def _research_session_id(topic: str) -> str:
+def _paper_copilot_session_id(prompt: str) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    digest = hashlib.sha1(topic.encode("utf-8")).hexdigest()[:8]
-    return f"research-{stamp}-{digest}"
+    digest = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:8]
+    return f"paper-copilot-{stamp}-{digest}"
 
 
 def _truncate(text: str, n: int) -> str:

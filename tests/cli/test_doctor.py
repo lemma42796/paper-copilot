@@ -17,7 +17,11 @@ def isolated_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_collect_sessions_marks_legacy_session(isolated_root: Path) -> None:
     # session.jsonl with only header + final_output (no llm_call) — the
     # 2026-04-24 batch shape that prompted this fix.
-    store = SessionStore.create("legacy0000aa", model="qwen3.6-flash", agent="MainAgent")
+    store = SessionStore.create(
+        "legacy0000aa",
+        model="qwen3.6-flash",
+        agent="ReadPaperTool",
+    )
     store.append_final_output({"ok": True})
 
     aggs = _collect_sessions(n=10)
@@ -33,9 +37,13 @@ def test_collect_sessions_marks_legacy_session(isolated_root: Path) -> None:
 
 
 def test_collect_sessions_marks_modern_session(isolated_root: Path) -> None:
-    store = SessionStore.create("modern0000bb", model="qwen3.6-flash", agent="MainAgent")
+    store = SessionStore.create(
+        "modern0000bb",
+        model="qwen3.6-flash",
+        agent="ReadPaperTool",
+    )
     store.append_llm_call(
-        agent="SkimAgent",
+        agent="SkimPaperTool",
         model="qwen3.6-flash",
         usage={
             "input_tokens": 1000,

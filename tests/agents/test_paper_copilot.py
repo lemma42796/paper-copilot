@@ -10,16 +10,23 @@ import numpy as np
 
 from paper_copilot.agents.loop import ToolUseRequest
 from paper_copilot.agents.mock_llm import MockLLM, MockResponse, TextBlock, ToolUseBlock
-from paper_copilot.agents.research import (
-    ResearchToolContext,
-    dispatch_research_tool,
-    run_research,
+from paper_copilot.agents.paper_copilot import (
+    PaperCopilotContext,
+    dispatch_paper_copilot_tool,
+    run_paper_copilot,
 )
 from paper_copilot.knowledge.embeddings_store import ChunkRow, EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.knowledge.graph_store import append_links
 from paper_copilot.schemas import CrossPaperLink
-from paper_copilot.session import FinalOutput, Message, SessionStore, ToolResult, ToolUse
+from paper_copilot.session import (
+    FinalOutput,
+    Message,
+    SessionStore,
+    SystemMessage,
+    ToolResult,
+    ToolUse,
+)
 from paper_copilot.session.paths import compute_paper_id
 
 DIM = 4
@@ -73,7 +80,7 @@ def _chunk(paper_id: str, text: str, *, ord_: int = 0) -> ChunkRow:
     )
 
 
-def test_dispatch_research_tools_list_search_and_inspect(tmp_path: Path) -> None:
+def test_dispatch_paper_copilot_tools_list_search_and_inspect(tmp_path: Path) -> None:
     with (
         FieldsStore.open(tmp_path / "fields.db") as fs,
         EmbeddingsStore.open(tmp_path / "embeddings.db", dim=DIM) as es,
@@ -87,20 +94,20 @@ def test_dispatch_research_tools_list_search_and_inspect(tmp_path: Path) -> None
             ],
             np.array([[1, 0, 0, 0], [1, 0.1, 0, 0]], dtype=np.float32),
         )
-        context = ResearchToolContext(
+        context = PaperCopilotContext(
             fields_store=fs,
             embeddings_store=es,
             encode_query=lambda _query: np.array([1, 0, 0, 0], dtype=np.float32),
         )
 
-        listed = dispatch_research_tool(
+        listed = dispatch_paper_copilot_tool(
             ToolUseRequest(id="t1", name="list_papers", input={"limit": 5}),
             context,
         )
         assert listed.is_error is False
         assert json.loads(listed.output)["papers"][0]["paper_id"] == "paperA"
 
-        searched = dispatch_research_tool(
+        searched = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="t2",
                 name="search_library",
@@ -127,7 +134,7 @@ def test_dispatch_research_tools_list_search_and_inspect(tmp_path: Path) -> None
         ]
         assert len(search_data["results"][0]["evidence_chunks"]) == 2
 
-        inspected = dispatch_research_tool(
+        inspected = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="t3",
                 name="inspect_paper",
@@ -152,8 +159,8 @@ def test_dispatch_research_tools_list_search_and_inspect(tmp_path: Path) -> None
 
 def test_dispatch_rejects_string_numeric_inputs(tmp_path: Path) -> None:
     with FieldsStore.open(tmp_path / "fields.db") as fs:
-        context = ResearchToolContext(fields_store=fs)
-        result = dispatch_research_tool(
+        context = PaperCopilotContext(fields_store=fs)
+        result = dispatch_paper_copilot_tool(
             ToolUseRequest(id="t1", name="list_papers", input={"year": "2017"}),
             context,
         )
@@ -167,8 +174,8 @@ def test_dispatch_compare_papers_returns_structured_alignment(tmp_path: Path) ->
         now = datetime.now(UTC).isoformat()
         fs.upsert("paperA", _payload(method_name="Shared Method"), now)
         fs.upsert("paperB", _payload("Paper B", 2023, method_name="Shared Method"), now)
-        context = ResearchToolContext(fields_store=fs)
-        result = dispatch_research_tool(
+        context = PaperCopilotContext(fields_store=fs)
+        result = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="t1",
                 name="compare_papers",
@@ -205,8 +212,8 @@ def test_dispatch_find_related_papers_uses_field_links(tmp_path: Path) -> None:
         fs.upsert("paperA", _payload("Paper A", cross_paper_links=[link_to_b]), now)
         fs.upsert("paperB", _payload("Paper B", 2023), now)
         fs.upsert("paperC", _payload("Paper C", 2022, cross_paper_links=[link_to_a]), now)
-        context = ResearchToolContext(fields_store=fs, max_papers=3)
-        result = dispatch_research_tool(
+        context = PaperCopilotContext(fields_store=fs, max_papers=3)
+        result = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="t1",
                 name="find_related_papers",
@@ -243,8 +250,8 @@ def test_dispatch_find_related_papers_reads_graph_log(tmp_path: Path) -> None:
             root=tmp_path,
             clock=lambda: "2026-05-18T00:00:00+00:00",
         )
-        context = ResearchToolContext(fields_store=fs, root=tmp_path, max_papers=2)
-        result = dispatch_research_tool(
+        context = PaperCopilotContext(fields_store=fs, root=tmp_path, max_papers=2)
+        result = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="t1",
                 name="find_related_papers",
@@ -267,17 +274,17 @@ def test_dispatch_enforces_max_papers_across_inspect_and_compare(tmp_path: Path)
         fs.upsert("paperA", _payload("Paper A"), now)
         fs.upsert("paperB", _payload("Paper B"), now)
         fs.upsert("paperC", _payload("Paper C"), now)
-        context = ResearchToolContext(fields_store=fs, max_papers=2)
+        context = PaperCopilotContext(fields_store=fs, max_papers=2)
 
-        first = dispatch_research_tool(
+        first = dispatch_paper_copilot_tool(
             ToolUseRequest(id="t1", name="inspect_paper", input={"paper_id": "paperA"}),
             context,
         )
-        repeat = dispatch_research_tool(
+        repeat = dispatch_paper_copilot_tool(
             ToolUseRequest(id="t2", name="inspect_paper", input={"paper_id": "paperA"}),
             context,
         )
-        second = dispatch_research_tool(
+        second = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="t3",
                 name="compare_papers",
@@ -285,7 +292,7 @@ def test_dispatch_enforces_max_papers_across_inspect_and_compare(tmp_path: Path)
             ),
             context,
         )
-        over_limit = dispatch_research_tool(
+        over_limit = dispatch_paper_copilot_tool(
             ToolUseRequest(id="t4", name="inspect_paper", input={"paper_id": "paperC"}),
             context,
         )
@@ -305,8 +312,8 @@ def test_dispatch_read_paper_reports_existing_index_entry(tmp_path: Path) -> Non
     (pdir / "report.md").write_text("# Report", encoding="utf-8")
     with FieldsStore.open(tmp_path / "fields.db") as fs:
         fs.upsert("paperA", _payload("Paper A"), datetime.now(UTC).isoformat())
-        context = ResearchToolContext(fields_store=fs, root=tmp_path, max_papers=1)
-        result = dispatch_research_tool(
+        context = PaperCopilotContext(fields_store=fs, root=tmp_path, max_papers=1)
+        result = dispatch_paper_copilot_tool(
             ToolUseRequest(id="t1", name="read_paper", input={"paper_id": "paperA"}),
             context,
         )
@@ -327,13 +334,13 @@ def test_dispatch_read_paper_needs_user_action_for_unread_pdf(tmp_path: Path) ->
     pdf_path = tmp_path / "paper.pdf"
     pdf_path.write_bytes(b"%PDF fake")
     with FieldsStore.open(tmp_path / "fields.db") as fs:
-        context = ResearchToolContext(
+        context = PaperCopilotContext(
             fields_store=fs,
             pdf_dir=tmp_path,
             root=tmp_path,
             max_papers=1,
         )
-        result = dispatch_research_tool(
+        result = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="t1",
                 name="read_paper",
@@ -356,8 +363,8 @@ def test_dispatch_list_pdfs_reports_candidate_ids(tmp_path: Path) -> None:
     pdf_path = pdf_dir / "paper.pdf"
     pdf_path.write_bytes(b"%PDF fake")
     with FieldsStore.open(tmp_path / "fields.db") as fs:
-        context = ResearchToolContext(fields_store=fs, pdf_dir=pdf_dir)
-        result = dispatch_research_tool(
+        context = PaperCopilotContext(fields_store=fs, pdf_dir=pdf_dir)
+        result = dispatch_paper_copilot_tool(
             ToolUseRequest(id="t1", name="list_pdfs", input={"limit": 3}),
             context,
         )
@@ -402,14 +409,14 @@ def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
             [_chunk(module_id, "compatible module trick", ord_=0)],
             np.array([[1, 0.1, 0, 0]], dtype=np.float32),
         )
-        context = ResearchToolContext(
+        context = PaperCopilotContext(
             fields_store=fs,
             embeddings_store=es,
             encode_query=lambda _query: np.array([1, 0, 0, 0], dtype=np.float32),
             pdf_dir=pdf_dir,
         )
 
-        blocked = dispatch_research_tool(
+        blocked = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="blocked",
                 name="search_composer_candidates",
@@ -417,11 +424,11 @@ def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
             ),
             context,
         )
-        listed = dispatch_research_tool(
+        listed = dispatch_paper_copilot_tool(
             ToolUseRequest(id="list", name="list_composer_library", input={}),
             context,
         )
-        baseline_search = dispatch_research_tool(
+        baseline_search = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="baseline",
                 name="search_composer_candidates",
@@ -429,7 +436,7 @@ def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
             ),
             context,
         )
-        premature_module_search = dispatch_research_tool(
+        premature_module_search = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="module-early",
                 name="search_composer_candidates",
@@ -437,7 +444,7 @@ def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
             ),
             context,
         )
-        dispatch_research_tool(
+        dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="inspect-baseline",
                 name="inspect_paper",
@@ -445,7 +452,7 @@ def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
             ),
             context,
         )
-        selected = dispatch_research_tool(
+        selected = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="select-baseline",
                 name="update_composer_plan",
@@ -458,7 +465,7 @@ def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
             ),
             context,
         )
-        premature_fallback = dispatch_research_tool(
+        premature_fallback = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="fallback-early",
                 name="search_composer_candidates",
@@ -472,7 +479,7 @@ def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
             ),
             context,
         )
-        module_search = dispatch_research_tool(
+        module_search = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="module",
                 name="search_composer_candidates",
@@ -480,7 +487,7 @@ def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
             ),
             context,
         )
-        dispatch_research_tool(
+        dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="inspect-module",
                 name="inspect_paper",
@@ -488,7 +495,7 @@ def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
             ),
             context,
         )
-        accepted = dispatch_research_tool(
+        accepted = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="accept-module",
                 name="update_composer_plan",
@@ -504,7 +511,7 @@ def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
             ),
             context,
         )
-        duplicate_module = dispatch_research_tool(
+        duplicate_module = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="accept-duplicate-module",
                 name="update_composer_plan",
@@ -548,10 +555,10 @@ def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
     )
 
 
-def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
+def test_run_paper_copilot_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
     with FieldsStore.open(tmp_path / "fields.db") as fs:
         fs.upsert("paperA", _payload(), datetime.now(UTC).isoformat())
-        context = ResearchToolContext(fields_store=fs)
+        context = PaperCopilotContext(fields_store=fs)
         llm = MockLLM(
             [
                 MockResponse(
@@ -574,8 +581,8 @@ def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
         )
 
         run = asyncio.run(
-            run_research(
-                topic="sparse attention",
+            run_paper_copilot(
+                prompt="sparse attention",
                 llm=llm,
                 context=context,
                 root=tmp_path,
@@ -591,19 +598,17 @@ def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
     assert run.termination_summary.last_tool_error is None
     assert "paperA is relevant" in run.report_markdown
     assert run.cost.input_tokens == 30
+    assert run.tool_names == ("inspect_paper",)
+    assert run.composer_used is False
 
     paper_id = run.session_path.parent.name
     entries = SessionStore.load(paper_id, root=tmp_path).read_all()
     assert any(isinstance(e, ToolUse) and e.name == "inspect_paper" for e in entries)
     assert any(isinstance(e, ToolResult) and e.is_error is False for e in entries)
     final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
-    assert final.payload["topic"] == "sparse attention"
-    assert final.payload["request_route"] == {
-        "kind": "knowledge_qa",
-        "output_profile": "knowledge_qa",
-        "task_profile": "topic_survey",
-        "reason": "matched_topic_survey",
-    }
+    assert final.payload["prompt"] == "sparse attention"
+    assert final.payload["tool_names"] == ["inspect_paper"]
+    assert "request_route" not in final.payload
     assert final.payload["termination_reason"] == "end_turn"
     assert final.payload["evidence_refs"] == []
     assert final.payload["quality"] == {
@@ -617,24 +622,36 @@ def test_run_research_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
     assert final.payload["termination_summary"]["reason"] == "end_turn"
     assert final.payload["termination_summary"]["paper_budget"]["touched_count"] == 1
     initial = next(e for e in entries if isinstance(e, Message) and e.role == "user")
-    assert "The final answer must be the report itself" in initial.text
-    assert "Request route: knowledge_qa" in initial.text
-    assert "Task profile: topic_survey" in initial.text
-    assert "Tool inputs must match the JSON schema exactly" in initial.text
-    assert "gather a small evidence set" in initial.text
-    assert "search_library evidence citation_ref values" in initial.text
-    assert "you may still inspect_paper the same paper_id afterward" in initial.text
-    assert "suggested_citations" in initial.text
-    assert "do not stop after one inspected paper" in initial.text
-    assert "mirror the claim in Evidence" in initial.text
+    assert initial.text == "sparse attention"
+    system = next(e for e in entries if isinstance(e, SystemMessage))
+    assert "decide for yourself whether to answer directly or call" in system.text
+    assert "Greetings, casual conversation" in system.text
+    assert "Do not call a tool merely to classify" in system.text
+    assert "Tool inputs must match the JSON schema exactly" in system.text
+    assert "you may still inspect_paper the same paper_id afterward" in system.text
+    assert "search_library evidence citation_ref values" in system.text
 
 
-def test_run_research_routes_framework_composer_prompt(tmp_path: Path) -> None:
+def test_run_paper_copilot_activates_composer_after_model_uses_tool(tmp_path: Path) -> None:
+    pdf_dir = tmp_path / "pdfs"
+    for pool in ("ccf_a", "ccf_b", "other"):
+        (pdf_dir / pool).mkdir(parents=True)
     with FieldsStore.open(tmp_path / "fields.db") as fs:
         fs.upsert("paperA", _payload(), datetime.now(UTC).isoformat())
-        context = ResearchToolContext(fields_store=fs)
+        context = PaperCopilotContext(fields_store=fs, pdf_dir=pdf_dir)
         llm = MockLLM(
             [
+                MockResponse(
+                    content=[
+                        ToolUseBlock(
+                            id="composer-list",
+                            name="list_composer_library",
+                            input={},
+                        )
+                    ],
+                    stop_reason="tool_use",
+                    usage={"input_tokens": 8, "output_tokens": 3},
+                ),
                 MockResponse(
                     content=[
                         TextBlock(
@@ -653,8 +670,8 @@ def test_run_research_routes_framework_composer_prompt(tmp_path: Path) -> None:
         )
 
         run = asyncio.run(
-            run_research(
-                topic="基于 diffusion model 和医学图像分割, 帮我找一个可做的创新点",
+            run_paper_copilot(
+                prompt="基于 diffusion model 和医学图像分割, 帮我找一个可做的创新点",
                 llm=llm,
                 context=context,
                 root=tmp_path,
@@ -666,29 +683,26 @@ def test_run_research_routes_framework_composer_prompt(tmp_path: Path) -> None:
     paper_id = run.session_path.parent.name
     entries = SessionStore.load(paper_id, root=tmp_path).read_all()
     initial = next(e for e in entries if isinstance(e, Message) and e.role == "user")
+    system = next(e for e in entries if isinstance(e, SystemMessage))
     final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
 
-    assert "Task profile: framework_composer" in initial.text
-    assert "问题定义, 强基线, 候选模块" in initial.text
-    assert "baseline-first workflow" in initial.text
-    assert final.payload["request_route"] == {
-        "kind": "framework_composer",
-        "output_profile": "framework_composer",
-        "task_profile": "framework_composer",
-        "reason": "matched_framework_composer_keyword",
-    }
+    assert initial.text == "基于 diffusion model 和医学图像分割, 帮我找一个可做的创新点"
+    assert "问题定义, 强基线, 候选模块" in system.text
+    assert "list_composer_library" in system.text
+    assert final.payload["tool_names"] == ["list_composer_library"]
+    assert "request_route" not in final.payload
     assert final.payload["quality"]["findings_claim_count"] == 1
     assert final.payload["proposal_check"]["passed"] is False
 
 
-def test_run_research_prefers_inspect_after_read_paper(tmp_path: Path) -> None:
+def test_run_paper_copilot_prefers_inspect_after_read_paper(tmp_path: Path) -> None:
     with FieldsStore.open(tmp_path / "fields.db") as fs:
         fs.upsert("paperA", _payload(), datetime.now(UTC).isoformat())
         pdir = tmp_path / "papers" / "paperA"
         pdir.mkdir(parents=True)
         (pdir / "session.jsonl").write_text("", encoding="utf-8")
         (pdir / "report.md").write_text("# Paper A", encoding="utf-8")
-        context = ResearchToolContext(fields_store=fs, root=tmp_path, max_papers=1)
+        context = PaperCopilotContext(fields_store=fs, root=tmp_path, max_papers=1)
         llm = MockLLM(
             [
                 MockResponse(
@@ -732,8 +746,8 @@ def test_run_research_prefers_inspect_after_read_paper(tmp_path: Path) -> None:
         )
 
         run = asyncio.run(
-            run_research(
-                topic="read then inspect",
+            run_paper_copilot(
+                prompt="read then inspect",
                 llm=llm,
                 context=context,
                 root=tmp_path,
@@ -755,7 +769,7 @@ def test_run_research_prefers_inspect_after_read_paper(tmp_path: Path) -> None:
     assert "Sparse Attention" in tool_results[1].output
 
 
-def test_run_research_synthesis_path_uses_related_and_compare(tmp_path: Path) -> None:
+def test_run_paper_copilot_synthesis_path_uses_related_and_compare(tmp_path: Path) -> None:
     link_to_b = {
         "related_paper_id": "paperB",
         "related_title": "Paper B",
@@ -781,7 +795,7 @@ def test_run_research_synthesis_path_uses_related_and_compare(tmp_path: Path) ->
         pdir.mkdir(parents=True)
         (pdir / "session.jsonl").write_text("", encoding="utf-8")
         (pdir / "report.md").write_text("# Paper A", encoding="utf-8")
-        context = ResearchToolContext(fields_store=fs, root=tmp_path, max_papers=2)
+        context = PaperCopilotContext(fields_store=fs, root=tmp_path, max_papers=2)
         llm = MockLLM(
             [
                 MockResponse(
@@ -860,8 +874,8 @@ def test_run_research_synthesis_path_uses_related_and_compare(tmp_path: Path) ->
         )
 
         run = asyncio.run(
-            run_research(
-                topic="synthesize related sparse attention papers",
+            run_paper_copilot(
+                prompt="synthesize related sparse attention papers",
                 llm=llm,
                 context=context,
                 root=tmp_path,
@@ -903,9 +917,9 @@ def test_run_research_synthesis_path_uses_related_and_compare(tmp_path: Path) ->
     }
 
 
-def test_run_research_summary_records_last_tool_error(tmp_path: Path) -> None:
+def test_run_paper_copilot_summary_records_last_tool_error(tmp_path: Path) -> None:
     with FieldsStore.open(tmp_path / "fields.db") as fs:
-        context = ResearchToolContext(fields_store=fs)
+        context = PaperCopilotContext(fields_store=fs)
         llm = MockLLM(
             [
                 MockResponse(
@@ -928,8 +942,8 @@ def test_run_research_summary_records_last_tool_error(tmp_path: Path) -> None:
         )
 
         run = asyncio.run(
-            run_research(
-                topic="missing paper",
+            run_paper_copilot(
+                prompt="missing paper",
                 llm=llm,
                 context=context,
                 root=tmp_path,

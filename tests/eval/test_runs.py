@@ -215,7 +215,7 @@ def test_write_research_quality_run_records_final_output_quality(tmp_path: Path)
     store = SessionStore.create(
         "research-session",
         model="qwen",
-        agent="ResearchAgent",
+        agent="PaperCopilot",
         root=tmp_path,
     )
     store.append_final_output(

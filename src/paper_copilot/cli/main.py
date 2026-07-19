@@ -18,7 +18,7 @@ app = typer.Typer(
     name="paper-copilot",
     help=(
         "Local-first paper reading copilot.\n\n"
-        "Reads PDFs through a skim → deep → related agent pipeline, writes a "
+        "Reads PDFs through bounded skim → extract → link tools, writes a "
         "Markdown report, and indexes structured fields + embeddings on disk so "
         "you can later list / search / compare across the whole library. "
         "Eval and doctor commands cover regression and cost observability.\n\n"

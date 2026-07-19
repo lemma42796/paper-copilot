@@ -13,8 +13,8 @@ YAML schema:
 
 For each paper the runner:
 1. verifies ``compute_paper_id(pdf) == paper_id`` (catches stale paths),
-2. runs ``MainAgent.run`` with ``PAPER_COPILOT_HOME`` set to a fresh
-   tmpdir and no embedder/stores — so RelatedAgent short-circuits and
+2. runs ``ReadPaperTool.run`` with ``PAPER_COPILOT_HOME`` set to a fresh
+   tmpdir and no embedder/stores, so LinkRelatedPapersTool short-circuits and
    the user's real index is untouched (suites must be repeatable),
 3. compares each requested field against its golden via
    ``assertions.assert_field``, plus the absolute budget caps.
@@ -34,7 +34,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from paper_copilot.agents.llm_client import LLMClient
-from paper_copilot.agents.main import MainAgent
+from paper_copilot.agents.read_paper_tool import ReadPaperTool
 from paper_copilot.eval import goldens
 from paper_copilot.eval.assertions import FieldFailure, assert_field
 from paper_copilot.session.paths import compute_paper_id
@@ -146,9 +146,9 @@ async def _run_paper(
         prior_home = os.environ.get("PAPER_COPILOT_HOME")
         os.environ["PAPER_COPILOT_HOME"] = str(tmproot)
         try:
-            agent = MainAgent(LLMClient(), root=tmproot)
+            tool = ReadPaperTool(LLMClient(), root=tmproot)
             t0 = time.perf_counter()
-            run = await agent.run(pdf_path)
+            run = await tool.run(pdf_path)
             elapsed = time.perf_counter() - t0
         finally:
             if prior_home is None:

@@ -43,8 +43,9 @@
   已补上,最终 chunk selector v1 已接入;M19 local-library-first Composer
   skeleton + deterministic plan/state 已开始编码**。
   截至 2026-05-21,
-  chat-first runtime/API 与 macOS-style web shell 已可用;后端 route 已收敛为
-  `knowledge_qa` / `framework_composer`,knowledge QA 下有轻量 `task_profile`。
+  chat-first runtime/API 与 macOS-style web shell 已可用。后续在 2026-07-19
+  删除了 route / task profile：用户原始 prompt 直接进入 Paper Copilot，
+  由模型自主决定直接回答或调用工具。
   检索侧已从 bge-m3 切到百炼 `text-embedding-v4`(1024 维),并落地
   FTS5/BM25 + vector RRF + multi-chunk evidence + chunk ref lookup + 前端证据
   面板。默认数据根 `~/.paper-copilot` 已用
@@ -75,6 +76,15 @@
   2-3 个固定 Composer 任务的多任务验收套件;当前只能声明 ReID 单例 demo
   clean 通过,不能声明 M19 已跨任务稳定泛化。后续继续推进时,把该风险作为
   已知边界,不要再为跳过的验收补跑真实任务,除非用户重新要求。
+- **当前架构命名**（2026-07-19）：系统收敛为单 Agent。`Paper Copilot` 是
+  唯一具备自主 tool loop 的 Agent；原 `MainAgent` / `SkimAgent` /
+  `DeepAgent` / `RelatedAgent` 已分别改名为 `ReadPaperTool` /
+  `SkimPaperTool` / `ExtractPaperTool` / `LinkRelatedPapersTool`。下方历史
+  milestone 保留当时名称，不代表当前架构仍是 multi-agent。
+- **当前输入决策**（2026-07-19）：已删除关键词 router、`route` 和
+  `task_profile` 运行时控制。用户原始 prompt 直接进入 Paper Copilot；模型
+  自主选择直接 `end_turn` 或调用具体工具。普通聊天不要求论文索引，也不写入
+  research quality trend；Composer checker 只在实际调用 Composer 工具后启用。
 - **最新交接**:**README demo 截图已换成 4K PNG**
   (2026-05-24)。`README.md` / `README.en.md` 的 4 张前端截图已从
   1280x720 JPG 切到 3840x2160 PNG:`paper-copilot-workbench.png` /
@@ -190,7 +200,7 @@
   (2026-05-22)。新增 `agents.composer_plan` 记录 Composer workflow state:
   `list_composer_library` → CCF A baseline search → baseline inspect/select →
   CCF A module search → module suitability/compatibility decision → 必要时
-  close pool 后 fallback 到 CCF B/other → structured proposal。`ResearchToolContext`
+  close pool 后 fallback 到 CCF B/other → structured proposal。`PaperCopilotContext`
   现在携带 `composer_plan`;`list_composer_library` 会初始化/回传 plan,
   `search_composer_candidates` 会按 plan 拦截越级搜索,`inspect_paper` 会记录
   已 inspect 的 paper_id,新增 `update_composer_plan` 工具用于记录
@@ -267,13 +277,13 @@
   `paper_id`;`accept_module` 重复接受同一 module paper 会报错,final report
   contract/prompt 也明确 one paper at most one module。
 - **最终报告语言校正**(2026-05-23):最终 report/proposal 必须用中文输出。
-  已同步 `ResearchAgent` final report guidance、`composer_plan` final report
+  已同步 `Paper Copilot` final report guidance、`composer_plan` final report
   contract 和 M19 设计文档;后续 checker 应把非中文 final report 视为不合格。
 - **上一编码进展**:**M19 Composer 本地资料库工具骨架已接入**
   (2026-05-22)。新增 `agents.composer_library` 扫描用户 `pdf_dir` 下的
   `ccf_a/`、`ccf_b/`、`other/` 三个 pool,返回 PDF 的 `paper_id`、路径、
   indexed 状态和已入库 meta。`knowledge.hybrid_search.search()` 新增可选
-  `paper_ids` 过滤,供 Composer 只在指定 pool 内检索。ResearchAgent 新增
+  `paper_ids` 过滤,供 Composer 只在指定 pool 内检索。Paper Copilot 新增
   `list_composer_library` 与 `search_composer_candidates`:baseline 只能搜
   `ccf_a`;module 默认先搜 `ccf_a`;只有传入 `rejected_ccf_a_modules` +
   `rejection_reason` 才能 fallback 到 `ccf_b`;`other` 还要求同时说明
@@ -491,7 +501,7 @@
   新默认 16 turns 进入最终报告阶段,但 LLM 返回 `stop_reason=max_tokens`,
   CLI 抛 `AgentError`,session:
   `/Users/a123/.paper-copilot/papers/research-20260518T092628989382Z-495725e7/session.jsonl`。
-  随后做最小修正:给 `LoopConfig` 增加可选 `max_tokens`,只让 ResearchAgent
+  随后做最小修正:给 `LoopConfig` 增加可选 `max_tokens`,只让 Paper Copilot
   传 3000;prompt 同时要求最终 report `< 900 words`。重跑同命令成功
   `end_turn`,cost ¥0.0879,events=23,papers=5/5,last_tool_error=None,报告
   直接从 `Findings` 开始,无过程性话术;工具路径为 `list_papers x1` +
@@ -500,8 +510,8 @@
   已跑相关 `ruff` / `mypy` / `tests/agents/test_loop.py` +
   `tests/agents/test_research.py` + `tests/test_smoke.py`,未跑全量 pytest。
 - **M17 read_paper 自动读实现**(2026-05-18):公共 read pipeline 已抽到
-  `agents/read_pipeline.py`,`paper-copilot read` 与 ResearchAgent tool 共用。
-  ResearchAgent 的 `read_paper` 在 async dispatch 中会校验 PDF 位于
+  `agents/read_pipeline.py`,`paper-copilot read` 与 Paper Copilot tool 共用。
+  Paper Copilot 的 `read_paper` 在 async dispatch 中会校验 PDF 位于
   `--pdf-dir` 下、受 `max_papers` 限制、复用同一个 `LLMClient`,并把
   Skim/Deep/Related worker cost 合进 research 总 cost;若没有本地 PDF /
   session 目录已存在但未入库 / embedding handles 不可用,返回
@@ -520,9 +530,9 @@
 - **M17 read→inspect 提示修正**(2026-05-18):快速验收后发现 planner/report
   容易把 `max_papers=1` 误解成 read 后不能再 inspect 同一篇。已补
   `read_paper` payload:`can_inspect_same_paper=true` + `recommended_next_tool`
-  指向 `inspect_paper`,并在 ResearchAgent 初始指令里明确:限制的是唯一
+  指向 `inspect_paper`,并在 Paper Copilot 初始指令里明确:限制的是唯一
   paper_id,同一 paper_id 的 inspect 不消耗新的 slot。
-- **M17 read→inspect 默认路径收敛**(2026-05-18):ResearchAgent tool schema
+- **M17 read→inspect 默认路径收敛**(2026-05-18):Paper Copilot tool schema
   和初始指令进一步明确:正常 research task 中 `read_paper` 返回
   `read`/`already_read` 后,默认下一步应 `inspect_paper` 同一 paper_id,
   再写 final report,以便 report 引用 meta/contributions/methods/experiments
@@ -532,23 +542,23 @@
   同时新增 `evidence_summary` 与 `suggested_citations`。summary 直接给
   title/year/venue、top_contributions、top_methods、key_experiments、
   top_limitations;citations 每条带 `paper_id` / `field` / `text`,方便 final
-  report 稳定引用结构化证据。ResearchAgent 初始指令也改为优先使用这两层
+  report 稳定引用结构化证据。Paper Copilot 初始指令也改为优先使用这两层
   写 Findings/Evidence。按用户要求,本次不跑任何验证命令。
 - **M17 synthesis path 引导**(2026-05-18):`inspect_paper` 现在还返回
   `recommended_followups`,当 `max_papers` 还有空间时建议
   `find_related_papers` / `search_library`,当已触达两篇时建议
-  `compare_papers`。ResearchAgent 初始指令明确:综合/对比任务不要在只
+  `compare_papers`。Paper Copilot 初始指令明确:综合/对比任务不要在只
   inspect 一篇后直接 final,应扩展至少一篇库内相关论文并 inspect/compare
   后再 synthesis。已补 mock trace 覆盖
   `read_paper -> inspect_paper -> find_related_papers -> inspect_paper ->
   compare_papers -> end_turn`;按用户要求未运行任何验证命令。
-- **M17 final evidence refs**(2026-05-18):ResearchAgent final report 现在要求
+- **M17 final evidence refs**(2026-05-18):Paper Copilot final report 现在要求
   Evidence bullets 使用可解析引用格式 `[paper_id:field]`,字段优先来自
-  `suggested_citations` 或 `compare_papers` 输出。`run_research` 会从最终
+  `suggested_citations` 或 `compare_papers` 输出。`run_paper_copilot` 会从最终
   markdown 中抽取引用并写入 session `final_output.evidence_refs`
   (`paper_id` / `field` / `raw`),为后续 unsupported claim rate 统计留接口。
   已补 mock 断言,按用户要求未运行任何验证命令。
-- **M17 final quality payload v1**(2026-05-18):`run_research` 现在基于最终
+- **M17 final quality payload v1**(2026-05-18):`run_paper_copilot` 现在基于最终
   markdown 的 `Findings` 与 evidence refs 写入确定性
   `final_output.quality`:包含 `evidence_ref_count`、`findings_claim_count`、
   `findings_inline_ref_count`、`claims_without_refs_count`、
@@ -557,7 +567,7 @@
   按用户要求未运行任何验证命令。
 - **M17 research quality trend 接入**(2026-05-18):eval run-history 的
   `RunRow` 现在兼容可选 research quality 字段;新增
-  `paper-copilot eval record-research <session.jsonl>` 可把 ResearchAgent
+  `paper-copilot eval record-research <session.jsonl>` 可把 Paper Copilot
   session 的 `final_output.quality` 记录成 `research_quality` row。`eval report`
   遇到这些字段时会追加 evidence coverage 与 unsupported claim ratio 两张
   趋势图。已补纯 mock/HTML 断言,按用户要求未运行任何验证命令。
@@ -571,7 +581,7 @@
   路径;可用 `--no-update-report` 跳过。`eval/_paths.py` 新增
   `default_report_path()` 统一默认位置。按用户要求未运行任何验证命令。
 - **Chat-first intent router v1**(2026-05-18):新增 `paper_copilot.chat.router`
-  作为后续前端单输入框的后端路由层。ResearchAgent 现在会先把自然语言
+  作为后续前端单输入框的后端路由层。Paper Copilot 现在会先把自然语言
   请求路由为 `research` 或 `idea_composer`;命中"创新点/研究想法/idea/
   proposal/选题/实验方案"等意图时,final prompt 自动切到 Composer 输出
   结构:Problem / Prior Evidence / Gap / Idea / Why It Might Work /
@@ -580,7 +590,7 @@
   任何验证命令。
 - **Chat-first runtime API v1**(2026-05-18):新增
   `paper_copilot.chat.runtime.handle_chat_request()` 作为前端单输入框可复用
-  的后端入口。输入裸自然语言,内部完成 route、ResearchAgent run、
+  的后端入口。输入裸自然语言,内部完成 route、Paper Copilot run、
   `research-report.md` 落盘、quality run 记录、`eval/report.html` 刷新,
   返回 `ChatRunResult`:`route` / `report_markdown` / `session_path` /
   `report_path` / `quality_run_path` / `eval_report_path` / cost / paper budget。
@@ -650,7 +660,7 @@
 - **Composer 语义校正**(2026-05-19):按用户纠正,Research Idea Composer
   不是泛泛“缝合论文”,而是 baseline-first workflow:先找可复现 baseline,
   再找 3 个可接入模块/技巧,最后形成可验证的组合改进方案和消融计划。
-  已把 router 关键词、ResearchAgent idea prompt、前端默认示例同步到该语义。
+  已把 router 关键词、Paper Copilot idea prompt、前端默认示例同步到该语义。
 - **主页使用提示与右侧折叠**(2026-05-19):前端主页新增“可以这样用”提示区,
   分两类入口:知识库问答(解释单篇论文、多篇论文对比、研究问题询问)与
   新论文模型框架(按研究方向先找 baseline、再找模块、组合可验证方案)。
@@ -668,13 +678,13 @@
 - **Knowledge QA task_profile v1**(2026-05-19):`knowledge_qa` 仍保持一个产品
   route,但新增轻量 `task_profile` 指导工具策略:`single_paper_focus` /
   `fixed_set_compare` / `topic_survey` / `evidence_lookup` / `claim_check` /
-  `experiment_extraction` / `timeline_synthesis` / `gap_analysis`。ResearchAgent
+  `experiment_extraction` / `timeline_synthesis` / `gap_analysis`。Paper Copilot
   初始 prompt 会写入 task profile 并追加对应查证据约束;历史报告缺失该字段时
   默认映射为 `topic_survey`。按用户验证策略,未跑真实 `/chat` / LLM。
 - **M18 evidence payload v1**(2026-05-19):`search_library` 返回保持旧
   `results` 兼容,同时新增标准 `evidence[]`:`paper_id` / title / year /
   chunk_id / section / page_start / page_end / snippet / distance / score /
-  source_kind / `citation_ref`。ResearchAgent final guidance 已要求优先使用
+  source_kind / `citation_ref`。Paper Copilot final guidance 已要求优先使用
   `search_library evidence citation_ref` 或 inspect/compare 字段引用。按用户
   新指令,以后默认不跑任何验证命令;本次未运行验证。
 - **M18 multi-chunk evidence v1**(2026-05-19):`knowledge.hybrid_search.SearchResult`

@@ -1,5 +1,5 @@
 """Sliding-window chunker used by the cross-paper index and (later) the
-single-paper DeepAgent retrieval.
+single-paper ExtractPaperTool retrieval.
 
 Lives in ``shared/`` because ``retrieval/`` and ``knowledge/`` are sibling
 modules that cannot import each other; both build their own ``Section``

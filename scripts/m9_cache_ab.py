@@ -1,6 +1,6 @@
 """M9 scratch: A/B test whether cache_control on the user message is honored.
 
-Reproduces DeepAgent's exact request shape but lets us toggle the third
+Reproduces ExtractPaperTool's exact request shape but lets us toggle the third
 cache_control marker (on the user block). Run twice back-to-back to see
 if cache_read differs. This file is transient — delete once the question
 is answered.
@@ -13,7 +13,7 @@ import json
 import sys
 from pathlib import Path
 
-from paper_copilot.agents.deep import (
+from paper_copilot.agents.extract_paper_tool import (
     _LANGUAGE_INSTRUCTION,
     _SYSTEM_PROMPT,
     _TOOL_NAME,

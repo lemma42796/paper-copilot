@@ -1,4 +1,4 @@
-"""SkimAgent: first-pass read of a paper PDF.
+"""SkimPaperTool: first-pass read of a paper PDF.
 
 Calls the LLM exactly once with a forced tool_choice that emits a
 `PaperMeta` + `PaperSkeleton` pair in one tool_use block. Does NOT go
@@ -6,7 +6,7 @@ through `agents.loop` — skimming has no real tools, so the loop's
 tool-dispatch machinery would spin for no reason.
 
 Cost accounting is the caller's job: `run()` returns the raw
-`LLMResponse` (wrapped in `SkimRun`), and the caller passes
+`LLMResponse` (wrapped in `SkimPaperToolRun`), and the caller passes
 `response.usage` to `CostTracker.record`.
 """
 
@@ -31,7 +31,7 @@ from paper_copilot.shared.jsonschema import inline_refs
 from paper_copilot.shared.logging import get_logger
 from paper_copilot.shared.pdf import PdfFrontMatter, load_front_matter
 
-__all__ = ["SkimAgent", "SkimResult", "SkimRun"]
+__all__ = ["SkimPaperTool", "SkimPaperToolRun", "SkimResult"]
 
 _log = get_logger(__name__)
 
@@ -78,8 +78,8 @@ class SkimResult:
 
 
 @dataclass(frozen=True, slots=True)
-class SkimRun:
-    """Envelope returned by `SkimAgent.run`. Exposes enough state for the
+class SkimPaperToolRun:
+    """Envelope returned by `SkimPaperTool.run`. Exposes enough state for the
     caller to record cost and dump debug context (request + raw response).
     """
 
@@ -93,8 +93,8 @@ class SkimRun:
 class _SkimToolInput(BaseModel):
     """Private tool-input schema composed of PaperMeta + PaperSkeleton.
 
-    Intentionally lives in skim.py (not schemas/) — it's a wire-level
-    contract between SkimAgent and the LLM, not a domain type.
+    Intentionally lives here (not schemas/) because it is a wire-level
+    contract between SkimPaperTool and the LLM, not a domain type.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -103,12 +103,12 @@ class _SkimToolInput(BaseModel):
     skeleton: PaperSkeleton
 
 
-class SkimAgent:
+class SkimPaperTool:
     def __init__(self, client: LLMClient, store: SessionStore | None = None) -> None:
         self._client = client
         self._store = store
 
-    async def run(self, pdf_path: Path) -> SkimRun:
+    async def run(self, pdf_path: Path) -> SkimPaperToolRun:
         front_matter = await asyncio.to_thread(
             load_front_matter,
             pdf_path,
@@ -123,7 +123,7 @@ class SkimAgent:
             self._store.append_message(role="user", text=user_text)
         validated = await call_validated_tool(
             self._client,
-            agent_name="SkimAgent",
+            component_name="SkimPaperTool",
             model=DEFAULT_MODEL,
             messages=messages,
             tools=tools,
@@ -141,7 +141,7 @@ class SkimAgent:
                 meta = meta.model_copy(update={"arxiv_id": normalized})
 
         result = SkimResult(meta=meta, skeleton=parsed.skeleton)
-        return SkimRun(
+        return SkimPaperToolRun(
             result=result,
             response=validated.response,
             responses=validated.responses,

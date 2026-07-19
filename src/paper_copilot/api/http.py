@@ -58,7 +58,6 @@ class ComposerLibraryHttpRequest(BaseModel):
 
 class ChatHttpResponse(BaseModel):
     request: str
-    route: dict[str, str]
     report_markdown: str
     session_path: str
     report_path: str
@@ -75,7 +74,6 @@ class ChatHttpResponse(BaseModel):
     def from_result(cls, result: ChatRunResult) -> ChatHttpResponse:
         return cls(
             request=result.request,
-            route=result.route.to_payload(),
             report_markdown=result.report_markdown,
             session_path=str(result.session_path),
             report_path=str(result.report_path),
@@ -97,7 +95,6 @@ class ChatHttpResponse(BaseModel):
 class ChatReportHttpItem(BaseModel):
     id: str
     request: str
-    route: dict[str, str]
     report_markdown: str
     session_path: str
     report_path: str
@@ -114,7 +111,6 @@ class ChatReportHttpItem(BaseModel):
         return cls(
             id=item.id,
             request=item.request,
-            route=item.route,
             report_markdown=item.report_markdown,
             session_path=str(item.session_path),
             report_path=str(item.report_path),

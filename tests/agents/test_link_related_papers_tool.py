@@ -3,7 +3,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from paper_copilot.agents.related import (
+from paper_copilot.agents.link_related_papers_tool import (
     _MAX_LINKS,
     _build_query_text,
     _build_user_text,

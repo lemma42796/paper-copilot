@@ -90,7 +90,6 @@ def _print_result(result: ChatRunResult) -> None:
     console = Console()
     console.print(Markdown(result.report_markdown))
     console.print()
-    console.print(f"[dim]route:   {result.route.kind}[/dim]")
     console.print(f"[dim]session: {result.session_path}[/dim]")
     console.print(f"[dim]report:  {result.report_path}[/dim]")
     if result.quality_run_path is not None:

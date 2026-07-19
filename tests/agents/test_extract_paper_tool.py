@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from paper_copilot.agents.deep import _DeepToolInput
+from paper_copilot.agents.extract_paper_tool import _DeepToolInput
 
 _FIXTURE = Path(__file__).resolve().parent.parent / "fixtures/deep_transformer_tool_input.json"
 

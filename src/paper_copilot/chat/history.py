@@ -15,7 +15,6 @@ from paper_copilot.session.types import FinalOutput, SessionEntry, SessionHeader
 class ChatReportItem:
     id: str
     request: str
-    route: dict[str, str]
     report_markdown: str
     session_path: Path
     report_path: Path
@@ -52,8 +51,7 @@ def _read_report(report_path: Path) -> ChatReportItem:
 
     return ChatReportItem(
         id=report_path.parent.name,
-        request=_string_field(payload, "topic", default=header.paper_id),
-        route=_route_field(payload.get("request_route")),
+        request=_request_field(payload, default=header.paper_id),
         report_markdown=report_path.read_text(encoding="utf-8"),
         session_path=session_path,
         report_path=report_path,
@@ -86,32 +84,12 @@ def _string_field(payload: Mapping[str, Any], key: str, *, default: str) -> str:
     return value if isinstance(value, str) else default
 
 
-def _route_field(value: object) -> dict[str, str]:
-    if not isinstance(value, Mapping):
-        return {
-            "kind": "knowledge_qa",
-            "output_profile": "knowledge_qa",
-            "task_profile": "topic_survey",
-            "reason": "missing_route",
-        }
-    route = {str(key): item for key, item in value.items() if isinstance(item, str)}
-    kind = route.get("kind")
-    output_profile = route.get("output_profile")
-    if kind == "research":
-        route["kind"] = "knowledge_qa"
-    elif kind == "idea_composer":
-        route["kind"] = "framework_composer"
-    if output_profile in {"research", "research_report"}:
-        route["output_profile"] = "knowledge_qa"
-    elif output_profile == "idea_composer":
-        route["output_profile"] = "framework_composer"
-    if "task_profile" not in route:
-        route["task_profile"] = (
-            "framework_composer"
-            if route.get("kind") == "framework_composer"
-            else "topic_survey"
-        )
-    return route
+def _request_field(payload: Mapping[str, Any], *, default: str) -> str:
+    return _string_field(
+        payload,
+        "prompt",
+        default=_string_field(payload, "topic", default=default),
+    )
 
 
 def _cost_field(value: object) -> float | None:

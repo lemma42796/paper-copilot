@@ -31,7 +31,7 @@ def test_call_validated_tool_retries_once_after_schema_error(tmp_path: Path) -> 
     result = asyncio.run(
         call_validated_tool(
             llm,
-            agent_name="TestAgent",
+            component_name="TestTool",
             model="m",
             messages=[{"role": "user", "content": "go"}],
             tools=[{"name": "emit_test", "input_schema": {}}],
@@ -60,11 +60,11 @@ def test_call_validated_tool_raises_after_retry_is_exhausted(tmp_path: Path) -> 
     store = SessionStore.create("abc", model="m", agent="test", root=tmp_path)
     llm = MockLLM([_tool_response("bad1", {}), _tool_response("bad2", {})])
 
-    with pytest.raises(SchemaValidationError, match="TestAgent schema validation failed"):
+    with pytest.raises(SchemaValidationError, match="TestTool schema validation failed"):
         asyncio.run(
             call_validated_tool(
                 llm,
-                agent_name="TestAgent",
+                component_name="TestTool",
                 model="m",
                 messages=[{"role": "user", "content": "go"}],
                 tools=[{"name": "emit_test", "input_schema": {}}],

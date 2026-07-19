@@ -190,7 +190,7 @@ def retrieval(
 def record_research(
     session_path: Annotated[
         Path,
-        typer.Argument(help="Path to a ResearchAgent session.jsonl"),
+        typer.Argument(help="Path to a Paper Copilot session.jsonl"),
     ],
     runs_dir: Annotated[
         Path | None,
@@ -201,7 +201,7 @@ def record_research(
         typer.Option("--suite-name", help="Suite name to write into run history"),
     ] = "research",
 ) -> None:
-    """Record a ResearchAgent final_output.quality row for eval report trends."""
+    """Record a Paper Copilot final_output.quality row for eval report trends."""
     session_path = session_path.expanduser()
     if not session_path.is_file():
         raise typer.BadParameter(f"session file not found: {session_path}")

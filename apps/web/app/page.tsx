@@ -4,13 +4,6 @@ import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
 
 type HealthState = "checking" | "online" | "offline";
 
-type ChatRoute = {
-  kind?: string;
-  output_profile?: string;
-  task_profile?: string;
-  reason?: string;
-};
-
 type ComposerPoolName = "ccf_a" | "ccf_b" | "other";
 
 type ComposerDecision = {
@@ -47,7 +40,6 @@ type ComposerProposalCheck = {
 
 type ChatResponse = {
   request: string;
-  route: ChatRoute;
   report_markdown: string;
   session_path: string;
   report_path: string;
@@ -116,7 +108,6 @@ type ComposerLibraryResponse = {
 type ReportHistoryEntry = {
   id: string;
   request: string;
-  route: ChatRoute;
   report_markdown: string;
   session_path: string;
   report_path: string;
@@ -132,7 +123,6 @@ type ReportHistoryEntry = {
 type RunHistoryItem = {
   id: string;
   request: string;
-  route: string;
   cost: number | null;
   reportPath: string;
   sessionPath: string;
@@ -484,8 +474,7 @@ export default function Home() {
                 >
                   <span>{item.request}</span>
                   <small>
-                    {formatRoute(item.route)} · {formatCost(item.cost)} ·{" "}
-                    {formatHistoryTime(item.updatedAt)}
+                    {formatCost(item.cost)} · {formatHistoryTime(item.updatedAt)}
                   </small>
                 </button>
               ))
@@ -695,7 +684,6 @@ function historyItemFromChatResult(result: ChatResponse): RunHistoryItem {
   return {
     id: result.session_path,
     request: result.request,
-    route: normalizeRoute(result.route.kind),
     cost: result.cost_cny,
     reportPath: result.report_path,
     sessionPath: result.session_path,
@@ -713,7 +701,6 @@ function historyItemFromReport(entry: ReportHistoryEntry): RunHistoryItem {
   return {
     id: entry.session_path,
     request: entry.request,
-    route: normalizeRoute(entry.route.kind),
     cost: entry.cost_cny,
     reportPath: entry.report_path,
     sessionPath: entry.session_path,
@@ -730,7 +717,6 @@ function historyItemFromReport(entry: ReportHistoryEntry): RunHistoryItem {
 function chatResponseFromHistoryItem(item: RunHistoryItem): ChatResponse {
   return {
     request: item.request,
-    route: { kind: item.route },
     report_markdown: item.reportMarkdown,
     session_path: item.sessionPath,
     report_path: item.reportPath,
@@ -761,7 +747,7 @@ function ReportToolbar({
           {result.request}
         </p>
         <p className="report-subtitle">
-          {formatRoute(result.route.kind)} · {formatCost(result.cost_cny)}
+          {formatCost(result.cost_cny)}
         </p>
       </div>
       <div className="report-toolbar-actions">
@@ -812,7 +798,6 @@ function RunMetadata({
     <section className="metadata">
       <h2>运行</h2>
       <dl>
-        <MetaItem label="路由" value={formatRoute(result.route.kind)} />
         <MetaItem label="停止原因" value={formatTermination(result.termination_reason)} />
         <MetaItem label="费用" value={`¥${result.cost_cny.toFixed(4)}`} />
         <MetaItem label="事件数" value={String(result.events_count)} />
@@ -1173,30 +1158,6 @@ function formatHistoryTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
-}
-
-function normalizeRoute(route: string | undefined): string {
-  switch (route) {
-    case "idea_composer":
-      return "framework_composer";
-    case "research":
-    case "research_report":
-    case undefined:
-      return "knowledge_qa";
-    default:
-      return route;
-  }
-}
-
-function formatRoute(route: string | undefined): string {
-  switch (normalizeRoute(route)) {
-    case "framework_composer":
-      return "新论文模型框架";
-    case "knowledge_qa":
-      return "知识库问答";
-    default:
-      return route ?? "知识库问答";
-  }
 }
 
 function formatComposerPoolName(pool: ComposerPoolName): string {

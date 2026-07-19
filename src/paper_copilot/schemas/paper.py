@@ -408,6 +408,6 @@ class Paper(BaseModel):
         default_factory=list,
         description=(
             "Links to related papers in the local library. "
-            "Empty until populated by RelatedAgent in M12."
+            "Empty until populated by LinkRelatedPapersTool."
         ),
     )

@@ -1,13 +1,11 @@
-"""DeepAgent: single-pass deep read producing Contribution + Method + Experiment
-+ Limitation in one forced tool_choice call.
+"""ExtractPaperTool: extract paper fields in one forced tool_choice call.
 
-Like SkimAgent, does NOT go through `agents.loop` — there are no real tools to
-execute, the tool is purely a structured-output channel. Input is the full body
-text of the paper, concatenated section by section using the `PaperSkeleton`
-produced by SkimAgent.
+Like SkimPaperTool, this component does not go through `agents.loop`; it has no
+autonomous planning loop. Input is the full body text of the paper, concatenated
+section by section using the `PaperSkeleton` produced by SkimPaperTool.
 
 Cost accounting is the caller's job: `run()` returns the raw `LLMResponse`
-(wrapped in `DeepRun`), and the caller passes `response.usage` to
+(wrapped in `ExtractPaperToolRun`), and the caller passes `response.usage` to
 `CostTracker.record`.
 """
 
@@ -35,7 +33,7 @@ from paper_copilot.session import SessionStore
 from paper_copilot.shared.cache import cached_system, mark_tools_cached
 from paper_copilot.shared.jsonschema import inline_refs
 
-__all__ = ["DeepAgent", "DeepResult", "DeepRun"]
+__all__ = ["DeepResult", "ExtractPaperTool", "ExtractPaperToolRun"]
 
 _TOOL_NAME = "emit_deep"
 _MAX_TOKENS = 3000
@@ -87,8 +85,8 @@ class DeepResult:
 
 
 @dataclass(frozen=True, slots=True)
-class DeepRun:
-    """Envelope returned by `DeepAgent.run`. Exposes enough state for the
+class ExtractPaperToolRun:
+    """Envelope returned by `ExtractPaperTool.run`. Exposes enough state for the
     caller to record cost and dump debug context (request + raw response).
     """
 
@@ -102,8 +100,8 @@ class DeepRun:
 class _DeepToolInput(BaseModel):
     """Private tool-input schema composed of the four field lists.
 
-    Intentionally lives in deep.py (not schemas/) — it's a wire-level contract
-    between DeepAgent and the LLM, not a domain type.
+    Intentionally lives here (not schemas/) because it is a wire-level contract
+    between ExtractPaperTool and the LLM, not a domain type.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -114,7 +112,7 @@ class _DeepToolInput(BaseModel):
     limitations: list[Limitation]
 
 
-class DeepAgent:
+class ExtractPaperTool:
     def __init__(self, client: LLMClient, store: SessionStore | None = None) -> None:
         self._client = client
         self._store = store
@@ -125,7 +123,7 @@ class DeepAgent:
         skeleton: PaperSkeleton,
         *,
         language: Literal["en", "zh"] = "en",
-    ) -> DeepRun:
+    ) -> ExtractPaperToolRun:
         sections = await asyncio.to_thread(split_by_sections, pdf_path, skeleton)
         user_text = _build_user_text(sections)
         # No cache_control on the user message: Dashscope qwen-flash silently
@@ -140,7 +138,7 @@ class DeepAgent:
             self._store.append_message(role="user", text=user_text)
         validated = await call_validated_tool(
             self._client,
-            agent_name="DeepAgent",
+            component_name="ExtractPaperTool",
             model=DEFAULT_MODEL,
             messages=messages,
             tools=tools,
@@ -158,7 +156,7 @@ class DeepAgent:
             experiments=parsed.experiments,
             limitations=parsed.limitations,
         )
-        return DeepRun(
+        return ExtractPaperToolRun(
             result=result,
             response=validated.response,
             responses=validated.responses,

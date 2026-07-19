@@ -77,7 +77,7 @@ def test_write_emits_valid_json_with_utf8(tmp_path: Path) -> None:
 
 
 def _seed_session_with_final(root: Path, paper_id: str, payload: dict[str, object]) -> Path:
-    store = SessionStore.create(paper_id, model="m", agent="MainAgent", root=root)
+    store = SessionStore.create(paper_id, model="m", agent="ReadPaperTool", root=root)
     store.append_final_output(payload=payload)
     return store.path
 
@@ -120,7 +120,7 @@ def test_mark_from_session_rejects_unsupported_field(tmp_path: Path) -> None:
 
 def test_mark_from_session_no_final_output_raises(tmp_path: Path) -> None:
     home = tmp_path / "home"
-    SessionStore.create("pid_y", model="m", agent="MainAgent", root=home)
+    SessionStore.create("pid_y", model="m", agent="ReadPaperTool", root=home)
     # session has only a header, no final_output yet
     with pytest.raises(EvalError, match="no final_output"):
         mark_from_session("pid_y", ("meta",), root=home, dir_=tmp_path / "g")

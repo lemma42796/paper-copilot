@@ -1,5 +1,5 @@
-"""PDF reading utilities used by SkimAgent (front matter) and, later,
-DeepAgent chunking.
+"""PDF reading utilities used by SkimPaperTool (front matter) and, later,
+ExtractPaperTool chunking.
 
 This module sits below the LLM boundary: PyMuPDF exceptions (encrypted
 PDFs, corrupt files, missing path) propagate unchanged. Callers translate

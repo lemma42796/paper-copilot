@@ -1,15 +1,15 @@
-"""RelatedAgent: cross-paper linker invoked at the end of `read`.
+"""LinkRelatedPapersTool: cross-paper linker invoked at the end of `read`.
 
 One forced tool_use call. Builds a query vector from the new paper's title +
 top contributions, asks `knowledge.hybrid_search` for up to K candidates (with
 self filtered out), and lets the LLM pick at most 3 concrete relationships
 from a fixed `relation_type` enum. If the library is too small or no strong
-candidates remain after filtering, the agent short-circuits to an empty list
+candidates remain after filtering, the tool short-circuits to an empty list
 and makes no LLM call.
 
-Pattern mirrors SkimAgent/DeepAgent: skips `agents.loop` (no real tool
-execution), returns the raw response so the caller records usage on its own
-CostTracker.
+Like the other read tools, it skips `agents.loop` because it has no autonomous
+planning loop. It returns the raw response so the caller records usage on its
+own CostTracker.
 
 Cache strategy (M9 lesson): system + tools marked, user NOT marked — the
 ~2K-token candidate payload sits on the boundary where Dashscope qwen-flash
@@ -36,12 +36,12 @@ from paper_copilot.shared.embedding_cache import EmbeddingEncoder
 from paper_copilot.shared.jsonschema import inline_refs
 from paper_copilot.shared.logging import get_logger
 
-__all__ = ["RelatedAgent", "RelatedResult", "RelatedRun"]
+__all__ = ["LinkRelatedPapersTool", "LinkRelatedPapersToolRun", "RelatedResult"]
 
 _log = get_logger(__name__)
 
 _TOOL_NAME = "emit_related_links"
-_AGENT_NAME = "RelatedAgent"
+_COMPONENT_NAME = "LinkRelatedPapersTool"
 _CANDIDATE_K = 10
 _MIN_CANDIDATES_AFTER_SELF_FILTER = 2
 _MAX_LINKS = 3
@@ -79,7 +79,7 @@ _SYSTEM_PROMPT = (
 
 
 class _RelatedToolInput(BaseModel):
-    """Wire-level tool-input schema. Private to RelatedAgent."""
+    """Wire-level tool-input schema. Private to LinkRelatedPapersTool."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -99,7 +99,7 @@ class RelatedResult:
 
 
 @dataclass(frozen=True, slots=True)
-class RelatedRun:
+class LinkRelatedPapersToolRun:
     result: RelatedResult
     response: LLMResponse | None
     responses: tuple[LLMResponse, ...] = ()
@@ -108,7 +108,7 @@ class RelatedRun:
     skipped_reason: str | None = None
 
 
-class RelatedAgent:
+class LinkRelatedPapersTool:
     def __init__(self, client: LLMClient, store: SessionStore | None = None) -> None:
         self._client = client
         self._store = store
@@ -121,7 +121,7 @@ class RelatedAgent:
         embedder: EmbeddingEncoder,
         fields_store: FieldsStore,
         embeddings_store: EmbeddingsStore,
-    ) -> RelatedRun:
+    ) -> LinkRelatedPapersToolRun:
         query_text = _build_query_text(new_paper)
         query_vec = embedder.encode([query_text])[0]
 
@@ -136,7 +136,7 @@ class RelatedAgent:
         if len(candidates) < _MIN_CANDIDATES_AFTER_SELF_FILTER:
             reason = f"library_too_small (got {len(candidates)} candidates after self-filter)"
             _log.info("related.skipped", reason=reason, new_paper_id=new_paper_id)
-            return RelatedRun(
+            return LinkRelatedPapersToolRun(
                 result=RelatedResult(links=[]),
                 response=None,
                 skipped_reason=reason,
@@ -152,7 +152,7 @@ class RelatedAgent:
 
         validated = await call_validated_tool(
             self._client,
-            agent_name=_AGENT_NAME,
+            component_name=_COMPONENT_NAME,
             model=DEFAULT_MODEL,
             messages=messages,
             tools=tools,
@@ -170,7 +170,7 @@ class RelatedAgent:
             new_paper_year=new_paper.meta.year,
         )
 
-        return RelatedRun(
+        return LinkRelatedPapersToolRun(
             result=RelatedResult(links=links),
             response=validated.response,
             responses=validated.responses,

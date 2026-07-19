@@ -1,4 +1,4 @@
-"""Manual reality check for SkimAgent.
+"""Manual reality check for SkimPaperTool.
 
 Run: `uv run python scripts/try_skim.py <pdf_path>`
 
@@ -23,7 +23,11 @@ from rich.table import Table
 from rich.tree import Tree
 
 from paper_copilot.agents.llm_client import DEFAULT_MODEL, LLMClient
-from paper_copilot.agents.skim import SkimAgent, SkimResult, SkimRun
+from paper_copilot.agents.skim_paper_tool import (
+    SkimPaperTool,
+    SkimPaperToolRun,
+    SkimResult,
+)
 from paper_copilot.session import SessionStore, compute_paper_id, session_file
 from paper_copilot.shared.cost import CostTracker
 
@@ -76,7 +80,7 @@ def _render(console: Console, result: SkimResult, cost: CostTracker) -> None:
     )
 
 
-def _write_dump(run: SkimRun, pdf_stem: str) -> Path:
+def _write_dump(run: SkimPaperToolRun, pdf_stem: str) -> Path:
     ts = int(time.time())
     dump_path = Path(f"/tmp/try_skim_{pdf_stem}_{ts}_{DEFAULT_MODEL}.json")
     payload: dict[str, Any] = {
@@ -100,10 +104,10 @@ async def _amain(pdf_path: Path) -> None:
     client = LLMClient()
     paper_id = compute_paper_id(pdf_path)
     store = SessionStore.create(paper_id, model=DEFAULT_MODEL, agent="skim")
-    agent = SkimAgent(client, store=store)
+    tool = SkimPaperTool(client, store=store)
     cost = CostTracker()
 
-    run = await agent.run(pdf_path)
+    run = await tool.run(pdf_path)
     if run.response.usage is not None:
         cost.record(run.response.usage)
 
@@ -114,7 +118,7 @@ async def _amain(pdf_path: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Manual SkimAgent reality check.")
+    parser = argparse.ArgumentParser(description="Manual SkimPaperTool reality check.")
     parser.add_argument("pdf_path", type=Path, help="absolute path to a PDF file")
     args = parser.parse_args()
     asyncio.run(_amain(args.pdf_path))

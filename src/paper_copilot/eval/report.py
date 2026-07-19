@@ -9,7 +9,7 @@ runs:
 2. Per-paper cost (CNY) — catches model/prompt cost regressions.
 3. Per-paper cache-hit ratio — catches M9 cache regressions
    (cache_read / total billed prompt tokens).
-4. Optional ResearchAgent evidence quality — catches unsupported-claim
+4. Optional Paper Copilot evidence quality — catches unsupported-claim
    drift when rows include M17 quality payload fields.
 5. Optional retrieval recall — catches paper/evidence index search regressions
    when rows include M18 retrieval eval payload fields.

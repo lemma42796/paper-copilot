@@ -1,5 +1,5 @@
-from paper_copilot.agents.deep import DeepResult
-from paper_copilot.agents.main import _assemble_paper
+from paper_copilot.agents.extract_paper_tool import DeepResult
+from paper_copilot.agents.read_paper_tool import _assemble_paper
 from paper_copilot.schemas.paper import (
     Contribution,
     Experiment,

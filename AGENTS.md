@@ -49,7 +49,7 @@ These are the most frequent failure modes. Read them every session.
 ```
 
 6. **Do not silently modify files outside the current task's scope.** If
-   a task says "implement `DeepAgent`", do not also edit `SkimAgent` or
+   a task says "implement `ExtractPaperTool`", do not also edit `SkimPaperTool` or
    `schemas/`. If something outside scope needs to change, stop and ask.
 
 7. **Do not write tests before the implementation is stable.** For a
@@ -179,7 +179,7 @@ Format: `<type>: <subject>`, lower case, no period.
 Types: `feat` / `fix` / `refactor` / `docs` / `test` / `chore` / `perf`
 
 Example:
-feat: implement SkimAgent with real Anthropic API
+feat: implement SkimPaperTool with real Anthropic API
 fix: handle PyMuPDF off-by-one page numbering
 refactor: extract retrieval interface from single-paper embedding logic
 
@@ -240,7 +240,7 @@ One M12 lesson worth keeping (2026-04-25):
   being right there in the prompt. This is the same M8-class semantic
   variant that prompt anchors don't fix — the model picks the closest
   enum even when temporally impossible. Solution:
-  `agents.related._validate_links` enforces `candidate.year ≤
+  `agents.link_related_papers_tool._validate_links` enforces `candidate.year ≤
   new_paper.year` for the three directional types after the LLM
   returns. Pattern generalizes: when an enum has structure the LLM
   must respect (temporal, causal, hierarchical), enforce it

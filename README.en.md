@@ -67,7 +67,7 @@ Paper Copilot has moved toward a local chat-first research assistant:
 - The local API runs via `paper-copilot serve`; the main runtime endpoint is
   `POST /chat`.
 - `apps/web/` contains a Next.js macOS-style chat shell with library selection,
-  report history, route/status display, cost display, Composer summaries, and
+  report history, run status, cost display, Composer summaries, and
   evidence inspection.
 - Retrieval now uses DashScope `text-embedding-v4` with FTS5/BM25 + vector RRF +
   multi-chunk evidence; previously computed text embeddings are reused from a
@@ -117,8 +117,10 @@ open-ended autonomous literature reviewer.
 ### Chat-first Research Entry
 
 - Accept a natural-language request.
-- Route it to `knowledge_qa` or `framework_composer`.
-- Return Markdown, route, session/report paths, cost, termination reason, and
+- Let Paper Copilot decide whether to answer directly or call one or more tools.
+- Casual conversation uses no paper tools; the model selects tools when local
+  evidence, PDF reading, comparison, or proposal generation is needed.
+- Return Markdown, session/report paths, cost, termination reason, and
   paper budget.
 
 ### Model-framework Drafts From Research Directions
@@ -294,7 +296,6 @@ curl -sS -X POST http://127.0.0.1:8765/chat \
 
 The response includes:
 
-- route / task profile
 - Markdown report
 - session path / report path
 - quality run path / eval report path
@@ -309,7 +310,7 @@ The response includes:
 apps/web
   -> local HTTP API
   -> chat.runtime.handle_chat_request()
-  -> ResearchAgent bounded tool loop
+  -> Paper Copilot bounded tool loop
   -> local knowledge stores
   -> Markdown reports + JSONL traces + eval rows
 ```
@@ -319,8 +320,8 @@ Main modules:
 | Path | Responsibility |
 | --- | --- |
 | `src/paper_copilot/api/` | Local HTTP API |
-| `src/paper_copilot/chat/` | Single-input routing and runtime |
-| `src/paper_copilot/agents/` | Reading agents and research loop |
+| `src/paper_copilot/chat/` | Single-input runtime and report history |
+| `src/paper_copilot/agents/` | Single Paper Copilot, tool loop, and paper-reading tools |
 | `src/paper_copilot/knowledge/` | Cross-paper indexes and hybrid search |
 | `src/paper_copilot/retrieval/` | Single-paper chunk / section utilities |
 | `src/paper_copilot/eval/` | Regression, retrieval eval, and reports |

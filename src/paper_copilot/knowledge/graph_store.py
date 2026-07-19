@@ -1,6 +1,6 @@
 """Append-only cross-paper edge log at ``<root>/graph/cross-paper-links.jsonl``.
 
-One line per directed edge emitted by RelatedAgent. The log is the source of
+One line per directed edge emitted by LinkRelatedPapersTool. The log is the source of
 truth for cross-paper relations; Paper.cross_paper_links in session.jsonl is a
 denormalised copy. Kept flat + append-only because MVP has no "update" or
 "delete" use case — a stale link survives until the related paper is fully
