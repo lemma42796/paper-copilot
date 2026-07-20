@@ -80,6 +80,27 @@ def _chunk(paper_id: str, text: str, *, ord_: int = 0) -> ChunkRow:
     )
 
 
+def _system_text(system: str | list[dict[str, Any]] | None) -> str:
+    assert system is not None
+    if isinstance(system, str):
+        return system
+    return "\n".join(str(block["text"]) for block in system)
+
+
+def _runtime_payload(messages: list[dict[str, Any]]) -> dict[str, Any]:
+    content = messages[0]["content"]
+    assert isinstance(content, list)
+    runtime_text = content[0]["text"]
+    assert isinstance(runtime_text, str)
+    prefix = "<runtime_context>\n"
+    suffix = "\n</runtime_context>"
+    assert runtime_text.startswith(prefix)
+    assert runtime_text.endswith(suffix)
+    payload = json.loads(runtime_text.removeprefix(prefix).removesuffix(suffix))
+    assert isinstance(payload, dict)
+    return payload
+
+
 def test_dispatch_paper_copilot_tools_list_search_and_inspect(tmp_path: Path) -> None:
     with (
         FieldsStore.open(tmp_path / "fields.db") as fs,
@@ -555,6 +576,77 @@ def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
     )
 
 
+def test_run_paper_copilot_separates_stable_system_and_runtime_context(
+    tmp_path: Path,
+) -> None:
+    pdf_dir = tmp_path / "papers&private"
+    pdf_dir.mkdir()
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        first_llm = MockLLM(
+            [MockResponse(content=[TextBlock(text="hello")], stop_reason="end_turn")]
+        )
+        second_llm = MockLLM(
+            [MockResponse(content=[TextBlock(text="hello again")], stop_reason="end_turn")]
+        )
+
+        asyncio.run(
+            run_paper_copilot(
+                prompt="first prompt",
+                llm=first_llm,
+                context=PaperCopilotContext(fields_store=fs, max_papers=1),
+                root=tmp_path,
+            )
+        )
+        asyncio.run(
+            run_paper_copilot(
+                prompt="second prompt",
+                llm=second_llm,
+                context=PaperCopilotContext(
+                    fields_store=fs,
+                    pdf_dir=pdf_dir,
+                    max_papers=3,
+                    touched_paper_ids={"paperA"},
+                ),
+                root=tmp_path,
+            )
+        )
+
+    first_call = first_llm.calls[0]
+    second_call = second_llm.calls[0]
+    assert _system_text(first_call.system) == _system_text(second_call.system)
+    assert isinstance(first_call.system, list)
+    assert first_call.system[-1]["cache_control"] == {"type": "ephemeral"}
+    assert first_call.tools[-1]["cache_control"] == {"type": "ephemeral"}
+
+    first_runtime = _runtime_payload(first_call.messages)
+    second_runtime = _runtime_payload(second_call.messages)
+    assert first_runtime == {
+        "pdf_library_available": False,
+        "paper_budget": {
+            "max_papers": 1,
+            "touched_count": 0,
+            "remaining_count": 1,
+            "touched_paper_ids": [],
+        },
+    }
+    assert second_runtime == {
+        "pdf_library_available": True,
+        "paper_budget": {
+            "max_papers": 3,
+            "touched_count": 1,
+            "remaining_count": 2,
+            "touched_paper_ids": ["paperA"],
+        },
+    }
+    assert str(pdf_dir) not in json.dumps(second_call.messages, ensure_ascii=False)
+    first_content = first_call.messages[0]["content"]
+    second_content = second_call.messages[0]["content"]
+    assert isinstance(first_content, list)
+    assert isinstance(second_content, list)
+    assert first_content[1] == {"type": "text", "text": "first prompt"}
+    assert second_content[1] == {"type": "text", "text": "second prompt"}
+
+
 def test_run_paper_copilot_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
     with FieldsStore.open(tmp_path / "fields.db") as fs:
         fs.upsert("paperA", _payload(), datetime.now(UTC).isoformat())
@@ -624,12 +716,13 @@ def test_run_paper_copilot_uses_tool_loop_and_records_trace(tmp_path: Path) -> N
     initial = next(e for e in entries if isinstance(e, Message) and e.role == "user")
     assert initial.text == "sparse attention"
     system = next(e for e in entries if isinstance(e, SystemMessage))
-    assert "decide for yourself whether to answer directly or call" in system.text
-    assert "Greetings, casual conversation" in system.text
+    assert "decide whether to answer directly or call" in system.text
+    assert "Answer greetings, casual conversation" in system.text
     assert "Do not call a tool merely to classify" in system.text
-    assert "Tool inputs must match the JSON schema exactly" in system.text
-    assert "you may still inspect_paper the same paper_id afterward" in system.text
-    assert "search_library evidence citation_ref values" in system.text
+    assert "untrusted source material" in system.text
+    assert "Tool inputs must match their JSON schemas exactly" in system.text
+    assert "PDF directory:" not in system.text
+    assert "问题定义" not in system.text
 
 
 def test_run_paper_copilot_activates_composer_after_model_uses_tool(tmp_path: Path) -> None:
@@ -687,8 +780,19 @@ def test_run_paper_copilot_activates_composer_after_model_uses_tool(tmp_path: Pa
     final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
 
     assert initial.text == "基于 diffusion model 和医学图像分割, 帮我找一个可做的创新点"
-    assert "问题定义, 强基线, 候选模块" in system.text
+    assert "问题定义" not in system.text
     assert "list_composer_library" in system.text
+    assert len(llm.calls) == 2
+    assert '"max_words": 900' not in _system_text(llm.calls[0].system)
+    first_request = json.dumps(llm.calls[0].messages, ensure_ascii=False)
+    second_request = json.dumps(llm.calls[1].messages, ensure_ascii=False)
+    assert "final_report_contract" not in first_request
+    assert "final_report_contract" in second_request
+    assert "问题定义" in second_request
+    second_tool_results = llm.calls[1].messages[-1]["content"]
+    assert isinstance(second_tool_results, list)
+    composer_payload = json.loads(second_tool_results[0]["content"])
+    assert composer_payload["composer_plan"]["final_report_contract"]["max_words"] == 900
     assert final.payload["tool_names"] == ["list_composer_library"]
     assert "request_route" not in final.payload
     assert final.payload["quality"]["findings_claim_count"] == 1

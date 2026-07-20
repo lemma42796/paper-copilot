@@ -294,6 +294,9 @@ class ComposerPlanState:
             },
             "inspected_paper_ids": sorted(self.inspected_paper_ids),
             "final_report_contract": {
+                "language": "zh-CN",
+                "max_words": 900,
+                "output_only": "proposal_or_explicit_gap_report",
                 "sections": [
                     "问题定义",
                     "强基线",
@@ -311,9 +314,13 @@ class ComposerPlanState:
                     "baseline improvement opening or story-worthy weakness",
                     "exactly 3 selected module paper_ids and pools",
                     "each accepted module comes from a distinct paper_id",
+                    "name, source paper, and function for each accepted module",
                     "attachment point for each accepted module",
+                    "compatibility or conflict notes for each accepted module",
                     "source paper_id in every compatibility row or bullet",
                     "fallback reason for any module below ccf_a",
+                    "pool trace for the baseline and each accepted module",
+                    "dataset or task, baseline, metric, and evidence-backed ablations",
                     "citation refs for concrete claims",
                     (
                         "implementation specifics such as new loss combinations, "
@@ -321,6 +328,11 @@ class ComposerPlanState:
                         "or complexity changes must be cited or explicitly marked "
                         "as hypotheses/gaps"
                     ),
+                ],
+                "must_not_include": [
+                    "process narration or readiness announcements before the title",
+                    "markdown separators before the proposal",
+                    "unsupported implementation details presented as facts",
                 ],
             },
         }
