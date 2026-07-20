@@ -3,7 +3,7 @@
 Purpose: fail loudly when the embedding model / dim drifts from what's
 baked into ``embeddings.db``. A mismatched query vector silently
 produces garbage distances — the check here catches it at open-time
-instead. Callers must ``paper-copilot reindex`` after any change.
+instead. Callers must rebuild the index after any change.
 """
 
 from __future__ import annotations
@@ -73,14 +73,12 @@ def require_match(path: Path, *, embedding_model: str, embedding_dim: int) -> In
     """
     meta = read_meta(path)
     if meta is None:
-        raise KnowledgeError(
-            f"meta.json not found at {path}; run `paper-copilot reindex` to build the index"
-        )
+        raise KnowledgeError(f"meta.json not found at {path}; rebuild the index before querying")
     if meta.embedding_model != embedding_model or meta.embedding_dim != embedding_dim:
         raise KnowledgeError(
             f"embedding model mismatch: index built with "
             f"{meta.embedding_model!r} (dim={meta.embedding_dim}); "
             f"runtime is {embedding_model!r} (dim={embedding_dim}). "
-            f"Run `paper-copilot reindex` to rebuild."
+            f"Rebuild the index before querying."
         )
     return meta

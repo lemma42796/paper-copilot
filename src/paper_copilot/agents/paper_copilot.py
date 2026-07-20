@@ -528,7 +528,7 @@ def paper_copilot_tools() -> list[dict[str, Any]]:
         _tool_schema(
             "list_pdfs",
             (
-                "List PDF files in the provided --pdf-dir. This does not read "
+                "List PDF files in the configured PDF directory. This does not read "
                 "or index them; it only reports candidate filenames and paper_ids."
             ),
             _ListPdfsInput,
@@ -536,7 +536,7 @@ def paper_copilot_tools() -> list[dict[str, Any]]:
         _tool_schema(
             "read_paper",
             (
-                "Read and index one local PDF under --pdf-dir, or report an "
+                "Read and index one local PDF under the configured PDF directory, or report an "
                 "already-indexed paper. Counts toward max_papers and consumes "
                 "the shared run budget. If a paper_id cannot be mapped to a "
                 "local PDF, returns needs_user_action instead of inventing. "
@@ -548,7 +548,7 @@ def paper_copilot_tools() -> list[dict[str, Any]]:
         _tool_schema(
             "list_composer_library",
             (
-                "List the local Research Idea Composer pools under --pdf-dir. "
+                "List the local Research Idea Composer pools under the configured PDF directory. "
                 "The expected layout is ccf_a, ccf_b, and other. ccf_a is the "
                 "only baseline pool. Module search must try ccf_a first, then "
                 "fall back to ccf_b only after rejecting ccf_a modules, and use "
@@ -709,7 +709,7 @@ def _list_papers(args: _ListPapersInput, context: PaperCopilotContext) -> dict[s
 
 def _list_pdfs(args: _ListPdfsInput, context: PaperCopilotContext) -> dict[str, Any]:
     if context.pdf_dir is None:
-        raise KnowledgeError("no --pdf-dir was provided for this research run")
+        raise KnowledgeError("no PDF directory was configured for this research run")
     if not context.pdf_dir.exists():
         raise KnowledgeError(f"pdf_dir does not exist: {context.pdf_dir}")
     term = args.contains.lower() if args.contains is not None else None
@@ -749,7 +749,7 @@ def _resolve_read_target(args: _ReadPaperInput, context: PaperCopilotContext) ->
 
 def _resolve_pdf_path(path: Path, context: PaperCopilotContext) -> Path:
     if context.pdf_dir is None:
-        raise KnowledgeError("read_paper requires --pdf-dir for pdf_path inputs")
+        raise KnowledgeError("read_paper requires a configured PDF directory for pdf_path inputs")
     pdf_dir = context.pdf_dir.resolve()
     candidate = path.expanduser()
     if not candidate.is_absolute():
@@ -763,7 +763,7 @@ def _resolve_pdf_path(path: Path, context: PaperCopilotContext) -> Path:
         candidate.relative_to(pdf_dir)
     except ValueError as exc:
         raise KnowledgeError(
-            f"read_paper only reads PDFs under --pdf-dir ({pdf_dir}): {candidate}"
+            f"read_paper only reads PDFs under the configured directory ({pdf_dir}): {candidate}"
         ) from exc
     return candidate
 
@@ -815,16 +815,11 @@ def _needs_user_action_payload(
     context: PaperCopilotContext,
     pdf_path: Path | None = None,
 ) -> dict[str, Any]:
-    command = (
-        f"paper-copilot read {json.dumps(str(pdf_path))}"
-        if pdf_path is not None
-        else f"paper-copilot read <pdf-for-{paper_id}>"
-    )
     return {
         "status": "needs_user_action",
         "paper_id": paper_id,
         "reason": reason,
-        "next_command": command,
+        "pdf_path": str(pdf_path) if pdf_path is not None else None,
         "can_inspect_same_paper": False,
         "paper_budget": _paper_budget_payload(context),
     }
@@ -844,16 +839,11 @@ def _read_paper(args: _ReadPaperInput, context: PaperCopilotContext) -> dict[str
     if row is not None:
         return _already_read_payload(row, context)
 
-    command = (
-        f"paper-copilot read {json.dumps(str(target.pdf_path))}"
-        if target.pdf_path is not None
-        else f"paper-copilot read <pdf-for-{target.paper_id}>"
-    )
     return {
         "status": "needs_user_action",
         "paper_id": target.paper_id,
         "reason": "paper is not indexed; automatic read is unavailable in sync dispatch",
-        "next_command": command,
+        "pdf_path": str(target.pdf_path) if target.pdf_path is not None else None,
         "can_inspect_same_paper": False,
         "paper_budget": _paper_budget_payload(context),
     }
@@ -1006,7 +996,7 @@ def _update_composer_plan(
 def _composer_library(context: PaperCopilotContext) -> ComposerLibrary:
     if context.pdf_dir is None:
         raise KnowledgeError(
-            "framework_composer requires --pdf-dir with ccf_a, ccf_b, and other"
+            "framework_composer requires a PDF directory with ccf_a, ccf_b, and other"
         )
     return load_composer_library(context.pdf_dir, context.fields_store)
 
@@ -1057,7 +1047,7 @@ async def _read_paper_async(
     if target.pdf_path is None:
         return _needs_user_action_payload(
             target.paper_id,
-            reason="paper is not indexed and no matching PDF was found under --pdf-dir",
+            reason="paper is not indexed and no matching PDF was found in the configured directory",
             context=context,
         )
     if read_llm is None:
@@ -1090,8 +1080,8 @@ async def _read_paper_async(
         return _needs_user_action_payload(
             target.paper_id,
             reason=(
-                "session directory exists but paper is not indexed; rerun "
-                "`paper-copilot read --force` manually after checking the old artifact"
+                "session directory exists but paper is not indexed; inspect or remove "
+                "the old artifact before retrying the read"
             ),
             context=context,
             pdf_path=target.pdf_path,

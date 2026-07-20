@@ -160,7 +160,7 @@ First version:
 3. Use existing `sqlite-vec` + `text-embedding-v4` for semantic hits.
 4. Fuse FTS and vector ranks with RRF instead of score calibration.
 5. Return top papers with top 2-3 non-duplicate chunks per paper.
-6. Render chunk page/section/snippet in CLI, chat, reports, and trace.
+6. Render chunk page/section/snippet in chat, reports, and trace.
 
 Reranking is a later step. Start with deterministic rerank features if needed:
 section weight, keyword overlap, vector rank, BM25 rank, recency, and duplicate
@@ -531,8 +531,8 @@ Ablations: baseline / +module / +modified module
 
 ## Chat-first UX
 
-The user-facing product should have one natural-language input box. CLI commands
-remain for developers and tests, but normal use should be:
+The user-facing product has one natural-language input box. The terminal command
+interface has been removed; normal use should be:
 
 ```text
 "Read this PDF in Chinese."
@@ -548,8 +548,8 @@ tools with free-form prompting.
 ### 2026-05-18 Frontend Decision
 
 The product frontend should be a Next.js app, not a static HTML prototype.
-The CLI remains a developer/debug shell only. Normal users should type a
-natural-language request directly into the web UI, for example:
+Normal users should type a natural-language request directly into the web UI,
+for example:
 
 ```text
 基于 diffusion model 和医学图像分割，帮我找一个可做的创新点
@@ -580,10 +580,9 @@ chat first:
 paper-copilot chat
 ```
 
-That has been superseded by the implemented backend route:
-`paper-copilot serve` + `POST /chat` + `handle_chat_request()`. Do not spend
-more roadmap time designing a new terminal chat product shell unless needed for
-debugging.
+That has been superseded by the implemented `POST /chat` backend route and
+`handle_chat_request()`. The terminal interface was later removed; do not spend
+more roadmap time designing a terminal chat product shell.
 
 ### Tool Surface
 
@@ -602,15 +601,15 @@ Wrap existing commands into stable core tools:
 - `discover_papers(field, venues, years) -> PaperCandidates`
 - `compose_research_idea(field, pdf_dir, budget) -> IdeaReport`
 
-The CLI, terminal chat, backend, and future frontend should call the same tool
-surface. Avoid duplicating business logic in command handlers.
+The backend and frontend should call the same tool surface. Avoid duplicating
+business logic at transport boundaries.
 
 ## Backend And Frontend
 
 Current sequence after the 2026-05-18 decision:
 
-1. Chat runtime and local HTTP API. Done: `handle_chat_request()` and
-   `paper-copilot serve` expose `POST /chat`.
+1. Chat runtime and local HTTP API. Done: `handle_chat_request()` and the HTTP
+   API expose `POST /chat`.
 2. Next.js single-page chat frontend in `apps/web/`.
 3. Streaming/job progress after the basic UI can submit and render results.
 4. PDF upload/path entry and richer citation/report viewer.
@@ -755,7 +754,7 @@ Deliver:
 - citation rendering and chunk evidence lookup (`GET /evidence?ref=...`, with
   frontend click-through panel v1)
 - retrieval eval metrics (v1: `eval/retrieval/queries.yaml` paper-level labels
-  and `paper-copilot eval retrieval ...` for `paper_recall@5/@10`)
+  and the retrieval eval suite for `paper_recall@5/@10`)
 - RAG observability in reports
 
 M18 can be pulled before M17 if chat exposes too much retrieval weakness. The

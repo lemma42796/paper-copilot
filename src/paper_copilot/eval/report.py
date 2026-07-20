@@ -871,10 +871,8 @@ def _short_label(run_id: str) -> str:
 def _empty_page(title: str) -> str:
     body = (
         f"<h1>{html.escape(title)}</h1>"
-        "<p class='hint'>No runs found. Run <code>paper-copilot eval run "
-        "&lt;suite.yaml&gt;</code> or <code>paper-copilot eval record-research "
-        "&lt;session.jsonl&gt;</code> or <code>paper-copilot eval retrieval "
-        "&lt;queries.yaml&gt;</code> at least twice to see a trend.</p>"
+        "<p class='hint'>No runs found. Record at least two evaluation runs "
+        "to see a trend.</p>"
     )
     return _PAGE_TMPL.format(title=html.escape(title), body=body)
 

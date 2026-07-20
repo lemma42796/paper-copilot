@@ -11,6 +11,10 @@
 > 更新于 2026-05-24。每次 milestone 边界或 Phase 2 状态变化时刷新本节。
 > 新会话问"项目进行到哪了"首先看这里,辅以 `git log -n 10` + 勾选框。
 
+- **终端界面状态（2026-07-20）**：已删除 `src/paper_copilot/cli/`、CLI 测试、
+  `paper-copilot` / `pc` console scripts 及 Typer/Rich 直接依赖。历史 milestone
+  中的 CLI 命令仅保留为当时的实现记录，不代表当前仍提供终端操作入口。
+
 - **已完成**:M1–M15(Session A + B 全部 done)。`paper-copilot read <pdf>` 端到端可用,含 `--force` +
   `--lang en|zh`。`paper-copilot doctor` (M9) 查最近 N 次 session 的
   cache 命中率 / p50-p95 latency / top-3 贵论文。`paper-copilot reindex`

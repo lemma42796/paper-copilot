@@ -4,10 +4,9 @@ Two entry points:
 - ``index_paper``: writes ``fields.db`` from the Paper JSON.
 - ``index_paper_embeddings``: chunks sections + encodes + upserts ``embeddings.db``.
 
-The caller owns loading: online from ``ReadPaperTool.run`` passes a fresh
-``Paper`` object, batch reindex (see ``cli/commands/reindex.py``) passes
-the raw JSON payload read from ``session.jsonl``. Both converge here so
-the store stays ignorant of pydantic.
+The caller owns loading: online reads pass a fresh ``Paper`` object, while
+batch rebuilds pass the raw JSON payload read from ``session.jsonl``. Both
+converge here so the store stays ignorant of pydantic.
 """
 
 from __future__ import annotations

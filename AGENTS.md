@@ -19,7 +19,7 @@ These are the most frequent failure modes. Read them every session.
    is: let exceptions propagate. Caller decides how to handle. Adding
    `try/except Exception: logger.error(...); return None` is a silent
    bug multiplier.
-   - Exception: at top-level entry points (CLI commands, agent loop
+   - Exception: at top-level entry points (API handlers, agent loop
      boundaries), convert to user-facing error messages. That's it.
 
 3. **Do not introduce new dependencies without asking.** If a task seems
@@ -84,7 +84,7 @@ These are the most frequent failure modes. Read them every session.
 
 - Define errors in `shared/errors.py`. New error types should inherit
   from `PaperCopilotError` or one of its subclasses.
-- **Raise early, catch late.** Validation at the boundary (CLI arg
+- **Raise early, catch late.** Validation at the boundary (API request
   parsing, LLM output parsing), not sprinkled through business logic.
 - **Never use bare `except:` or `except Exception:` without re-raising**
   (except at top-level entry points — see rule #2 above).
@@ -133,12 +133,12 @@ These are enforced. Violations fail code review:
 
 - `schemas/` imports **nothing** from other `paper_copilot/*` modules.
 - `session/`, `retrieval/`, `knowledge/`, `shared/` never import from
-  `agents/` or `cli/`.
+  `agents/`, `chat/`, or `api/`.
 - `retrieval/` and `knowledge/` never import each other.
 - `eval/` may import `agents/`'s public `run` entrypoint (so suites
   dogfood the real pipeline), but never reaches into `agents/` internals.
   Otherwise imports from `session/`, `schemas/`, `knowledge/`, `shared/`
-  only — never from `retrieval/` or `cli/`.
+  only — never from `retrieval/`.
 
 If a task tempts you to cross a boundary, stop and ask. The right answer
 is usually "add it to `shared/`" or "expose a narrower interface from
@@ -289,7 +289,7 @@ One M15 Session A lesson worth keeping (2026-04-27):
   noisy boolean assertion, before reaching for majority-vote
   infrastructure, ask "can I just run this N times and look at the
   shape of the line?" Often yes. Hand-rolled SVG (polyline + circles,
-  zero JS) is enough — don't pull in plotly/matplotlib for a CLI
+  zero JS) is enough — don't pull in plotly/matplotlib for a local
   tool's diagnostic page.
 
 One M15 Session B lesson worth keeping (2026-04-27):
@@ -343,8 +343,8 @@ section is the single source of truth; do not restate it here.
 - Every LLM call goes through `agents/llm_client.py`. Do not construct
   `anthropic.Anthropic()` clients anywhere else in the codebase.
 - Before changing the default model (switching to a different qwen tier
-  or to another provider), run `paper-copilot eval run
-  eval/suites/smoke.yaml` and confirm 0 regressions. The current v1
+  or to another provider), run `eval/suites/smoke.yaml` through
+  `paper_copilot.eval.suite.run_suite_sync()` and confirm 0 regressions. The current v1
   suite catches catastrophic-class regressions (meta drift, > 50%
   field-length drop, missing dataset/metric); subtler regressions
   need the M15 trend report. **0 regressions is necessary but not

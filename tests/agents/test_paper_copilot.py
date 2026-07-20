@@ -354,7 +354,7 @@ def test_dispatch_read_paper_needs_user_action_for_unread_pdf(tmp_path: Path) ->
     assert data["status"] == "needs_user_action"
     assert data["can_inspect_same_paper"] is False
     assert data["paper_id"] in context.touched_paper_ids
-    assert "paper-copilot read" in data["next_command"]
+    assert data["pdf_path"] == str(pdf_path)
 
 
 def test_dispatch_list_pdfs_reports_candidate_ids(tmp_path: Path) -> None:

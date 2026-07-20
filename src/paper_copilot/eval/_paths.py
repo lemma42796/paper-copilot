@@ -1,10 +1,8 @@
 """Resolve project-local default paths for eval artifacts.
 
 Goldens and run records live in ``<repo>/eval/`` and are committed to
-git. When the CLI is installed via ``uv tool install``, ``__file__``
-points into the venv, so the old ``Path(__file__).parents[3]`` trick
-resolved to ``.../python3.12/`` instead of the project — silently
-writing artifacts into the venv. Resolve from cwd instead.
+git. Resolve from cwd so installed-package paths do not redirect
+artifacts into a virtual environment.
 """
 
 from __future__ import annotations

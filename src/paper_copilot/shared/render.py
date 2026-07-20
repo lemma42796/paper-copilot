@@ -1,4 +1,4 @@
-"""Render a Paper to Markdown for CLI output and report.md."""
+"""Render a Paper to Markdown for report output."""
 
 from __future__ import annotations
 

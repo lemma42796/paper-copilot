@@ -1,4 +1,4 @@
-"""Reusable single-paper read pipeline for CLI and Paper Copilot tools."""
+"""Reusable single-paper read pipeline for Paper Copilot tools."""
 
 from __future__ import annotations
 

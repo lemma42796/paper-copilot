@@ -10,10 +10,8 @@ def load_env() -> None:
     (``override=False``), so CI and production deployments that inject
     secrets directly are not clobbered by a stray developer .env.
 
-    ``usecwd=True`` ensures the search starts from the user's current
-    working directory, not from the installed package location — so the
-    tool-installed CLI (``uv tool install``) resolves the project's .env
-    when invoked from the project tree, not from site-packages.
+    ``usecwd=True`` ensures the search starts from the current working
+    directory rather than the installed package location.
     """
     global _loaded
     if _loaded:

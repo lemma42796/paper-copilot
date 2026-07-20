@@ -60,12 +60,13 @@ evidence lookup, and knowledge-QA reports.
 
 ## Status
 
-Current status is synced from `TASKS.md`, last updated on 2026-05-23.
+Current status is synced from `TASKS.md`, last updated on 2026-07-20.
 
 Paper Copilot has moved toward a local chat-first research assistant:
 
-- The local API runs via `paper-copilot serve`; the main runtime endpoint is
-  `POST /chat`.
+- The terminal command interface has been removed. A host process exposes the
+  local API by calling `paper_copilot.api.http.serve_http_api()`; the main
+  runtime endpoint is `POST /chat`.
 - `apps/web/` contains a Next.js macOS-style chat shell with library selection,
   report history, run status, cost display, Composer summaries, and
   evidence inspection.
@@ -151,17 +152,11 @@ effectiveness.
 
 ## Quick Start
 
-### 1. Install the local backend
+### 1. Prepare the local backend development environment
 
 ```bash
 git clone https://github.com/lemma42796/paper-copilot.git
 cd paper-copilot
-uv tool install .
-```
-
-For local development:
-
-```bash
 uv sync --dev
 ```
 
@@ -180,15 +175,18 @@ DASHSCOPE_API_KEY=sk-your-key-here
 PAPER_COPILOT_PDF_DIR=/path/to/your/papers
 ```
 
-### 3. Run the local API and web UI
+### 3. Integrate the local API and web UI
 
-Terminal 1:
+The repository no longer exposes a terminal command interface. A desktop host
+or another Python process can call:
 
-```bash
-paper-copilot serve --host 127.0.0.1 --port 8765
+```python
+from paper_copilot.api.http import serve_http_api
+
+serve_http_api(host="127.0.0.1", port=8765)
 ```
 
-Terminal 2:
+For web frontend development:
 
 ```bash
 cd apps/web
@@ -207,23 +205,11 @@ Requirements:
 - Node.js 20+ for the web UI
 - DashScope / Bailian API keys
 
-Install:
+Development environment:
 
 ```bash
 git clone https://github.com/lemma42796/paper-copilot.git
 cd paper-copilot
-uv tool install .
-```
-
-Reinstall current code:
-
-```bash
-uv tool install . --reinstall
-```
-
-Development mode:
-
-```bash
 uv sync --dev
 ```
 
@@ -240,20 +226,18 @@ Anthropic-compatible LLM endpoint and OpenAI-compatible embedding endpoint.
 | `PAPER_COPILOT_HOME` | Runtime data root; defaults to `~/.paper-copilot` |
 | `PAPER_COPILOT_PDF_DIR` | Default local PDF folder for chat/research |
 
-For a new environment, point `PAPER_COPILOT_PDF_DIR` at your paper folder. If
-you already have previous sessions, rebuild indexes from those sessions plus the
-PDF folder:
-
-```bash
-paper-copilot reindex --pdf-dir /path/to/your/papers
-```
+For a new environment, point `PAPER_COPILOT_PDF_DIR` at your paper folder.
+Indexes are synchronized when the product reads papers. After changing the
+embedding model or dimension, the host application must rebuild the indexes
+before querying them again.
 
 ## Running
 
-The web UI is the current product entry:
+The web UI is the current product entry. It expects a host process to expose the
+local HTTP API; the repository no longer provides a terminal startup command.
+Frontend development remains in `apps/web/`:
 
 ```bash
-paper-copilot serve --host 127.0.0.1 --port 8765
 cd apps/web
 npm ci
 npm run dev

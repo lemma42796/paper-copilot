@@ -111,12 +111,7 @@ the batch interface.
 
 ## Operational Consequences
 
-After switching model or dimension:
-
-```bash
-paper-copilot reindex --pdf-dir <dir>
-```
-
-The old `embeddings.db` should be treated as stale once `MODEL_NAME` or
-`EMBEDDING_DIM` changes. Search should fail early via `embeddings_meta.json`
-instead of returning mixed-model distances.
+After switching model or dimension, the host application must rebuild the index
+from the configured PDF directory. The old `embeddings.db` should be treated as
+stale once `MODEL_NAME` or `EMBEDDING_DIM` changes. Search should fail early via
+`embeddings_meta.json` instead of returning mixed-model distances.

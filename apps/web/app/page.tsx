@@ -292,7 +292,7 @@ export default function Home() {
       return;
     }
     if (health !== "online") {
-      setError("本地 API 未连接，请先启动 paper-copilot serve。");
+      setError("本地 API 未连接，请先启动后端服务。");
       return;
     }
 
@@ -537,7 +537,7 @@ export default function Home() {
                 </button>
               </div>
               {health === "offline" ? (
-                <p className="inline-hint">本地 API 未连接，请先启动 paper-copilot serve。</p>
+                <p className="inline-hint">本地 API 未连接，请先启动后端服务。</p>
               ) : null}
             </form>
 

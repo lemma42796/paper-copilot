@@ -1,4 +1,4 @@
-"""ReadPaperTool: single-paper workflow used by `paper-copilot read`.
+"""ReadPaperTool: single-paper reading workflow.
 
 The skim, extraction, and linking steps are bounded tools. Their LLM tool_use
 calls are structured-output channels, not autonomous agent loops.

@@ -93,9 +93,7 @@ def mark_from_session(
     store = SessionStore.load(paper_id, root=root)
     final = store.last_final_output()
     if final is None:
-        raise EvalError(
-            f"no final_output in session for {paper_id}; run `paper-copilot read` first"
-        )
+        raise EvalError(f"no final_output in session for {paper_id}; read the paper first")
 
     marked_at = datetime.now(UTC).isoformat()
 
