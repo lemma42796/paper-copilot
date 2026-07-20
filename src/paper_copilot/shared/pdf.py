@@ -46,7 +46,7 @@ def load_front_matter(
 ) -> PdfFrontMatter:
     # When the PDF has no bookmarks, Skim must infer the outline from in-text
     # headings; feeding only 3 pages drops the outline's tail and cascades into
-    # Deep missing the back half of the paper (see docs/issues.md, Zhou06).
+    # ExtractPaperTool missing the back half of papers such as Zhou 2006.
     with pymupdf.open(pdf_path) as doc:  # type: ignore[no-untyped-call]
         page_count: int = doc.page_count
         raw_toc = doc.get_toc()
