@@ -23,8 +23,9 @@ from typing import Any
 from paper_copilot.eval._paths import default_runs_dir, find_project_root
 from paper_copilot.eval.retrieval import RetrievalEvalResult
 from paper_copilot.eval.suite import SuiteResult
-from paper_copilot.session import FinalOutput, SessionHeader, SessionStore
+from paper_copilot.session import FinalOutput, LLMCall, SessionHeader, SessionStore
 from paper_copilot.shared.errors import EvalError
+from paper_copilot.shared.prompt_fingerprint import compute_prompt_bundle_sha256
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +41,8 @@ class RunRow:
     latency_s: float
     cache_hit_ratio: float
     budget_passed: bool
+    model: str | None = None
+    prompt_bundle_sha256: str | None = None
     evidence_ref_count: int | None = None
     findings_claim_count: int | None = None
     findings_inline_ref_count: int | None = None
@@ -78,6 +81,11 @@ class RunRow:
             "cache_hit_ratio": self.cache_hit_ratio,
             "budget_passed": self.budget_passed,
         }
+        identity = {
+            "model": self.model,
+            "prompt_bundle_sha256": self.prompt_bundle_sha256,
+        }
+        raw.update({key: value for key, value in identity.items() if value is not None})
         quality = {
             "evidence_ref_count": self.evidence_ref_count,
             "findings_claim_count": self.findings_claim_count,
@@ -131,6 +139,8 @@ class RunRow:
             latency_s=raw["latency_s"],
             cache_hit_ratio=raw["cache_hit_ratio"],
             budget_passed=raw["budget_passed"],
+            model=raw.get("model"),
+            prompt_bundle_sha256=raw.get("prompt_bundle_sha256"),
             evidence_ref_count=raw.get("evidence_ref_count"),
             findings_claim_count=raw.get("findings_claim_count"),
             findings_inline_ref_count=raw.get("findings_inline_ref_count"),
@@ -236,6 +246,8 @@ def write_run(
                     latency_s=paper.latency_s,
                     cache_hit_ratio=ratio,
                     budget_passed=budget_passed,
+                    model=paper.model,
+                    prompt_bundle_sha256=paper.prompt_bundle_sha256,
                 )
             )
 
@@ -262,7 +274,7 @@ def write_research_quality_run(
     if path.exists():
         raise EvalError(f"run file already exists: {path}")
 
-    _, final = _read_research_final(session_path)
+    header, final, prompt_bundle_sha256 = _read_research_final(session_path)
     quality = _quality_payload(final)
     cost = _cost_payload(final)
     unsupported_count = _int_quality(quality, "claims_without_refs_count")
@@ -284,6 +296,8 @@ def write_research_quality_run(
             _int_cost(cost, "cache_creation_tokens"),
         ),
         budget_passed=True,
+        model=header.model,
+        prompt_bundle_sha256=prompt_bundle_sha256,
         evidence_ref_count=_int_quality(quality, "evidence_ref_count"),
         findings_claim_count=_int_quality(quality, "findings_claim_count"),
         findings_inline_ref_count=_int_quality(quality, "findings_inline_ref_count"),
@@ -364,7 +378,9 @@ def write_retrieval_run(
     return path
 
 
-def _read_research_final(session_path: Path) -> tuple[SessionHeader, FinalOutput]:
+def _read_research_final(
+    session_path: Path,
+) -> tuple[SessionHeader, FinalOutput, str | None]:
     if not session_path.exists():
         raise EvalError(f"session file not found: {session_path}")
     entries = SessionStore(session_path, last_id="").read_all()
@@ -374,7 +390,12 @@ def _read_research_final(session_path: Path) -> tuple[SessionHeader, FinalOutput
     final = next((e for e in reversed(entries) if isinstance(e, FinalOutput)), None)
     if final is None:
         raise EvalError(f"final_output not found: {session_path}")
-    return header, final
+    prompt_bundle_sha256 = compute_prompt_bundle_sha256(
+        (entry.agent, entry.prompt_sha256)
+        for entry in entries
+        if isinstance(entry, LLMCall) and entry.prompt_sha256 is not None
+    )
+    return header, final, prompt_bundle_sha256
 
 
 def _quality_payload(final: FinalOutput) -> dict[str, Any]:

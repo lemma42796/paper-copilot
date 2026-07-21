@@ -1,3 +1,4 @@
+from paper_copilot.schemas.compaction import CompactionSummary
 from paper_copilot.schemas.paper import (
     Contribution,
     ContributionType,
@@ -12,6 +13,7 @@ from paper_copilot.schemas.paper import (
 )
 
 __all__ = [
+    "CompactionSummary",
     "Contribution",
     "ContributionType",
     "CrossPaperLink",

@@ -79,6 +79,8 @@ class PaperResult:
     latency_s: float
     fields: tuple[FieldResult, ...]
     budget_failures: tuple[FieldFailure, ...]
+    model: str | None = None
+    prompt_bundle_sha256: str | None = None
 
     @property
     def passed(self) -> bool:
@@ -195,6 +197,8 @@ async def _run_paper(
         latency_s=elapsed,
         fields=tuple(field_results),
         budget_failures=tuple(budget_fails),
+        model=run.model,
+        prompt_bundle_sha256=run.prompt_bundle_sha256,
     )
 
 

@@ -21,9 +21,26 @@ from paper_copilot.agents.loop import ContentBlock, LLMResponse, TextBlock, Tool
 from paper_copilot.shared.env import load_env
 from paper_copilot.shared.errors import AgentError
 
-__all__ = ["DEFAULT_MODEL", "LLMClient"]
+__all__ = [
+    "AUTO_COMPACT_TRIGGER_TOKENS",
+    "COMPACTED_TARGET_TOKENS",
+    "COMPACTION_MAX_OUTPUT_TOKENS",
+    "DEFAULT_MODEL",
+    "EMERGENCY_COMPACT_TOKENS",
+    "MODEL_CONTEXT_WINDOW_TOKENS",
+    "RECENT_HISTORY_BUDGET_TOKENS",
+    "WORKING_CONTEXT_LIMIT_TOKENS",
+    "LLMClient",
+]
 
 DEFAULT_MODEL: Final[str] = "qwen3.6-flash"
+MODEL_CONTEXT_WINDOW_TOKENS: Final[int] = 1_000_000
+WORKING_CONTEXT_LIMIT_TOKENS: Final[int] = 256_000
+AUTO_COMPACT_TRIGGER_TOKENS: Final[int] = 200_000
+COMPACTED_TARGET_TOKENS: Final[int] = 80_000
+RECENT_HISTORY_BUDGET_TOKENS: Final[int] = 40_000
+COMPACTION_MAX_OUTPUT_TOKENS: Final[int] = 8_000
+EMERGENCY_COMPACT_TOKENS: Final[int] = 240_000
 _DEFAULT_MAX_TOKENS: Final[int] = 1500
 _DEFAULT_TIMEOUT_S: Final[float] = 60.0
 

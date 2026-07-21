@@ -15,6 +15,7 @@ from paper_copilot.shared.logging import get_logger
 
 from .paths import paper_dir, session_file
 from .types import (
+    Compaction,
     FinalOutput,
     LLMCall,
     Message,
@@ -159,6 +160,7 @@ class SessionStore:
         usage: UsageLike,
         latency_ms: int,
         stop_reason: str,
+        prompt_sha256: str | None = None,
     ) -> str:
         entry = LLMCall(
             id=_new_id(),
@@ -172,6 +174,39 @@ class SessionStore:
             cache_read_input_tokens=read_usage_field(usage, "cache_read_input_tokens"),
             latency_ms=latency_ms,
             stop_reason=stop_reason,
+            prompt_sha256=prompt_sha256,
+        )
+        self._write(entry)
+        return entry.id
+
+    def append_compaction(
+        self,
+        *,
+        summary_version: int,
+        source_message_count: int,
+        retained_message_count: int,
+        trigger_estimated_input_tokens: int,
+        estimated_before_tokens: int,
+        estimated_after_tokens: int,
+        estimated_retained_recent_tokens: int,
+        summary_output_tokens: int,
+        model: str,
+        summary: dict[str, Any],
+    ) -> str:
+        entry = Compaction(
+            id=_new_id(),
+            ts=_now_ts(),
+            parent_id=self._last_id,
+            summary_version=summary_version,
+            source_message_count=source_message_count,
+            retained_message_count=retained_message_count,
+            trigger_estimated_input_tokens=trigger_estimated_input_tokens,
+            estimated_before_tokens=estimated_before_tokens,
+            estimated_after_tokens=estimated_after_tokens,
+            estimated_retained_recent_tokens=estimated_retained_recent_tokens,
+            summary_output_tokens=summary_output_tokens,
+            model=model,
+            summary=summary,
         )
         self._write(entry)
         return entry.id

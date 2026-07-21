@@ -2,8 +2,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# compaction is reserved for M9+, branch_summary is reserved for M7+.
-# The Union below does not include models for those variants yet.
+# branch_summary is reserved for a future milestone.
 EntryType = Literal[
     "session_header",
     "system_message",
@@ -104,6 +103,25 @@ class LLMCall(BaseModel):
     cache_read_input_tokens: int
     latency_ms: int
     stop_reason: str
+    prompt_sha256: str | None = None
+
+
+class Compaction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    ts: str
+    type: Literal["compaction"] = "compaction"
+    parent_id: str | None
+    summary_version: int
+    source_message_count: int
+    retained_message_count: int
+    trigger_estimated_input_tokens: int
+    estimated_before_tokens: int
+    estimated_after_tokens: int
+    estimated_retained_recent_tokens: int
+    summary_output_tokens: int
+    model: str
+    summary: dict[str, Any]
 
 
 SessionEntry = Annotated[
@@ -114,6 +132,7 @@ SessionEntry = Annotated[
     | ToolResult
     | SchemaValidation
     | FinalOutput
-    | LLMCall,
+    | LLMCall
+    | Compaction,
     Field(discriminator="type"),
 ]

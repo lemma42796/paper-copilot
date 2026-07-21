@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from paper_copilot.agents.llm_client import LLMClient
-from paper_copilot.agents.loop import LLMResponse, TextBlock, ToolUseBlock
+from paper_copilot.agents.loop import (
+    LLMClientProtocol,
+    LLMResponse,
+    TextBlock,
+    ToolUseBlock,
+)
 from paper_copilot.session import SessionStore
 from paper_copilot.shared.cost import UsageLike
 from paper_copilot.shared.errors import AgentError, SchemaValidationError
+from paper_copilot.shared.prompt_fingerprint import compute_prompt_sha256
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +26,7 @@ class ValidatedToolCall[T: BaseModel]:
 
 
 async def call_validated_tool[ToolInputT: BaseModel](
-    client: LLMClient,
+    client: LLMClientProtocol,
     *,
     component_name: str,
     model: str,
@@ -32,45 +38,50 @@ async def call_validated_tool[ToolInputT: BaseModel](
     system: str | list[dict[str, Any]] | None = None,
     max_tokens: int | None = None,
     max_schema_retries: int = 1,
+    validate_parsed: Callable[[ToolInputT], str | None] | None = None,
+    on_response: Callable[[LLMResponse], None] | None = None,
 ) -> ValidatedToolCall[ToolInputT]:
     attempt_messages = messages
     responses: list[LLMResponse] = []
+    tool_choice: dict[str, Any] = {"type": "tool", "name": tool_name}
+    prompt_sha256 = compute_prompt_sha256(
+        system=system,
+        tools=tools,
+        tool_choice=tool_choice,
+    )
     for attempt in range(max_schema_retries + 1):
         response = await client.generate(
             messages=attempt_messages,
             tools=tools,
-            tool_choice={"type": "tool", "name": tool_name},
+            tool_choice=tool_choice,
             system=system,
             max_tokens=max_tokens,
         )
         responses.append(response)
+        if on_response is not None:
+            on_response(response)
         _record_response(
             store,
             component_name=component_name,
             model=model,
             response=response,
+            prompt_sha256=prompt_sha256,
         )
 
         block = _single_tool_block(response, tool_name)
+        parsed: ToolInputT | None = None
+        validation_exc: ValidationError | None = None
+        error: str | None
         try:
             parsed = tool_input_model.model_validate(block.input)
         except ValidationError as exc:
             error = _summarize_validation_error(exc)
-            if store is not None:
-                store.append_schema_validation(
-                    success=False,
-                    error=error,
-                    retry_count=attempt,
-                )
-            if attempt >= max_schema_retries:
-                raise SchemaValidationError(
-                    f"{component_name} schema validation failed for {tool_name!r} "
-                    f"after {attempt + 1} attempts: {error}"
-                ) from exc
-            if store is not None:
-                store.append_tool_result(block.id, error, is_error=True)
-            attempt_messages = _build_retry_messages(messages, block, error)
+            validation_exc = exc
         else:
+            error = validate_parsed(parsed) if validate_parsed is not None else None
+        if error is None:
+            if parsed is None:
+                raise AssertionError("validated tool input is unexpectedly missing")
             if store is not None:
                 store.append_schema_validation(success=True, retry_count=attempt)
             return ValidatedToolCall(
@@ -78,6 +89,20 @@ async def call_validated_tool[ToolInputT: BaseModel](
                 response=response,
                 responses=tuple(responses),
             )
+        if store is not None:
+            store.append_schema_validation(
+                success=False,
+                error=error,
+                retry_count=attempt,
+            )
+        if attempt >= max_schema_retries:
+            raise SchemaValidationError(
+                f"{component_name} schema validation failed for {tool_name!r} "
+                f"after {attempt + 1} attempts: {error}"
+            ) from validation_exc
+        if store is not None:
+            store.append_tool_result(block.id, error, is_error=True)
+        attempt_messages = _build_retry_messages(messages, block, error)
 
     raise AssertionError("schema retry loop exhausted without returning or raising")
 
@@ -88,6 +113,7 @@ def _record_response(
     component_name: str,
     model: str,
     response: LLMResponse,
+    prompt_sha256: str,
 ) -> None:
     if store is None:
         return
@@ -98,6 +124,7 @@ def _record_response(
         usage=usage,
         latency_ms=response.latency_ms,
         stop_reason=response.stop_reason,
+        prompt_sha256=prompt_sha256,
     )
     for block in response.content:
         if isinstance(block, TextBlock):

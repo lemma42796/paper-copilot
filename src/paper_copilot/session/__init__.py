@@ -1,6 +1,7 @@
 from .paths import compute_paper_id, paper_dir, session_file
 from .store import SessionStore
 from .types import (
+    Compaction,
     FinalOutput,
     LLMCall,
     Message,
@@ -13,6 +14,7 @@ from .types import (
 )
 
 __all__ = [
+    "Compaction",
     "FinalOutput",
     "LLMCall",
     "Message",

@@ -11,8 +11,15 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 from paper_copilot.session import SessionStore
-from paper_copilot.shared.cost import CostSnapshot, CostTracker, UsageLike
+from paper_copilot.shared.cost import (
+    CostSnapshot,
+    CostTracker,
+    UsageLike,
+    read_usage_field,
+)
 from paper_copilot.shared.errors import AgentError
+from paper_copilot.shared.logging import get_logger
+from paper_copilot.shared.prompt_fingerprint import compute_prompt_sha256
 
 __all__ = [
     "AssistantMessage",
@@ -133,6 +140,9 @@ class Terminated:
 type Event = AssistantMessage | ToolUse | ToolResult | Terminated
 
 
+_log = get_logger(__name__)
+
+
 # ---- Config --------------------------------------------------------------
 
 
@@ -141,6 +151,11 @@ class LoopConfig:
     max_turns: int
     max_budget_cny: float
     max_tokens: int | None = None
+    model_context_window_tokens: int | None = None
+    working_context_limit_tokens: int | None = None
+    auto_compact_trigger_tokens: int | None = None
+    compacted_target_tokens: int | None = None
+    emergency_compact_tokens: int | None = None
 
 
 # ---- Main loop -----------------------------------------------------------
@@ -159,6 +174,12 @@ async def run_agent_loop(
     model: str | None = None,
     system: str | list[dict[str, Any]] | None = None,
     build_runtime_context: Callable[[], str] | None = None,
+    context_token_estimator: Callable[[list[dict[str, Any]]], int] | None = None,
+    compact_history_callback: Callable[
+        [list[dict[str, Any]], int],
+        Awaitable[list[dict[str, Any]]],
+    ]
+    | None = None,
 ) -> AsyncIterator[Event]:
     """Drive an LLM with tools until it stops or a limit fires.
 
@@ -180,6 +201,14 @@ async def run_agent_loop(
     """
     history: list[dict[str, Any]] = list(messages)
     turns = 0
+    input_token_high_watermark = 0
+    last_context_input_tokens: int | None = None
+    last_request_history_tokens: int | None = None
+    prompt_sha256 = compute_prompt_sha256(
+        system=system,
+        tools=tools,
+        tool_choice=None,
+    )
     try:
         while True:
             await asyncio.sleep(0)
@@ -191,12 +220,95 @@ async def run_agent_loop(
                 yield Terminated(reason="max_budget", cost=cost.snapshot())
                 return
 
+            estimated_next_input_tokens = _estimated_next_input_tokens(
+                history,
+                context_token_estimator=context_token_estimator,
+                last_context_input_tokens=last_context_input_tokens,
+                last_request_history_tokens=last_request_history_tokens,
+            )
+            if (
+                compact_history_callback is not None
+                and config.auto_compact_trigger_tokens is not None
+                and estimated_next_input_tokens is not None
+                and estimated_next_input_tokens >= config.auto_compact_trigger_tokens
+            ):
+                before_tokens = estimated_next_input_tokens
+                history = await compact_history_callback(history, before_tokens)
+                after_tokens = (
+                    context_token_estimator(history)
+                    if context_token_estimator is not None
+                    else None
+                )
+                if (
+                    after_tokens is not None
+                    and config.compacted_target_tokens is not None
+                    and after_tokens > config.compacted_target_tokens
+                ):
+                    raise AgentError(
+                        "context compaction exceeded target: "
+                        f"estimated {after_tokens} tokens > "
+                        f"{config.compacted_target_tokens}"
+                    )
+                _log.info(
+                    "agent.context_compacted",
+                    agent=agent_name,
+                    model=model,
+                    before_tokens=before_tokens,
+                    after_tokens=after_tokens,
+                )
+                last_context_input_tokens = None
+                last_request_history_tokens = None
+                if cost is not None and cost.total_cost_cny >= config.max_budget_cny:
+                    yield Terminated(reason="max_budget", cost=cost.snapshot())
+                    return
+                estimated_next_input_tokens = after_tokens
+
+            if (
+                config.emergency_compact_tokens is not None
+                and estimated_next_input_tokens is not None
+                and estimated_next_input_tokens >= config.emergency_compact_tokens
+            ):
+                raise AgentError(
+                    "context reached the emergency limit without a valid compaction: "
+                    f"estimated {estimated_next_input_tokens} tokens >= "
+                    f"{config.emergency_compact_tokens}"
+                )
+
+            last_request_history_tokens = (
+                context_token_estimator(history)
+                if context_token_estimator is not None
+                else None
+            )
+
             response = await llm.generate(
                 history,
                 tools,
                 system=system,
                 max_tokens=config.max_tokens,
             )
+            if response.usage is not None:
+                context_input_tokens = _context_input_tokens(response.usage)
+                last_context_input_tokens = context_input_tokens
+                input_token_high_watermark = max(
+                    input_token_high_watermark,
+                    context_input_tokens,
+                )
+                _log.debug(
+                    "agent.context_window",
+                    agent=agent_name,
+                    model=model,
+                    turn=turns + 1,
+                    context_input_tokens=context_input_tokens,
+                    input_token_high_watermark=input_token_high_watermark,
+                    model_context_window_tokens=config.model_context_window_tokens,
+                    working_context_limit_tokens=config.working_context_limit_tokens,
+                    auto_compact_trigger_tokens=config.auto_compact_trigger_tokens,
+                    compact_would_trigger=(
+                        config.auto_compact_trigger_tokens is not None
+                        and context_input_tokens >= config.auto_compact_trigger_tokens
+                    ),
+                    compaction_enabled=compact_history_callback is not None,
+                )
             if cost is not None and response.usage is not None:
                 cost.record(response.usage)
 
@@ -209,6 +321,7 @@ async def run_agent_loop(
                         usage=usage,
                         latency_ms=response.latency_ms,
                         stop_reason=response.stop_reason,
+                        prompt_sha256=prompt_sha256,
                     )
                 for block in response.content:
                     if isinstance(block, TextBlock):
@@ -258,6 +371,33 @@ async def run_agent_loop(
 
 def _cost_snapshot(cost: CostTracker | None) -> CostSnapshot | None:
     return cost.snapshot() if cost is not None else None
+
+
+def _context_input_tokens(usage: UsageLike) -> int:
+    return sum(
+        read_usage_field(usage, field)
+        for field in (
+            "input_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        )
+    )
+
+
+def _estimated_next_input_tokens(
+    history: list[dict[str, Any]],
+    *,
+    context_token_estimator: Callable[[list[dict[str, Any]]], int] | None,
+    last_context_input_tokens: int | None,
+    last_request_history_tokens: int | None,
+) -> int | None:
+    if context_token_estimator is None:
+        return None
+    current_history_tokens = context_token_estimator(history)
+    if last_context_input_tokens is None or last_request_history_tokens is None:
+        return current_history_tokens
+    appended_tokens = max(current_history_tokens - last_request_history_tokens, 0)
+    return last_context_input_tokens + appended_tokens
 
 
 def _content_blocks_to_wire(blocks: list[ContentBlock]) -> list[dict[str, Any]]:

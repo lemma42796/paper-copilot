@@ -35,6 +35,12 @@
   evidence ref 点击反查和 4K README 截图均已接入。
 - 指令遵循硬化已完成：Composer checker 失败时最多 repair 一次；三个结构化
   worker 隔离不可信论文来源；主 loop 在每批工具结果后刷新权威运行状态。
+- 上下文自动压缩已接入主 loop：qwen3.6-flash 按 1M 模型窗口、256K 工作窗口、
+  200K 触发点、80K 压缩目标和 240K 紧急门槛运行；结构化摘要保留原始请求、
+  权威 runtime state、必需标识和近期完整工具轮次，原始 JSONL 不删除。
+  Phase 5 已完成 10 条压缩专项测试和一次真实模型受控评测：223,704 → 22,859
+  estimated input tokens，摘要保留目标、约束、决策、证据引用、失败尝试和下一步，
+  单次评测成本 ¥0.24626。
 
 ### Research Idea Composer 当前能力
 

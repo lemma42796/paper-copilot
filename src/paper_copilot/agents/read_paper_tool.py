@@ -32,10 +32,11 @@ from paper_copilot.agents.skim_paper_tool import SkimPaperTool, SkimPaperToolRun
 from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.schemas.paper import Paper, PaperMeta
-from paper_copilot.session import SessionStore
+from paper_copilot.session import LLMCall, SessionStore
 from paper_copilot.session.paths import compute_paper_id
 from paper_copilot.shared.cost import CostSnapshot, CostTracker, pricing_for_model
 from paper_copilot.shared.embedding_cache import EmbeddingEncoder
+from paper_copilot.shared.prompt_fingerprint import compute_prompt_bundle_sha256
 
 __all__ = ["ReadPaperTool", "ReadPaperToolRun"]
 
@@ -50,6 +51,8 @@ class ReadPaperToolRun:
     related_run: LinkRelatedPapersToolRun | None
     cost: CostSnapshot
     session_path: Path
+    model: str
+    prompt_bundle_sha256: str | None
 
 
 class ReadPaperTool:
@@ -101,6 +104,11 @@ class ReadPaperTool:
         links = related_run.result.links if related_run is not None else []
         paper = paper_draft.model_copy(update={"cross_paper_links": links})
         store.append_final_output(payload=paper.model_dump(mode="json"))
+        prompt_bundle_sha256 = compute_prompt_bundle_sha256(
+            (entry.agent, entry.prompt_sha256)
+            for entry in store.read_all()
+            if isinstance(entry, LLMCall) and entry.prompt_sha256 is not None
+        )
 
         tracker = CostTracker(pricing=pricing_for_model(DEFAULT_MODEL))
         for response in skim_run.responses:
@@ -121,6 +129,8 @@ class ReadPaperTool:
             related_run=related_run,
             cost=tracker.snapshot(),
             session_path=store.path,
+            model=DEFAULT_MODEL,
+            prompt_bundle_sha256=prompt_bundle_sha256,
         )
 
 

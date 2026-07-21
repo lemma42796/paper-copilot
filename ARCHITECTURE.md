@@ -349,6 +349,17 @@ chunk rerank 等子任务统一使用 **qwen3.6-flash**，
 
 - **端点**：`https://dashscope.aliyuncs.com/apps/anthropic`
   （阿里云百炼提供的 Anthropic API 兼容网关）
+- **上下文压缩策略**：模型真实窗口记为 1M tokens，项目工作窗口按 256K
+  input tokens 管理；预计下一轮输入达到 200K 时自动压缩到不超过 80K，240K
+  是禁止继续普通调用的紧急门槛。每轮同时记录真实输入 token 高水位。
+  压缩摘要采用结构化 `CompactionSummary`，原始 session 保持 append-only；
+  `compact_history()` 已能安全保留完整 tool-use/tool-result round、原始请求、最新
+  runtime state 和近期原文，并把摘要和 token 计数写入 compaction entry。主 loop
+  已启用自动调用和重复增量压缩。单次 200K input + 最多 8K output 预计约
+  ¥0.30，校验失败最多重试一次，成功或失败的费用都进入同一个 `CostTracker`。
+  2026-07-21 的真实模型受控评测把 223,704 estimated input tokens 压到 22,859，
+  产出 872 output tokens，成本 ¥0.24626；目标、约束、决策、证据引用、失败尝试和
+  下一步均通过确定性断言。
 - **SDK**：继续用 `anthropic` Python SDK，只替换 `base_url` 和 API key，
   请求/响应格式、tool use、`cache_control` 语义复用原生 Anthropic 的约定
 - **cost 参考**：单篇一次 `read` 端到端约 **¥0.2**，数字会在 M7 跑真数据
