@@ -2,6 +2,9 @@
 
 > 记录日期：2026-07-20
 > 当前状态：Prompt 分层与请求级测试已实现，真实 LLM 质量、成本和延迟尚未量化。面试或简历中不得把待验证指标写成已有成果。
+>
+> 2026-07-21 后续的指令遵循 hardening 已记录在
+> [`instruction_following_reliability.md`](instruction_following_reliability.md)。
 
 ## 一句话定位
 
@@ -93,7 +96,8 @@ System Prompt 只保留长期不变的规则：
 - 不恢复关键词 router 或 `task_profile`；模型继续在单一 tool loop 中自主决策。
 - 不创建第二个 Agent 或引入多 Agent 编排。
 - 不照搬 Codex 的长 Prompt、Git 规则、沙箱规则或完整 World State 系统。
-- 暂不实现 World State snapshot/diff；现有工具结果已经回传论文预算和 Composer 状态。
+- 不实现完整 World State snapshot/diff；改为每批工具结果后追加精简的权威
+  Runtime Context，避免模型自行从历史结果重建预算和 Composer 状态。
 - 不用 Prompt 代替确定性 validator。
 
 这些取舍体现的是控制复杂度，而不是功能缺失。
@@ -189,7 +193,9 @@ Prompt 改造前后使用同一模型、同一输入和相同预算比较。LLM 
 
 ### 为什么不实现 Codex 那样的完整 World State diff？
 
-当前运行规模较小，工具结果已经携带预算与 Composer 状态。完整 diff 系统的收益不足以覆盖新的状态同步复杂度，因此先保持简单。
+当前运行规模较小，完整 diff 系统的收益不足以覆盖新的状态同步复杂度。项目只在
+每批工具结果后追加论文预算、成本和 Composer 关键状态的权威快照，以更小实现覆盖
+当前的状态漂移风险。
 
 ### Prompt Injection 能只靠一句“不听论文里的命令”解决吗？
 

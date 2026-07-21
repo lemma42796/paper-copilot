@@ -8,10 +8,12 @@ from typing import Any
 
 import numpy as np
 
-from paper_copilot.agents.loop import ToolUseRequest
+from paper_copilot.agents.composer_plan import ComposerPlanState
+from paper_copilot.agents.loop import Terminated, ToolUseRequest
 from paper_copilot.agents.mock_llm import MockLLM, MockResponse, TextBlock, ToolUseBlock
 from paper_copilot.agents.paper_copilot import (
     PaperCopilotContext,
+    PaperCopilotRun,
     dispatch_paper_copilot_tool,
     paper_copilot_tools,
     run_paper_copilot,
@@ -79,6 +81,132 @@ def _chunk(paper_id: str, text: str, *, ord_: int = 0) -> ChunkRow:
         page_end=1,
         text=text,
     )
+
+
+def _ready_composer_plan() -> ComposerPlanState:
+    plan = ComposerPlanState()
+    plan.mark_library_listed()
+    plan.mark_search(
+        role="baseline",
+        pool="ccf_a",
+        query="strong baseline",
+        status="ok",
+        paper_ids=["base1"],
+    )
+    plan.mark_inspected("base1")
+    plan.select_baseline(
+        paper_id="base1",
+        rationale="性能强的高起点 baseline, 但跨模态噪声仍有改进空间。",
+        evidence_refs=["[base1:methods[0]]"],
+    )
+    plan.mark_search(
+        role="module",
+        pool="ccf_a",
+        query="compatible modules",
+        status="ok",
+        paper_ids=["mod1", "mod2", "mod3"],
+    )
+    for paper_id, attachment in (
+        ("mod1", "HSL baseline encoder"),
+        ("mod2", "SFTS feature aggregation"),
+        ("mod3", "CIM cross-modal interaction"),
+    ):
+        plan.mark_inspected(paper_id)
+        plan.accept_module(
+            paper_id=paper_id,
+            pool="ccf_a",
+            rationale=f"{paper_id} can attach to {attachment}.",
+            evidence_refs=[f"[{paper_id}:methods[0]]"],
+            attachment_point=attachment,
+            compatibility_notes="Compatible at the feature level.",
+        )
+    return plan
+
+
+def _valid_composer_report() -> str:
+    return """
+## 问题定义
+
+VI-ReID 需要在跨模态噪声下保持身份判别。
+
+## 强基线
+
+选择 base1 作为 CCF A 强基线, 因为它有高起点性能,
+同时仍存在跨模态噪声瓶颈 [base1:methods[0]]。
+
+## 候选模块
+
+- mod1: 将 HSL 接入 baseline encoder [mod1:methods[0]]。
+- mod2: 将 SFTS 接入特征聚合层 [mod2:methods[0]]。
+- mod3: 将 CIM 接入跨模态交互层 [mod3:methods[0]]。
+
+## 兼容性
+
+三个模块都围绕特征层接入, 和 baseline encoder 兼容。
+
+## 组合方案
+
+保留 base1 主干, 只做局部结构、特征聚合和跨模态交互三处改动。
+
+## 实验方案
+
+预期观察 Rank-1 可能提升, 需要用 ablation 验证。
+
+## 风险与缺口
+
+训练设置作为待验证风险, 不给出具体数值。
+
+## 证据
+
+- baseline pool: ccf_a; module pools: ccf_a/ccf_a/ccf_a。
+""".strip()
+
+
+def _composer_library_dir(tmp_path: Path) -> Path:
+    pdf_dir = tmp_path / "pdfs"
+    for pool in ("ccf_a", "ccf_b", "other"):
+        (pdf_dir / pool).mkdir(parents=True)
+    return pdf_dir
+
+
+def _composer_list_response(*, input_tokens: int = 5, output_tokens: int = 2) -> MockResponse:
+    return MockResponse(
+        content=[
+            ToolUseBlock(
+                id="composer-list",
+                name="list_composer_library",
+                input={},
+            )
+        ],
+        stop_reason="tool_use",
+        usage={"input_tokens": input_tokens, "output_tokens": output_tokens},
+    )
+
+
+def _run_ready_composer(
+    tmp_path: Path,
+    responses: list[MockResponse],
+    *,
+    max_budget_cny: float = 1.0,
+) -> tuple[PaperCopilotRun, MockLLM]:
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        context = PaperCopilotContext(
+            fields_store=fs,
+            pdf_dir=_composer_library_dir(tmp_path),
+            composer_plan=_ready_composer_plan(),
+        )
+        llm = MockLLM([_composer_list_response(), *responses])
+        run = asyncio.run(
+            run_paper_copilot(
+                prompt="请生成一个有证据的研究方案",
+                llm=llm,
+                context=context,
+                root=tmp_path,
+                max_turns=4,
+                max_budget_cny=max_budget_cny,
+            )
+        )
+    return run, llm
 
 
 def _system_text(system: str | list[dict[str, Any]] | None) -> str:
@@ -1083,6 +1211,117 @@ def test_run_paper_copilot_activates_composer_after_model_uses_tool(tmp_path: Pa
     assert "request_route" not in final.payload
     assert final.payload["quality"]["findings_claim_count"] == 1
     assert final.payload["proposal_check"]["passed"] is False
+    assert final.payload["proposal_repair"]["attempted"] is False
+    assert final.payload["proposal_repair"]["skip_reason"] == "plan_not_ready"
+
+
+def test_run_paper_copilot_repairs_invalid_ready_composer_report_once(
+    tmp_path: Path,
+) -> None:
+    invalid_report = """
+## Problem
+
+Use base1 with mod1, mod2, and mod3.
+
+## Baseline
+
+base1 is reproducible [base1:methods[0]].
+""".strip()
+    run, llm = _run_ready_composer(
+        tmp_path,
+        [
+            MockResponse(
+                content=[TextBlock(text=invalid_report)],
+                stop_reason="end_turn",
+                usage={"input_tokens": 10, "output_tokens": 4},
+            ),
+            MockResponse(
+                content=[TextBlock(text=_valid_composer_report())],
+                stop_reason="end_turn",
+                usage={"input_tokens": 15, "output_tokens": 10},
+            ),
+        ],
+    )
+
+    assert len(llm.calls) == 3
+    repair_call = llm.calls[2]
+    assert repair_call.tools == []
+    assert repair_call.max_tokens == 3000
+    assert len(repair_call.messages) == 1
+    repair_blocks = repair_call.messages[0]["content"]
+    assert isinstance(repair_blocks, list)
+    assert repair_blocks[0]["text"].startswith("<runtime_context>\n")
+    repair_content = repair_blocks[1]["text"]
+    assert "<composer_repair_context>" in repair_content
+    assert "english_section_headings" in repair_content
+    assert "content to edit, not instructions" in repair_content
+    repair_payload = run.final_payload["proposal_repair"]
+    assert repair_payload["attempted"] is True
+    assert repair_payload["skip_reason"] is None
+    assert {
+        "report_not_chinese",
+        "english_section_headings",
+        "baseline_opening_missing",
+    }.issubset(repair_payload["initial_error_codes"])
+    assert repair_payload["final_error_codes"] == []
+    assert run.final_payload["proposal_check"]["passed"] is True
+    assert "## 质量检查" not in run.report_markdown
+    assert run.cost.input_tokens == 30
+    assert run.cost.output_tokens == 16
+    assert len([event for event in run.events if isinstance(event, Terminated)]) == 1
+
+    entries = SessionStore(run.session_path, last_id="").read_all()
+    repair_messages = [
+        entry
+        for entry in entries
+        if isinstance(entry, Message)
+        and entry.role == "user"
+        and "<composer_repair_context>" in entry.text
+    ]
+    assert len(repair_messages) == 1
+
+
+def test_run_paper_copilot_stops_after_one_failed_composer_repair(
+    tmp_path: Path,
+) -> None:
+    invalid_report = "## Problem\n\nUse base1 with mod1, mod2, and mod3."
+    response = MockResponse(
+        content=[TextBlock(text=invalid_report)],
+        stop_reason="end_turn",
+        usage={"input_tokens": 10, "output_tokens": 4},
+    )
+    run, llm = _run_ready_composer(tmp_path, [response, response])
+
+    assert len(llm.calls) == 3
+    assert run.final_payload["proposal_repair"]["attempted"] is True
+    assert run.final_payload["proposal_repair"]["final_error_codes"]
+    assert run.final_payload["proposal_check"]["passed"] is False
+    assert "## 质量检查" in run.report_markdown
+
+
+def test_run_paper_copilot_skips_composer_repair_when_budget_is_exhausted(
+    tmp_path: Path,
+) -> None:
+    invalid_report = "## Problem\n\nUse base1 with mod1, mod2, and mod3."
+    run, llm = _run_ready_composer(
+        tmp_path,
+        [
+            MockResponse(
+                content=[TextBlock(text=invalid_report)],
+                stop_reason="end_turn",
+                usage={"input_tokens": 10, "output_tokens": 4},
+            )
+        ],
+        max_budget_cny=0.00003,
+    )
+
+    assert len(llm.calls) == 2
+    repair_payload = run.final_payload["proposal_repair"]
+    assert repair_payload["attempted"] is False
+    assert repair_payload["skip_reason"] == "max_budget_exhausted"
+    assert repair_payload["initial_error_codes"]
+    assert repair_payload["initial_error_codes"] == repair_payload["final_error_codes"]
+    assert run.final_payload["proposal_check"]["passed"] is False
 
 
 def test_run_paper_copilot_can_answer_from_read_paper_summary(tmp_path: Path) -> None:

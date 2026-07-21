@@ -45,6 +45,8 @@ class RunRow:
     findings_inline_ref_count: int | None = None
     claims_without_refs_count: int | None = None
     evidence_coverage_ratio: float | None = None
+    proposal_check_passed: bool | None = None
+    proposal_repair_attempted: bool | None = None
     retrieval_query: str | None = None
     retrieval_relevant_count: int | None = None
     retrieval_recall_at_5: float | None = None
@@ -82,6 +84,8 @@ class RunRow:
             "findings_inline_ref_count": self.findings_inline_ref_count,
             "claims_without_refs_count": self.claims_without_refs_count,
             "evidence_coverage_ratio": self.evidence_coverage_ratio,
+            "proposal_check_passed": self.proposal_check_passed,
+            "proposal_repair_attempted": self.proposal_repair_attempted,
         }
         raw.update({key: value for key, value in quality.items() if value is not None})
         retrieval = {
@@ -132,6 +136,8 @@ class RunRow:
             findings_inline_ref_count=raw.get("findings_inline_ref_count"),
             claims_without_refs_count=raw.get("claims_without_refs_count"),
             evidence_coverage_ratio=raw.get("evidence_coverage_ratio"),
+            proposal_check_passed=raw.get("proposal_check_passed"),
+            proposal_repair_attempted=raw.get("proposal_repair_attempted"),
             retrieval_query=raw.get("retrieval_query"),
             retrieval_relevant_count=raw.get("retrieval_relevant_count"),
             retrieval_recall_at_5=raw.get("retrieval_recall_at_5"),
@@ -260,14 +266,16 @@ def write_research_quality_run(
     quality = _quality_payload(final)
     cost = _cost_payload(final)
     unsupported_count = _int_quality(quality, "claims_without_refs_count")
+    proposal_failure_count = _proposal_failure_count(final)
+    failure_count = unsupported_count + proposal_failure_count
     row = RunRow(
         run_id=rid,
         suite_name=suite_name,
         git_sha=sha,
         paper_id=suite_name,
         field="research_quality",
-        field_passed=unsupported_count == 0,
-        field_n_failures=unsupported_count,
+        field_passed=failure_count == 0,
+        field_n_failures=failure_count,
         cost_cny=_float_cost(cost, "cost_cny"),
         latency_s=0.0,
         cache_hit_ratio=_cache_hit_ratio(
@@ -281,6 +289,16 @@ def write_research_quality_run(
         findings_inline_ref_count=_int_quality(quality, "findings_inline_ref_count"),
         claims_without_refs_count=unsupported_count,
         evidence_coverage_ratio=_float_quality(quality, "evidence_coverage_ratio"),
+        proposal_check_passed=_optional_nested_bool(
+            final,
+            parent="proposal_check",
+            key="passed",
+        ),
+        proposal_repair_attempted=_optional_nested_bool(
+            final,
+            parent="proposal_repair",
+            key="attempted",
+        ),
     )
 
     path.write_text(
@@ -369,6 +387,33 @@ def _quality_payload(final: FinalOutput) -> dict[str, Any]:
 def _cost_payload(final: FinalOutput) -> dict[str, Any]:
     cost = final.payload.get("cost")
     return cost if isinstance(cost, dict) else {}
+
+
+def _proposal_failure_count(final: FinalOutput) -> int:
+    proposal_check = final.payload.get("proposal_check")
+    if not isinstance(proposal_check, dict) or proposal_check.get("passed") is not False:
+        return 0
+    issues = proposal_check.get("issues")
+    if not isinstance(issues, list):
+        return 1
+    error_count = 0
+    for issue in issues:
+        if isinstance(issue, dict) and issue.get("severity") == "error":
+            error_count += 1
+    return max(error_count, 1)
+
+
+def _optional_nested_bool(
+    final: FinalOutput,
+    *,
+    parent: str,
+    key: str,
+) -> bool | None:
+    payload = final.payload.get(parent)
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(key)
+    return value if isinstance(value, bool) else None
 
 
 def _int_quality(quality: dict[str, Any], key: str) -> int:

@@ -76,6 +76,17 @@ HTTP API 和前端单输入框都复用这一层。
 这些工具中的 forced `tool_use` 只是 LLM 结构化输出通道，不代表内部存在
 第二个 Agent。工具只向调用者返回有 schema 约束的结果，不暴露完整调用历史。
 
+三个 worker 的 LLM 边界都把 PDF 文本、PDF outline、已提取字段和检索候选记录
+视为不可信来源。动态来源使用显式边界包裹；只有 worker system prompt 和 forced
+tool schema 能定义任务与输出契约。来源文本不能改写角色、请求其他工具或变更输出
+格式，应用生成的 schema validation 错误仍是可信的 retry 约束。
+
+Paper Copilot 在首条 user message 注入 application-generated
+`<runtime_context>`，并在每批 tool results 后追加最新权威快照。后发快照覆盖旧
+状态，包含论文预算、已触达论文、LLM 成本预算，以及 Composer 已启动时的当前步骤、
+允许工具、选中项和 final report contract。该刷新属于 harness 状态，不依赖模型从
+历史 tool result 自行拼接约束。
+
 ### `schemas/`
 所有结构化输出的 Pydantic 模型：`Paper`、`Contribution`、`Method`、
 `Experiment`、`Limitation`、`CrossPaperLink`。

@@ -206,6 +206,8 @@ def test_run_row_reads_legacy_json_without_quality_fields() -> None:
 
     assert row.evidence_ref_count is None
     assert row.evidence_coverage_ratio is None
+    assert row.proposal_check_passed is None
+    assert row.proposal_repair_attempted is None
     assert row.retrieval_recall_at_10 is None
     assert row.retrieval_precision_at_10 is None
     assert row.retrieval_evidence_recall_at_10 is None
@@ -258,6 +260,59 @@ def test_write_research_quality_run_records_final_output_quality(tmp_path: Path)
     assert row.findings_inline_ref_count == 1
     assert row.claims_without_refs_count == 1
     assert row.evidence_coverage_ratio == 0.5
+    assert row.proposal_check_passed is None
+    assert row.proposal_repair_attempted is None
+
+
+def test_write_research_quality_run_counts_failed_composer_check(tmp_path: Path) -> None:
+    store = SessionStore.create(
+        "composer-session",
+        model="qwen",
+        agent="PaperCopilot",
+        root=tmp_path,
+    )
+    store.append_final_output(
+        {
+            "quality": {
+                "evidence_ref_count": 4,
+                "findings_claim_count": 4,
+                "findings_inline_ref_count": 4,
+                "claims_without_refs_count": 0,
+                "evidence_coverage_ratio": 1.0,
+            },
+            "proposal_check": {
+                "passed": False,
+                "issues": [
+                    {"severity": "error", "code": "report_not_chinese"},
+                    {"severity": "error", "code": "module_count_not_three"},
+                    {"severity": "warning", "code": "process_chatter_removed"},
+                ],
+            },
+            "proposal_repair": {
+                "attempted": True,
+                "initial_error_codes": ["report_not_chinese"],
+                "final_error_codes": [
+                    "report_not_chinese",
+                    "module_count_not_three",
+                ],
+            },
+            "cost": {"cost_cny": 0.02},
+        }
+    )
+
+    path = write_research_quality_run(
+        store.path,
+        runs_dir=tmp_path / "runs",
+        run_id="composer1",
+        git_sha="sha",
+    )
+
+    row = RunRow.from_json(json.loads(path.read_text(encoding="utf-8")))
+    assert row.field_passed is False
+    assert row.field_n_failures == 2
+    assert row.claims_without_refs_count == 0
+    assert row.proposal_check_passed is False
+    assert row.proposal_repair_attempted is True
 
 
 def test_write_retrieval_run_records_one_row_per_query(tmp_path: Path) -> None:

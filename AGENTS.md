@@ -62,6 +62,13 @@ These are the most frequent failure modes. Read them every session.
    DoD is met, stop and summarize what you did. Wait for the human to
    say "proceed to Mn+1".
 
+9. **Do not proactively run or add verification tests.** Only run Ruff,
+   mypy, pytest, or other validation commands when the human explicitly
+   asks for them in the current task. Do not add tests solely to verify a
+   small change unless the human explicitly requests test coverage. Do
+   not include repetitive validation-result reports when no validation
+   was requested.
+
 ---
 
 ## What TO do
