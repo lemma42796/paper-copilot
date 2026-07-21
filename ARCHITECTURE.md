@@ -404,7 +404,7 @@ POST /chat
   → knowledge.hybrid_search(query, filters)
       → 字段预过滤 + FTS5/BM25 + vector RRF
       → 按论文聚合相关 evidence chunks
-  → inspect_paper / compare_papers
+  → query_paper / compare_papers
   → Paper Copilot 生成带证据引用的 Markdown 回答
 ```
 

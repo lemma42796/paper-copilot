@@ -52,13 +52,12 @@ from paper_copilot.agents.loop import (
     run_agent_loop,
 )
 from paper_copilot.agents.read_pipeline import ReadPipelineRun, run_read_pipeline
-from paper_copilot.knowledge.compare import build_compare_payload
+from paper_copilot.knowledge.compare import build_multi_compare_payload
 from paper_copilot.knowledge.embeddings_store import ChunkHit, EmbeddingsStore
-from paper_copilot.knowledge.fields_store import FieldsStore, PaperRow, available_fields
+from paper_copilot.knowledge.fields_store import FieldsStore, PaperRow
 from paper_copilot.knowledge.graph_store import graph_path
 from paper_copilot.knowledge.hybrid_search import (
     ChunkScore,
-    ContainsFilter,
     SearchResult,
     search,
 )
@@ -84,7 +83,6 @@ _MAX_LIST_LIMIT = 20
 _MAX_SEARCH_K = 10
 _MAX_SEARCH_CHUNKS_PER_PAPER = 5
 _MAX_EVIDENCE_POOL_PER_PAPER = 50
-_MAX_INSPECT_ITEMS = 8
 _MAX_RELATED_K = 10
 _MAX_TOKENS = 3000
 _COMPOSER_TOOL_NAMES = frozenset(
@@ -115,7 +113,7 @@ _BASE_SYSTEM_PROMPT = (
     "paper_budget, and composer_plan as application constraints.\n\n"
     "Never invent citations or claim that an unread PDF was analyzed. If required "
     "evidence is missing, say exactly what is missing. For synthesis or comparison, "
-    "inspect enough relevant papers rather than stopping at the first result when "
+    "query enough relevant papers rather than stopping at the first result when "
     "the paper budget allows it. Tool inputs must match their JSON schemas exactly.\n\n"
     "For a direct answer with no tools, respond naturally without forced report "
     "headings or citations. After using non-Composer paper tools, write a concise "
@@ -178,55 +176,95 @@ class PaperCopilotTerminationSummary:
     last_tool_error: dict[str, Any] | None
 
 
-class _ListPapersInput(BaseModel):
+class _SearchPaperFiltersInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    year: StrictInt | None = Field(
+    year_from: StrictInt | None = Field(
         default=None,
-        description="Optional exact publication year filter.",
+        ge=1800,
+        le=2100,
+        description="Optional earliest publication year, inclusive.",
     )
-    limit: StrictInt = Field(default=8, ge=1, le=_MAX_LIST_LIMIT)
-
-
-class _ListPdfsInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    contains: str | None = Field(
+    year_to: StrictInt | None = Field(
         default=None,
-        description="Optional case-insensitive substring filter on the PDF filename.",
+        ge=1800,
+        le=2100,
+        description="Optional latest publication year, inclusive.",
     )
-    limit: StrictInt = Field(default=8, ge=1, le=_MAX_LIST_LIMIT)
-
-
-class _SearchLibraryInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    query: str = Field(min_length=1)
-    k: StrictInt = Field(default=5, ge=1, le=_MAX_SEARCH_K)
-    max_chunks_per_paper: StrictInt = Field(
-        default=3,
-        ge=1,
-        le=_MAX_SEARCH_CHUNKS_PER_PAPER,
+    venue: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Case-insensitive venue substring, such as CVPR or NeurIPS.",
     )
-    evidence_pool_per_paper: StrictInt = Field(
-        default=20,
-        ge=1,
-        le=_MAX_EVIDENCE_POOL_PER_PAPER,
+    method: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Method name or mechanism that must appear in structured fields.",
+    )
+    dataset: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Dataset name that must appear in a structured experiment.",
+    )
+    baseline: str | None = Field(
+        default=None,
+        min_length=1,
         description=(
-            "Number of candidate chunks to retrieve inside each selected paper "
-            "before returning the top max_chunks_per_paper evidence chunks."
+            "Comparison baseline that must appear in a structured experiment. "
+            "Use this for questions such as which papers use ResNet-50 as baseline."
         ),
     )
-    year: StrictInt | None = None
-    field: str | None = None
-    contains: str | None = None
 
-    @field_validator("field")
+    @field_validator("venue", "method", "dataset", "baseline")
     @classmethod
-    def _field_is_known(cls, value: str | None) -> str | None:
-        if value is not None and value not in available_fields():
-            choices = ", ".join(available_fields())
-            raise ValueError(f"unknown field {value!r}; choose from {choices}")
+    def _filter_is_searchable(cls, value: str | None) -> str | None:
+        if value is not None and re.search(r"\w", value, flags=re.UNICODE) is None:
+            raise ValueError("search filters must contain at least one letter or digit")
+        return value
+
+    @model_validator(mode="after")
+    def _year_range_is_valid(self) -> _SearchPaperFiltersInput:
+        if (
+            self.year_from is not None
+            and self.year_to is not None
+            and self.year_from > self.year_to
+        ):
+            raise ValueError("year_from must be less than or equal to year_to")
+        return self
+
+
+class _SearchPapersInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Optional title, topic, method, dataset, baseline, or research question. "
+            "Omit it to browse papers selected by scope and filters."
+        ),
+    )
+    scope: Literal["indexed", "local", "all"] = Field(
+        default="indexed",
+        description=(
+            "indexed searches papers whose content is available; local lists/searches "
+            "PDF filenames; all combines indexed papers with unindexed local PDFs."
+        ),
+    )
+    filters: _SearchPaperFiltersInput = Field(
+        default_factory=_SearchPaperFiltersInput,
+        description=(
+            "Optional research filters combined with AND. Structured filters only "
+            "match indexed papers because unread PDFs have no extracted metadata."
+        ),
+    )
+    limit: StrictInt = Field(default=8, ge=1, le=_MAX_LIST_LIMIT)
+
+    @field_validator("query")
+    @classmethod
+    def _query_is_searchable(cls, value: str | None) -> str | None:
+        if value is not None and re.search(r"\w", value, flags=re.UNICODE) is None:
+            raise ValueError("query must contain at least one letter or digit")
         return value
 
 
@@ -320,7 +358,7 @@ class _UpdateComposerPlanInput(BaseModel):
     action: ComposerDecisionAction = Field(
         description=(
             "Record a deterministic Composer decision. Use select_baseline after "
-            "inspecting the CCF A baseline, accept_module after inspecting a "
+            "querying the CCF A baseline, accept_module after querying a "
             "compatible module, reject_module for unsuitable module candidates, "
             "and close_module_pool before falling back to a lower-priority pool."
         ),
@@ -366,69 +404,153 @@ class _UpdateComposerPlanInput(BaseModel):
         return self
 
 
-class _InspectPaperInput(BaseModel):
+class _PaperIdLocatorInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    paper_id: str = Field(min_length=1)
-    fields: list[str] = Field(
-        default_factory=lambda: ["meta", "contributions", "methods", "experiments", "limitations"]
+    paper_id: str = Field(
+        min_length=1,
+        description="Stable paper_id returned by a Paper Copilot tool.",
     )
-    max_items: StrictInt = Field(default=5, ge=1, le=_MAX_INSPECT_ITEMS)
-
-    @field_validator("fields")
-    @classmethod
-    def _fields_are_known(cls, value: list[str]) -> list[str]:
-        allowed = {
-            "meta",
-            "contributions",
-            "methods",
-            "experiments",
-            "limitations",
-            "cross_paper_links",
-        }
-        unknown = sorted(set(value) - allowed)
-        if unknown:
-            raise ValueError(f"unknown fields: {', '.join(unknown)}")
-        return value
 
 
-class _ComparePapersInput(BaseModel):
+class _PaperTitleLocatorInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    paper_id_a: str = Field(min_length=1)
-    paper_id_b: str = Field(min_length=1)
-
-    @field_validator("paper_id_b")
-    @classmethod
-    def _papers_differ(cls, value: str, info: Any) -> str:
-        if value == info.data.get("paper_id_a"):
-            raise ValueError("paper_id_a and paper_id_b must differ")
-        return value
+    title: str = Field(
+        min_length=1,
+        description=(
+            "Paper title to resolve deterministically. Ambiguous matches return "
+            "candidates and never select a paper automatically."
+        ),
+    )
 
 
-class _FindRelatedPapersInput(BaseModel):
+class _PdfPathLocatorInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    paper_id: str = Field(min_length=1)
-    k: StrictInt = Field(default=5, ge=1, le=_MAX_RELATED_K)
+    pdf_path: Path = Field(
+        description=(
+            "Local PDF path under the configured paper directory. Use this when "
+            "the user supplied a path."
+        ),
+    )
+
+
+type _PaperLocatorInput = (
+    _PaperIdLocatorInput | _PaperTitleLocatorInput | _PdfPathLocatorInput
+)
 
 
 class _ReadPaperInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    paper_id: str | None = Field(default=None, min_length=1)
-    pdf_path: Path | None = None
+    paper: _PaperLocatorInput = Field(
+        description="Exactly one paper to read or return from the existing index.",
+    )
+    language: Literal["en", "zh"] = Field(
+        default="en",
+        description="Language for newly extracted structured fields and report text.",
+    )
 
-    @model_validator(mode="after")
-    def _exactly_one_identifier(self) -> _ReadPaperInput:
-        if (self.paper_id is None) == (self.pdf_path is None):
-            raise ValueError("provide exactly one of paper_id or pdf_path")
-        return self
+
+class _QueryPaperInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    paper: _PaperLocatorInput = Field(
+        description="Exactly one indexed paper whose evidence should be searched.",
+    )
+    question: str = Field(
+        min_length=1,
+        description=(
+            "The user's question about this paper. Preserve technical terms, "
+            "dataset names, metric names, and equation symbols."
+        ),
+    )
+    evidence_limit: StrictInt = Field(
+        default=5,
+        ge=1,
+        le=_MAX_SEARCH_CHUNKS_PER_PAPER,
+        description="Maximum original-text evidence chunks to return.",
+    )
+
+
+type _CompareAspect = Literal[
+    "contributions",
+    "methods",
+    "experiments",
+    "limitations",
+]
+
+
+class _ComparePapersInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    papers: list[_PaperLocatorInput] = Field(
+        min_length=2,
+        max_length=5,
+        description=(
+            "Two to five distinct indexed papers to compare. Each item identifies "
+            "exactly one paper by paper_id, title, or local PDF path."
+        ),
+    )
+    aspects: list[_CompareAspect] = Field(
+        default_factory=lambda: cast(
+            list[_CompareAspect],
+            ["contributions", "methods", "experiments", "limitations"],
+        ),
+        min_length=1,
+        description="Structured comparison dimensions to include.",
+    )
+
+    @field_validator("aspects")
+    @classmethod
+    def _aspects_are_unique(cls, value: list[_CompareAspect]) -> list[_CompareAspect]:
+        if len(value) != len(set(value)):
+            raise ValueError("aspects must not contain duplicates")
+        return value
+
+
+type _RelationType = Literal[
+    "builds_on",
+    "compares_against",
+    "applies_in_different_domain",
+    "shares_method",
+    "contrasts_with",
+]
+
+
+class _FindRelatedPapersInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    paper: _PaperLocatorInput = Field(
+        description="One indexed paper whose known relation graph should be expanded.",
+    )
+    direction: Literal["both", "outgoing", "incoming"] = Field(
+        default="both",
+        description="Direction of stored paper relations to return.",
+    )
+    relation_types: list[_RelationType] = Field(
+        default_factory=list,
+        description="Optional relation types to keep. Empty means all known types.",
+    )
+    limit: StrictInt = Field(default=5, ge=1, le=_MAX_RELATED_K)
+
+    @field_validator("relation_types")
+    @classmethod
+    def _relation_types_are_unique(
+        cls,
+        value: list[_RelationType],
+    ) -> list[_RelationType]:
+        if len(value) != len(set(value)):
+            raise ValueError("relation_types must not contain duplicates")
+        return value
 
 
 @dataclass(frozen=True, slots=True)
-class _ReadTarget:
+class _PaperCandidate:
     paper_id: str
+    title: str
+    row: PaperRow | None
     pdf_path: Path | None
 
 
@@ -551,34 +673,45 @@ async def run_paper_copilot(
 def paper_copilot_tools() -> list[dict[str, Any]]:
     return [
         _tool_schema(
-            "list_papers",
+            "search_papers",
             (
-                "List papers already indexed in the local library. Use before "
-                "searching when you need to know what is available. Prefer one "
-                "broad call, then inspect returned paper_ids instead of repeating "
-                "many year-filtered calls. `year` must be an integer, not a string."
+                "Find or browse papers in the personal library. Use this when the "
+                "user asks which papers exist, names an uncertain title, or wants "
+                "papers about a topic, method, dataset, baseline, venue, or year "
+                "range. Omit query to browse. The default indexed scope can use "
+                "structured fields and hybrid semantic retrieval; local searches "
+                "PDF filenames without reading them; all also surfaces unindexed "
+                "PDFs. Results are candidates, not a final answer: use query_paper "
+                "for one paper and compare_papers for two or more papers."
             ),
-            _ListPapersInput,
-        ),
-        _tool_schema(
-            "list_pdfs",
-            (
-                "List PDF files in the configured PDF directory. This does not read "
-                "or index them; it only reports candidate filenames and paper_ids."
-            ),
-            _ListPdfsInput,
+            _SearchPapersInput,
         ),
         _tool_schema(
             "read_paper",
             (
-                "Read and index one local PDF under the configured PDF directory, or report an "
-                "already-indexed paper. Counts toward max_papers and consumes "
-                "the shared run budget. If a paper_id cannot be mapped to a "
-                "local PDF, returns needs_user_action instead of inventing. "
-                "When status is read or already_read, normally call inspect_paper "
-                "next on the same paper_id; it does not consume another paper slot."
+                "Read and index one local PDF, then return its default structured "
+                "summary and stable evidence references. Use this when the paper "
+                "resolves to an unindexed local PDF. Do not reread an indexed paper "
+                "merely to answer a question; use query_paper instead. Reading "
+                "consumes the paper and CNY budgets. The locator must identify "
+                "exactly one of paper_id, title, or pdf_path. Ambiguous titles "
+                "return candidates without reading any PDF."
             ),
             _ReadPaperInput,
+        ),
+        _tool_schema(
+            "query_paper",
+            (
+                "Retrieve structured fields and original-text evidence needed to "
+                "answer one question about one indexed paper. Use this for "
+                "explanations, equations, ablations, implementation details, "
+                "reported results, limitations, or page-level evidence. Search is "
+                "restricted to the selected paper. Use search_papers to discover "
+                "papers and compare_papers for questions about two or more papers. "
+                "An unindexed local PDF returns needs_read; ambiguous titles return "
+                "candidates; missing original-text evidence is reported explicitly."
+            ),
+            _QueryPaperInput,
         ),
         _tool_schema(
             "list_composer_library",
@@ -607,7 +740,7 @@ def paper_copilot_tools() -> list[dict[str, Any]]:
             "update_composer_plan",
             (
                 "Record deterministic Composer plan decisions. Use it after "
-                "inspecting/selecting the CCF A baseline, after rejecting or "
+                "querying/selecting the CCF A baseline, after rejecting or "
                 "accepting module candidates, and before falling back from ccf_a "
                 "to ccf_b or from ccf_b to other. This tool enforces the workflow "
                 "state used by search_composer_candidates."
@@ -615,50 +748,28 @@ def paper_copilot_tools() -> list[dict[str, Any]]:
             _UpdateComposerPlanInput,
         ),
         _tool_schema(
-            "search_library",
-            (
-                "Search the existing local paper library for papers/chunks related "
-                "to a query. Returns paper ids, titles, pages, sections, snippets, "
-                "vector distance, and citation-grade evidence refs. Use this when "
-                "list_papers does not surface enough candidate papers. Use "
-                "max_chunks_per_paper when a task needs multiple snippets from the "
-                "same paper; use evidence_pool_per_paper to widen within-paper "
-                "evidence recall while keeping the paper ranking fixed."
-            ),
-            _SearchLibraryInput,
-        ),
-        _tool_schema(
-            "inspect_paper",
-            (
-                "Inspect structured fields for one indexed paper. Use paper_id "
-                "values returned by list_papers or search_library. Valid fields "
-                "are meta, contributions, methods, experiments, limitations, and "
-                "cross_paper_links; omit fields to request the default useful set. "
-                "The response also includes evidence_summary and suggested_citations "
-                "for concise final-report grounding, plus recommended_followups "
-                "for synthesis-oriented next steps."
-            ),
-            _InspectPaperInput,
-        ),
-        _tool_schema(
             "compare_papers",
             (
-                "Compare two indexed papers using structured fields. Use this "
-                "after identifying two relevant paper_ids to align methods, "
-                "experiments, contributions, limitations, and cross-paper links. "
-                "Use it for direct A/B comparison tasks; avoid spending turns on "
-                "every pair in broad timeline tasks unless the comparison is needed."
+                "Compare two to five indexed papers using structured fields. Use "
+                "this when the user asks how named papers differ, what they share, "
+                "or how their contributions, methods, experiments, and limitations "
+                "align. Each paper locator must resolve uniquely. Ambiguous, missing, "
+                "or unread papers are returned as resolution issues without guessing. "
+                "Use query_paper separately when the comparison needs original-text "
+                "evidence about a specific mechanism, equation, or result."
             ),
             _ComparePapersInput,
         ),
         _tool_schema(
             "find_related_papers",
             (
-                "Find papers already linked by LinkRelatedPapersTool. "
-                "Reads the local cross-paper link graph and fields index without "
-                "calling an LLM. Use this to expand from one relevant paper to "
-                "nearby candidates before inspecting or comparing them; do not use "
-                "it when the user already named a fixed paper set."
+                "Find papers connected to one indexed paper by known stored relations. "
+                "Use this for builds-on, compares-against, shared-method, contrasting, "
+                "or cross-domain graph links. Filter by direction or relation type "
+                "when the user asks for a specific relationship. This is graph "
+                "expansion, not semantic discovery: use search_papers for topic, "
+                "dataset, method, or baseline searches. Returned papers are candidates "
+                "and do not consume the paper-analysis budget until queried or compared."
             ),
             _FindRelatedPapersInput,
         ),
@@ -671,15 +782,15 @@ def dispatch_paper_copilot_tool(
 ) -> ToolResultData:
     try:
         match req.name:
-            case "list_papers":
-                list_args = _ListPapersInput.model_validate(req.input)
-                return _ok(_list_papers(list_args, context))
-            case "list_pdfs":
-                pdf_args = _ListPdfsInput.model_validate(req.input)
-                return _ok(_list_pdfs(pdf_args, context))
+            case "search_papers":
+                search_args = _SearchPapersInput.model_validate(req.input)
+                return _ok(_search_papers(search_args, context))
             case "read_paper":
                 read_args = _ReadPaperInput.model_validate(req.input)
                 return _ok(_read_paper(read_args, context))
+            case "query_paper":
+                query_args = _QueryPaperInput.model_validate(req.input)
+                return _ok(_query_paper(query_args, context))
             case "list_composer_library":
                 composer_args = _ListComposerLibraryInput.model_validate(req.input)
                 return _ok(_list_composer_library(composer_args, context))
@@ -691,12 +802,6 @@ def dispatch_paper_copilot_tool(
             case "update_composer_plan":
                 composer_plan_args = _UpdateComposerPlanInput.model_validate(req.input)
                 return _ok(_update_composer_plan(composer_plan_args, context))
-            case "search_library":
-                search_args = _SearchLibraryInput.model_validate(req.input)
-                return _ok(_search_library(search_args, context))
-            case "inspect_paper":
-                inspect_args = _InspectPaperInput.model_validate(req.input)
-                return _ok(_inspect_paper(inspect_args, context))
             case "compare_papers":
                 compare_args = _ComparePapersInput.model_validate(req.input)
                 return _ok(_compare_papers(compare_args, context))
@@ -733,53 +838,92 @@ async def dispatch_paper_copilot_tool_async(
         return _err(str(exc))
 
 
-def _list_papers(args: _ListPapersInput, context: PaperCopilotContext) -> dict[str, Any]:
-    rows = context.fields_store.list_all(year=args.year)
-    return {
-        "count": len(rows),
-        "returned": min(len(rows), args.limit),
-        "papers": [_paper_brief(row) for row in rows[: args.limit]],
-    }
+def _resolve_paper_candidates(
+    locator: _PaperLocatorInput,
+    context: PaperCopilotContext,
+) -> list[_PaperCandidate]:
+    match locator:
+        case _PdfPathLocatorInput(pdf_path=path):
+            pdf_path = _resolve_pdf_path(path, context)
+            paper_id = compute_paper_id(pdf_path)
+            row = context.fields_store.get(paper_id)
+            return [
+                _PaperCandidate(
+                    paper_id=paper_id,
+                    title=_row_title(row) or pdf_path.stem,
+                    row=row,
+                    pdf_path=pdf_path,
+                )
+            ]
+        case _PaperIdLocatorInput(paper_id=paper_id):
+            row = context.fields_store.get(paper_id)
+            matched_pdf_path = _find_pdf_by_id(paper_id, context)
+            return [
+                _PaperCandidate(
+                    paper_id=paper_id,
+                    title=(
+                        _row_title(row)
+                        or (
+                            matched_pdf_path.stem
+                            if matched_pdf_path is not None
+                            else ""
+                        )
+                    ),
+                    row=row,
+                    pdf_path=matched_pdf_path,
+                )
+            ]
+        case _PaperTitleLocatorInput(title=title):
+            return _find_papers_by_title(title, context)
 
 
-def _list_pdfs(args: _ListPdfsInput, context: PaperCopilotContext) -> dict[str, Any]:
-    if context.pdf_dir is None:
-        raise KnowledgeError("no PDF directory was configured for this research run")
-    if not context.pdf_dir.exists():
-        raise KnowledgeError(f"pdf_dir does not exist: {context.pdf_dir}")
-    term = args.contains.lower() if args.contains is not None else None
-    pdfs = _pdfs_under(context.pdf_dir)
-    if term is not None:
-        pdfs = [
-            p
-            for p in pdfs
-            if term in p.name.lower()
-            or term in _relative_pdf_path(p, context.pdf_dir).lower()
-        ]
-    rows = [
-        {
-            "filename": p.name,
-            "relative_path": _relative_pdf_path(p, context.pdf_dir),
-            "path": str(p),
-            "paper_id": compute_paper_id(p),
-        }
-        for p in pdfs[: args.limit]
+def _find_papers_by_title(
+    title: str,
+    context: PaperCopilotContext,
+) -> list[_PaperCandidate]:
+    candidates = _all_paper_candidates(context)
+    title_key = _normalize_title(title)
+    exact = [
+        candidate for candidate in candidates if _normalize_title(candidate.title) == title_key
     ]
-    return {"count": len(pdfs), "returned": len(rows), "pdfs": rows}
+    if exact:
+        return exact
+    return [candidate for candidate in candidates if title_key in _normalize_title(candidate.title)]
 
 
-def _resolve_read_target(args: _ReadPaperInput, context: PaperCopilotContext) -> _ReadTarget:
-    if args.pdf_path is not None:
-        pdf_path = _resolve_pdf_path(args.pdf_path, context)
-        return _ReadTarget(paper_id=compute_paper_id(pdf_path), pdf_path=pdf_path)
-
-    assert args.paper_id is not None
-    if context.fields_store.get(args.paper_id) is not None:
-        return _ReadTarget(paper_id=args.paper_id, pdf_path=None)
-    return _ReadTarget(
-        paper_id=args.paper_id,
-        pdf_path=_find_pdf_by_id(args.paper_id, context),
+def _all_paper_candidates(context: PaperCopilotContext) -> list[_PaperCandidate]:
+    candidates = {
+        row.paper_id: _PaperCandidate(
+            paper_id=row.paper_id,
+            title=_row_title(row),
+            row=row,
+            pdf_path=None,
+        )
+        for row in context.fields_store.list_all()
+    }
+    if context.pdf_dir is not None and context.pdf_dir.exists():
+        for pdf_path in _pdfs_under(context.pdf_dir):
+            resolved_path = pdf_path.resolve()
+            paper_id = compute_paper_id(resolved_path)
+            existing = candidates.get(paper_id)
+            candidates[paper_id] = _PaperCandidate(
+                paper_id=paper_id,
+                title=existing.title if existing is not None else resolved_path.stem,
+                row=existing.row if existing is not None else None,
+                pdf_path=resolved_path,
+            )
+    return sorted(
+        candidates.values(),
+        key=lambda candidate: (
+            candidate.row is None,
+            _normalize_title(candidate.title),
+            candidate.paper_id,
+        ),
     )
+
+
+def _normalize_title(title: str) -> str:
+    return " ".join(re.findall(r"[\w]+", title.casefold(), flags=re.UNICODE))
 
 
 def _resolve_pdf_path(path: Path, context: PaperCopilotContext) -> Path:
@@ -824,7 +968,43 @@ def _relative_pdf_path(path: Path, pdf_dir: Path) -> str:
     return str(path.resolve().relative_to(pdf_dir.resolve()))
 
 
+def _paper_candidate_payload(candidate: _PaperCandidate) -> dict[str, Any]:
+    return {
+        "paper_id": candidate.paper_id,
+        "title": candidate.title,
+        "indexed": candidate.row is not None,
+        "pdf_path": str(candidate.pdf_path) if candidate.pdf_path is not None else None,
+    }
+
+
+def _ambiguous_paper_payload(
+    locator: _PaperLocatorInput,
+    candidates: list[_PaperCandidate],
+    context: PaperCopilotContext,
+) -> dict[str, Any]:
+    return {
+        "status": "ambiguous",
+        "locator": locator.model_dump(mode="json", exclude_none=True),
+        "reason": "paper title matched multiple candidates; choose one paper_id",
+        "candidates": [_paper_candidate_payload(candidate) for candidate in candidates],
+        "paper_budget": _paper_budget_payload(context),
+    }
+
+
+def _paper_not_found_payload(
+    locator: _PaperLocatorInput,
+    context: PaperCopilotContext,
+) -> dict[str, Any]:
+    return {
+        "status": "not_found",
+        "locator": locator.model_dump(mode="json", exclude_none=True),
+        "reason": "no indexed paper or local PDF matched the locator",
+        "paper_budget": _paper_budget_payload(context),
+    }
+
+
 def _already_read_payload(row: PaperRow, context: PaperCopilotContext) -> dict[str, Any]:
+    context.composer_plan.mark_inspected(row.paper_id)
     pdir = paper_dir(row.paper_id, context.root)
     report_path = pdir / "report.md"
     session_path = pdir / "session.jsonl"
@@ -837,8 +1017,8 @@ def _already_read_payload(row: PaperRow, context: PaperCopilotContext) -> dict[s
         "report_path": str(report_path),
         "session_exists": session_path.exists(),
         "report_exists": report_path.exists(),
-        "can_inspect_same_paper": True,
-        "recommended_next_tool": _inspect_next_tool(row.paper_id),
+        "paper": _paper_summary(row, max_items=5),
+        "can_query_same_paper": True,
         "paper_budget": _paper_budget_payload(context),
     }
 
@@ -855,7 +1035,7 @@ def _needs_user_action_payload(
         "paper_id": paper_id,
         "reason": reason,
         "pdf_path": str(pdf_path) if pdf_path is not None else None,
-        "can_inspect_same_paper": False,
+        "can_query_same_paper": False,
         "paper_budget": _paper_budget_payload(context),
     }
 
@@ -867,19 +1047,24 @@ def _record_read_cost(cost: CostTracker, read_run: ReadPipelineRun) -> None:
 
 
 def _read_paper(args: _ReadPaperInput, context: PaperCopilotContext) -> dict[str, Any]:
-    target = _resolve_read_target(args, context)
+    candidates = _resolve_paper_candidates(args.paper, context)
+    if not candidates:
+        return _paper_not_found_payload(args.paper, context)
+    if len(candidates) > 1:
+        return _ambiguous_paper_payload(args.paper, candidates, context)
+
+    target = candidates[0]
     _reserve_papers(context, [target.paper_id])
 
-    row = context.fields_store.get(target.paper_id)
-    if row is not None:
-        return _already_read_payload(row, context)
+    if target.row is not None:
+        return _already_read_payload(target.row, context)
 
     return {
         "status": "needs_user_action",
         "paper_id": target.paper_id,
         "reason": "paper is not indexed; automatic read is unavailable in sync dispatch",
         "pdf_path": str(target.pdf_path) if target.pdf_path is not None else None,
-        "can_inspect_same_paper": False,
+        "can_query_same_paper": False,
         "paper_budget": _paper_budget_payload(context),
     }
 
@@ -1073,12 +1258,17 @@ async def _read_paper_async(
     cost: CostTracker,
     max_budget_cny: float,
 ) -> dict[str, Any]:
-    target = _resolve_read_target(args, context)
+    candidates = _resolve_paper_candidates(args.paper, context)
+    if not candidates:
+        return _paper_not_found_payload(args.paper, context)
+    if len(candidates) > 1:
+        return _ambiguous_paper_payload(args.paper, candidates, context)
+
+    target = candidates[0]
     _reserve_papers(context, [target.paper_id])
 
-    row = context.fields_store.get(target.paper_id)
-    if row is not None:
-        return _already_read_payload(row, context)
+    if target.row is not None:
+        return _already_read_payload(target.row, context)
     if target.pdf_path is None:
         return _needs_user_action_payload(
             target.paper_id,
@@ -1106,7 +1296,7 @@ async def _read_paper_async(
             "reason": "run budget is already exhausted before read_paper",
             "cost_cny": cost.total_cost_cny,
             "max_budget_cny": max_budget_cny,
-            "can_inspect_same_paper": False,
+            "can_query_same_paper": False,
             "paper_budget": _paper_budget_payload(context),
         }
 
@@ -1115,7 +1305,7 @@ async def _read_paper_async(
         return _needs_user_action_payload(
             target.paper_id,
             reason=(
-                "session directory exists but paper is not indexed; inspect or remove "
+                "session directory exists but paper is not indexed; review or remove "
                 "the old artifact before retrying the read"
             ),
             context=context,
@@ -1129,10 +1319,16 @@ async def _read_paper_async(
         embeddings_store=context.embeddings_store,
         embedder=context.embedder,
         root=context.root,
-        language="en",
+        language=args.language,
     )
     _record_read_cost(cost, read_run)
     context.worker_costs.append(read_run.cost)
+    row = context.fields_store.get(read_run.paper_id)
+    if row is None:
+        raise KnowledgeError(
+            f"read pipeline completed without indexing fields: {read_run.paper_id}"
+        )
+    context.composer_plan.mark_inspected(row.paper_id)
     return {
         "status": "read",
         "paper_id": read_run.paper_id,
@@ -1142,170 +1338,369 @@ async def _read_paper_async(
         "chunks_indexed": read_run.chunks_indexed,
         "cost_cny": read_run.cost.cost_cny,
         "budget_exceeded_after_read": cost.total_cost_cny >= max_budget_cny,
-        "can_inspect_same_paper": True,
-        "recommended_next_tool": _inspect_next_tool(read_run.paper_id),
+        "paper": _paper_summary(row, max_items=5),
+        "can_query_same_paper": True,
         "paper_budget": _paper_budget_payload(context),
     }
 
 
-def _search_library(args: _SearchLibraryInput, context: PaperCopilotContext) -> dict[str, Any]:
+def _search_papers(args: _SearchPapersInput, context: PaperCopilotContext) -> dict[str, Any]:
+    gaps: list[str] = []
+    indexed_papers: list[dict[str, Any]] = []
+    local_papers: list[dict[str, Any]] = []
+
+    if args.scope in {"indexed", "all"}:
+        indexed_papers = _search_indexed_papers(args, context)
+        if (
+            args.query is not None
+            and (context.embeddings_store is None or context.encode_query is None)
+        ):
+            gaps.append(
+                "Semantic retrieval is unavailable; indexed papers were matched "
+                "using titles and structured fields only."
+            )
+
+    if args.scope in {"local", "all"}:
+        if context.pdf_dir is None or not context.pdf_dir.exists():
+            if args.scope == "local":
+                raise KnowledgeError("no PDF directory was configured for local search")
+            gaps.append("Local PDFs are unavailable because no PDF directory is configured.")
+        else:
+            local_papers = _search_local_papers(args, context)
+            if args.scope == "all":
+                indexed_ids = {str(paper["paper_id"]) for paper in indexed_papers}
+                local_papers = [
+                    paper
+                    for paper in local_papers
+                    if str(paper["paper_id"]) not in indexed_ids
+                ]
+            if args.query is not None and any(
+                not bool(paper["indexed"]) for paper in local_papers
+            ):
+                gaps.append(
+                    "Local PDFs without an index were matched by filename only; "
+                    "read_paper is required before content search."
+                )
+
+    papers = [*indexed_papers, *local_papers][: args.limit]
+    return {
+        "status": "ok" if papers else "no_matches",
+        "query": args.query,
+        "scope": args.scope,
+        "filters": args.filters.model_dump(exclude_none=True),
+        "returned": len(papers),
+        "indexed_returned": sum(bool(paper["indexed"]) for paper in papers),
+        "unindexed_returned": sum(not bool(paper["indexed"]) for paper in papers),
+        "citation_format": "[paper_id:chunks[chunk_id]]",
+        "papers": papers,
+        "gaps": gaps,
+    }
+
+
+def _search_indexed_papers(
+    args: _SearchPapersInput,
+    context: PaperCopilotContext,
+) -> list[dict[str, Any]]:
+    rows = [
+        row
+        for row in context.fields_store.list_all()
+        if _paper_matches_filters(row, args.filters)
+    ]
+    if args.query is None:
+        match_kind = "structured_filter" if _has_search_filters(args.filters) else "browse"
+        return [
+            _indexed_candidate_payload(row, match_kind=match_kind)
+            for row in rows[: args.limit]
+        ]
+
     if context.embeddings_store is None or context.encode_query is None:
-        raise KnowledgeError("embedding index unavailable; run reindex before search_library")
-    if (args.field is None) != (args.contains is None):
-        raise KnowledgeError("field and contains must be provided together")
-    contains_filter = (
-        ContainsFilter(field=args.field, term=args.contains)
-        if args.field is not None and args.contains is not None
-        else None
-    )
+        return _lexical_indexed_candidates(rows, args.query, limit=args.limit)
+    if not rows:
+        return []
+
     results = search(
         context.encode_query(args.query),
         fields_store=context.fields_store,
         embeddings_store=context.embeddings_store,
-        k=args.k,
-        year=args.year,
-        contains=contains_filter,
-        max_chunks_per_paper=args.max_chunks_per_paper,
-        evidence_pool_per_paper=args.evidence_pool_per_paper,
+        k=min(args.limit, len(rows)),
+        max_chunks_per_paper=2,
+        evidence_pool_per_paper=20,
         query_text=args.query,
+        paper_ids=[row.paper_id for row in rows],
+    )
+    papers = [
+        _hybrid_candidate_payload(
+            result,
+            row=next(row for row in rows if row.paper_id == result.paper_id),
+            paper_rank=rank,
+        )
+        for rank, result in enumerate(results, start=1)
+    ]
+    seen = {str(paper["paper_id"]) for paper in papers}
+    lexical = _lexical_indexed_candidates(rows, args.query, limit=args.limit)
+    papers.extend(
+        paper for paper in lexical if str(paper["paper_id"]) not in seen
+    )
+    return papers[: args.limit]
+
+
+def _search_local_papers(
+    args: _SearchPapersInput,
+    context: PaperCopilotContext,
+) -> list[dict[str, Any]]:
+    assert context.pdf_dir is not None
+    candidates: list[tuple[float, dict[str, Any]]] = []
+    for pdf_path in _pdfs_under(context.pdf_dir):
+        paper_id = compute_paper_id(pdf_path)
+        row = context.fields_store.get(paper_id)
+        if not _local_paper_matches_filters(row, args.filters):
+            continue
+        relative_path = _relative_pdf_path(pdf_path, context.pdf_dir)
+        score = _local_query_score(relative_path, args.query)
+        if args.query is not None and score == 0.0:
+            continue
+        candidates.append(
+            (
+                score,
+                {
+                    "paper_id": paper_id,
+                    "title": _row_title(row) or pdf_path.stem,
+                    "year": _paper_year(row),
+                    "venue": _paper_venue(row),
+                    "indexed": row is not None,
+                    "source": "local_pdf",
+                    "match_kind": "filename" if args.query is not None else "browse",
+                    "pdf_path": str(pdf_path.resolve()),
+                    "relative_path": relative_path,
+                    "evidence": [],
+                },
+            )
+        )
+    candidates.sort(key=lambda item: (-item[0], str(item[1]["relative_path"])))
+    return [paper for _, paper in candidates[: args.limit]]
+
+
+def _paper_matches_filters(
+    row: PaperRow,
+    filters: _SearchPaperFiltersInput,
+) -> bool:
+    year = _paper_year(row)
+    if filters.year_from is not None and (year is None or year < filters.year_from):
+        return False
+    if filters.year_to is not None and (year is None or year > filters.year_to):
+        return False
+    if filters.venue is not None and not _value_contains(
+        row.data.get("meta", {}).get("venue"), filters.venue
+    ):
+        return False
+    if filters.method is not None and not _value_contains(
+        row.data.get("methods", []), filters.method
+    ):
+        return False
+    experiments = row.data.get("experiments", [])
+    if filters.dataset is not None and not _experiment_field_contains(
+        experiments, "dataset", filters.dataset
+    ):
+        return False
+    return filters.baseline is None or _experiment_field_contains(
+        experiments, "comparison_baseline", filters.baseline
+    )
+
+
+def _local_paper_matches_filters(
+    row: PaperRow | None,
+    filters: _SearchPaperFiltersInput,
+) -> bool:
+    if not _has_search_filters(filters):
+        return True
+    return row is not None and _paper_matches_filters(row, filters)
+
+
+def _has_search_filters(filters: _SearchPaperFiltersInput) -> bool:
+    return any(value is not None for value in filters.model_dump().values())
+
+
+def _experiment_field_contains(experiments: Any, field: str, term: str) -> bool:
+    if not isinstance(experiments, list):
+        return False
+    return any(
+        _value_contains(item.get(field), term)
+        for item in experiments
+        if isinstance(item, dict)
+    )
+
+
+def _value_contains(value: Any, term: str) -> bool:
+    return _normalize_title(term) in _normalize_title(
+        json.dumps(value, ensure_ascii=False, sort_keys=True)
+    )
+
+
+def _lexical_indexed_candidates(
+    rows: list[PaperRow],
+    query: str,
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    scored = [
+        (_indexed_query_score(row, query), row)
+        for row in rows
+    ]
+    matched = [(score, row) for score, row in scored if score > 0.0]
+    matched.sort(
+        key=lambda item: (-item[0], -(_paper_year(item[1]) or 0), item[1].paper_id)
+    )
+    return [
+        _indexed_candidate_payload(row, match_kind="lexical_fields")
+        for _, row in matched[:limit]
+    ]
+
+
+def _indexed_query_score(row: PaperRow, query: str) -> float:
+    query_key = _normalize_title(query)
+    title_key = _normalize_title(_row_title(row))
+    if query_key == title_key:
+        return 4.0
+    if query_key in title_key:
+        return 3.0
+    data_key = _normalize_title(json.dumps(row.data, ensure_ascii=False, sort_keys=True))
+    if query_key in data_key:
+        return 2.0
+    terms = set(query_key.split())
+    if not terms:
+        return 0.0
+    matched = sum(term in data_key for term in terms)
+    return matched / len(terms) if matched else 0.0
+
+
+def _local_query_score(relative_path: str, query: str | None) -> float:
+    if query is None:
+        return 0.0
+    query_key = _normalize_title(query)
+    path_key = _normalize_title(Path(relative_path).with_suffix("").as_posix())
+    if query_key == path_key:
+        return 2.0
+    if query_key in path_key:
+        return 1.0
+    terms = set(query_key.split())
+    if not terms:
+        return 0.0
+    matched = sum(term in path_key for term in terms)
+    return matched / len(terms) if matched else 0.0
+
+
+def _indexed_candidate_payload(row: PaperRow, *, match_kind: str) -> dict[str, Any]:
+    return {
+        **_paper_brief(row),
+        "indexed": True,
+        "source": "index",
+        "match_kind": match_kind,
+        "structured_evidence": _suggested_citations(row, max_items=2),
+        "evidence": [],
+    }
+
+
+def _hybrid_candidate_payload(
+    result: SearchResult,
+    *,
+    row: PaperRow,
+    paper_rank: int,
+) -> dict[str, Any]:
+    search_payload = _search_result_payload(result, paper_rank=paper_rank)
+    return {
+        **_paper_brief(row),
+        "indexed": True,
+        "source": "index",
+        "match_kind": "hybrid",
+        "citation_ref": search_payload["citation_ref"],
+        "relevance": {
+            "score": search_payload["score"],
+            "score_kind": search_payload["evidence"]["score_kind"],
+        },
+        "evidence": search_payload["evidence_chunks"],
+    }
+
+
+def _paper_year(row: PaperRow | None) -> int | None:
+    if row is None:
+        return None
+    value = row.data.get("meta", {}).get("year")
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _paper_venue(row: PaperRow | None) -> str | None:
+    if row is None:
+        return None
+    value = row.data.get("meta", {}).get("venue")
+    return value if isinstance(value, str) else None
+
+
+def _query_paper(args: _QueryPaperInput, context: PaperCopilotContext) -> dict[str, Any]:
+    candidates = _resolve_paper_candidates(args.paper, context)
+    if not candidates:
+        return _paper_not_found_payload(args.paper, context)
+    if len(candidates) > 1:
+        return _ambiguous_paper_payload(args.paper, candidates, context)
+
+    target = candidates[0]
+    if target.row is None and target.pdf_path is None:
+        return _paper_not_found_payload(args.paper, context)
+    if target.row is None:
+        assert target.pdf_path is not None
+        return {
+            "status": "needs_read",
+            "paper": _paper_candidate_payload(target),
+            "reason": "the paper resolves to a local PDF but has not been indexed",
+            "next_tool": {
+                "name": "read_paper",
+                "input": {"paper": {"pdf_path": str(target.pdf_path)}},
+            },
+            "paper_budget": _paper_budget_payload(context),
+        }
+
+    _reserve_papers(context, [target.paper_id])
+    context.composer_plan.mark_inspected(target.paper_id)
+    payload: dict[str, Any] = {
+        "question": args.question,
+        "paper": _paper_summary(target.row, max_items=5),
+        "citation_format": "[paper_id:chunks[chunk_id]]",
+        "paper_budget": _paper_budget_payload(context),
+    }
+    if context.embeddings_store is None or context.encode_query is None:
+        payload.update(
+            {
+                "status": "structured_only",
+                "evidence": [],
+                "gaps": [
+                    "Original-text evidence is unavailable because the embedding "
+                    "index is not configured."
+                ],
+            }
+        )
+        return payload
+
+    results = search(
+        context.encode_query(args.question),
+        fields_store=context.fields_store,
+        embeddings_store=context.embeddings_store,
+        k=1,
+        max_chunks_per_paper=args.evidence_limit,
+        evidence_pool_per_paper=max(20, args.evidence_limit),
+        query_text=args.question,
+        paper_ids=[target.paper_id],
     )
     ranked = list(enumerate(results, start=1))
     evidence = _search_evidence_list(ranked)
-    return {
-        "query": args.query,
-        "citation_format": "[paper_id:chunks[chunk_id]]",
-        "evidence": evidence,
-        "results": [
-            _search_result_payload(result, paper_rank=rank) for rank, result in ranked
-        ],
-    }
-
-
-def _inspect_paper(args: _InspectPaperInput, context: PaperCopilotContext) -> dict[str, Any]:
-    row = context.fields_store.get(args.paper_id)
-    if row is None:
-        raise KnowledgeError(f"paper_id not found: {args.paper_id}")
-    _reserve_papers(context, [row.paper_id])
-    context.composer_plan.mark_inspected(row.paper_id)
-    payload: dict[str, Any] = {
-        "paper_id": row.paper_id,
-        "paper_budget": _paper_budget_payload(context),
-    }
-    for field in args.fields:
-        value = row.data.get(field)
-        if isinstance(value, list):
-            payload[field] = value[: args.max_items]
-        else:
-            payload[field] = value
-    payload["evidence_summary"] = _evidence_summary(row, max_items=args.max_items)
-    payload["suggested_citations"] = _suggested_citations(row, max_items=args.max_items)
-    payload["recommended_followups"] = _recommended_followups(row, context)
+    payload.update(
+        {
+            "status": "ok" if evidence else "no_evidence",
+            "evidence": evidence,
+            "gaps": (
+                [] if evidence else ["No original-text chunk matched this question in the index."]
+            ),
+        }
+    )
     return payload
-
-
-def _recommended_followups(row: PaperRow, context: PaperCopilotContext) -> list[dict[str, Any]]:
-    followups: list[dict[str, Any]] = []
-    if len(context.touched_paper_ids) < context.max_papers:
-        followups.append(
-            {
-                "name": "find_related_papers",
-                "input": {"paper_id": row.paper_id, "k": 3},
-                "when": (
-                    "Use when the task needs synthesis, comparison, or nearby "
-                    "papers beyond this one."
-                ),
-            }
-        )
-        query = _followup_query(row)
-        if query:
-            followups.append(
-                {
-                    "name": "search_library",
-                    "input": {"query": query, "k": 3},
-                    "when": (
-                        "Use when existing links are sparse or you need another "
-                        "candidate from the indexed library."
-                    ),
-                }
-            )
-    if len(context.touched_paper_ids) >= 2:
-        other_ids = sorted(pid for pid in context.touched_paper_ids if pid != row.paper_id)
-        if other_ids:
-            followups.append(
-                {
-                    "name": "compare_papers",
-                    "input": {"paper_id_a": row.paper_id, "paper_id_b": other_ids[0]},
-                    "when": "Use before final synthesis when two relevant papers are touched.",
-                }
-            )
-    return followups
-
-
-def _followup_query(row: PaperRow) -> str:
-    parts: list[str] = []
-    title = _row_title(row)
-    if title:
-        parts.append(title)
-    for item in _dict_items(row.data.get("contributions"), 2):
-        text = _text_value(item.get("claim"))
-        if text:
-            parts.append(text)
-    for item in _dict_items(row.data.get("methods"), 2):
-        name = _text_value(item.get("name"))
-        if name:
-            parts.append(name)
-    return _truncate(". ".join(parts), 360)
-
-
-def _evidence_summary(row: PaperRow, *, max_items: int) -> dict[str, Any]:
-    data = row.data
-    meta = data.get("meta", {})
-    return {
-        "paper_id": row.paper_id,
-        "title": _text_value(meta.get("title")),
-        "year": meta.get("year"),
-        "venue": meta.get("venue"),
-        "top_contributions": [
-            {
-                "field": f"contributions[{i}].claim",
-                "text": _truncate(_text_value(item.get("claim")), 240),
-                "type": item.get("type"),
-                "evidence_type": item.get("evidence_type"),
-            }
-            for i, item in enumerate(_dict_items(data.get("contributions"), max_items))
-        ],
-        "top_methods": [
-            {
-                "field": f"methods[{i}]",
-                "name": _truncate(_text_value(item.get("name")), 120),
-                "description": _truncate(_text_value(item.get("description")), 240),
-                "novelty_vs_prior": _truncate(
-                    _text_value(item.get("novelty_vs_prior")), 240
-                ),
-            }
-            for i, item in enumerate(_dict_items(data.get("methods"), max_items))
-        ],
-        "key_experiments": [
-            {
-                "field": f"experiments[{i}]",
-                "dataset": item.get("dataset"),
-                "metric": item.get("metric"),
-                "value": item.get("value"),
-                "unit": item.get("unit"),
-                "comparison_baseline": item.get("comparison_baseline"),
-                "raw": _truncate(_text_value(item.get("raw")), 240),
-            }
-            for i, item in enumerate(_dict_items(data.get("experiments"), max_items))
-        ],
-        "top_limitations": [
-            {
-                "field": f"limitations[{i}].description",
-                "type": item.get("type"),
-                "text": _truncate(_text_value(item.get("description")), 240),
-            }
-            for i, item in enumerate(_dict_items(data.get("limitations"), max_items))
-        ],
-    }
 
 
 def _suggested_citations(row: PaperRow, *, max_items: int) -> list[dict[str, Any]]:
@@ -1385,29 +1780,108 @@ def _experiment_text(item: dict[str, Any]) -> str:
 
 
 def _compare_papers(args: _ComparePapersInput, context: PaperCopilotContext) -> dict[str, Any]:
-    row_a = context.fields_store.get(args.paper_id_a)
-    row_b = context.fields_store.get(args.paper_id_b)
-    missing = [
-        paper_id
-        for paper_id, row in [(args.paper_id_a, row_a), (args.paper_id_b, row_b)]
-        if row is None
-    ]
-    if missing:
-        raise KnowledgeError(f"paper_id not found: {', '.join(missing)}")
-    assert row_a is not None and row_b is not None
-    _reserve_papers(context, [row_a.paper_id, row_b.paper_id])
-    payload = build_compare_payload(row_a, row_b)
+    rows, issues = _resolve_indexed_locators(args.papers, context)
+    if issues:
+        return {
+            "status": "needs_resolution",
+            "issues": issues,
+            "paper_budget": _paper_budget_payload(context),
+        }
+
+    _reserve_papers(context, [row.paper_id for row in rows])
+    for row in rows:
+        context.composer_plan.mark_inspected(row.paper_id)
+    payload = build_multi_compare_payload(rows, list(args.aspects))
+    payload["status"] = "ok"
     payload["paper_budget"] = _paper_budget_payload(context)
     return payload
+
+
+def _resolve_indexed_locators(
+    locators: list[_PaperLocatorInput],
+    context: PaperCopilotContext,
+) -> tuple[list[PaperRow], list[dict[str, Any]]]:
+    rows: list[PaperRow] = []
+    issues: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, locator in enumerate(locators):
+        candidates = _resolve_paper_candidates(locator, context)
+        if not candidates:
+            issues.append(_locator_issue(index, locator, status="not_found"))
+            continue
+        if len(candidates) > 1:
+            issues.append(
+                _locator_issue(
+                    index,
+                    locator,
+                    status="ambiguous",
+                    candidates=candidates,
+                )
+            )
+            continue
+        candidate = candidates[0]
+        if candidate.row is None:
+            status = "needs_read" if candidate.pdf_path is not None else "not_found"
+            issues.append(
+                _locator_issue(
+                    index,
+                    locator,
+                    status=status,
+                    candidates=[candidate],
+                )
+            )
+            continue
+        if candidate.paper_id in seen:
+            issues.append(
+                _locator_issue(
+                    index,
+                    locator,
+                    status="duplicate",
+                    candidates=[candidate],
+                )
+            )
+            continue
+        seen.add(candidate.paper_id)
+        rows.append(candidate.row)
+    return rows, issues
+
+
+def _locator_issue(
+    index: int,
+    locator: _PaperLocatorInput,
+    *,
+    status: str,
+    candidates: list[_PaperCandidate] | None = None,
+) -> dict[str, Any]:
+    reasons = {
+        "not_found": "no indexed paper or local PDF matched this locator",
+        "ambiguous": "the title matched multiple papers; choose one paper_id",
+        "needs_read": "the locator matched a local PDF that has not been indexed",
+        "duplicate": "this locator resolves to a paper already in the comparison",
+    }
+    return {
+        "index": index,
+        "locator": locator.model_dump(mode="json"),
+        "status": status,
+        "reason": reasons[status],
+        "candidates": [
+            _paper_candidate_payload(candidate) for candidate in candidates or []
+        ],
+    }
 
 
 def _find_related_papers(
     args: _FindRelatedPapersInput,
     context: PaperCopilotContext,
 ) -> dict[str, Any]:
-    target = context.fields_store.get(args.paper_id)
-    if target is None:
-        raise KnowledgeError(f"paper_id not found: {args.paper_id}")
+    rows, issues = _resolve_indexed_locators([args.paper], context)
+    if issues:
+        return {
+            "status": "needs_resolution",
+            "issues": issues,
+            "paper_budget": _paper_budget_payload(context),
+        }
+    target = rows[0]
 
     rows_by_id = {row.paper_id: row for row in context.fields_store.list_all()}
     rows_by_id[target.paper_id] = target
@@ -1415,16 +1889,15 @@ def _find_related_papers(
     seen: set[str] = set()
 
     for relation in _graph_relation_candidates(target.paper_id, rows_by_id, context.root):
-        _add_related_candidate(candidates, seen, relation, rows_by_id)
+        if _relation_matches_filters(relation, args):
+            _add_related_candidate(candidates, seen, relation, rows_by_id)
     for relation in _field_relation_candidates(target, rows_by_id):
-        _add_related_candidate(candidates, seen, relation, rows_by_id)
+        if _relation_matches_filters(relation, args):
+            _add_related_candidate(candidates, seen, relation, rows_by_id)
 
-    selected = candidates[: args.k]
-    _reserve_papers(
-        context,
-        [target.paper_id, *(candidate["candidate_paper_id"] for candidate in selected)],
-    )
+    selected = candidates[: args.limit]
     return {
+        "status": "ok" if selected else "no_matches",
         "paper_id": target.paper_id,
         "title": _row_title(target),
         "count": len(candidates),
@@ -1432,6 +1905,15 @@ def _find_related_papers(
         "related_papers": selected,
         "paper_budget": _paper_budget_payload(context),
     }
+
+
+def _relation_matches_filters(
+    relation: dict[str, Any],
+    args: _FindRelatedPapersInput,
+) -> bool:
+    if args.direction != "both" and relation.get("direction") != args.direction:
+        return False
+    return not args.relation_types or relation.get("relation_type") in args.relation_types
 
 
 def _graph_relation_candidates(
@@ -1596,17 +2078,6 @@ def _paper_budget_payload(context: PaperCopilotContext) -> dict[str, Any]:
     }
 
 
-def _inspect_next_tool(paper_id: str) -> dict[str, Any]:
-    return {
-        "name": "inspect_paper",
-        "input": {
-            "paper_id": paper_id,
-            "fields": ["meta", "contributions", "methods", "experiments", "limitations"],
-        },
-        "note": "Reusing this paper_id does not consume another max_papers slot.",
-    }
-
-
 def _build_termination_summary(
     *,
     reason: str,
@@ -1755,6 +2226,19 @@ def _paper_brief(row: PaperRow) -> dict[str, Any]:
         "venue": meta.get("venue"),
         "top_methods": [m.get("name", "") for m in row.data.get("methods", [])[:3]],
         "top_contributions": [c.get("claim", "") for c in row.data.get("contributions", [])[:2]],
+    }
+
+
+def _paper_summary(row: PaperRow, *, max_items: int) -> dict[str, Any]:
+    return {
+        "paper_id": row.paper_id,
+        "indexed_at": row.indexed_at,
+        "meta": row.data.get("meta", {}),
+        "contributions": row.data.get("contributions", [])[:max_items],
+        "methods": row.data.get("methods", [])[:max_items],
+        "experiments": row.data.get("experiments", [])[:max_items],
+        "limitations": row.data.get("limitations", [])[:max_items],
+        "suggested_citations": _suggested_citations(row, max_items=max_items),
     }
 
 

@@ -13,6 +13,7 @@ from paper_copilot.agents.mock_llm import MockLLM, MockResponse, TextBlock, Tool
 from paper_copilot.agents.paper_copilot import (
     PaperCopilotContext,
     dispatch_paper_copilot_tool,
+    paper_copilot_tools,
     run_paper_copilot,
 )
 from paper_copilot.knowledge.embeddings_store import ChunkRow, EmbeddingsStore
@@ -101,7 +102,7 @@ def _runtime_payload(messages: list[dict[str, Any]]) -> dict[str, Any]:
     return payload
 
 
-def test_dispatch_paper_copilot_tools_list_search_and_inspect(tmp_path: Path) -> None:
+def test_dispatch_paper_copilot_tools_browse_search_and_query(tmp_path: Path) -> None:
     with (
         FieldsStore.open(tmp_path / "fields.db") as fs,
         EmbeddingsStore.open(tmp_path / "embeddings.db", dim=DIM) as es,
@@ -121,73 +122,140 @@ def test_dispatch_paper_copilot_tools_list_search_and_inspect(tmp_path: Path) ->
             encode_query=lambda _query: np.array([1, 0, 0, 0], dtype=np.float32),
         )
 
-        listed = dispatch_paper_copilot_tool(
-            ToolUseRequest(id="t1", name="list_papers", input={"limit": 5}),
+        browsed = dispatch_paper_copilot_tool(
+            ToolUseRequest(id="t1", name="search_papers", input={"limit": 5}),
             context,
         )
-        assert listed.is_error is False
-        assert json.loads(listed.output)["papers"][0]["paper_id"] == "paperA"
+        assert browsed.is_error is False
+        assert json.loads(browsed.output)["papers"][0]["paper_id"] == "paperA"
 
         searched = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="t2",
-                name="search_library",
-                input={"query": "sparse attention", "k": 1},
+                name="search_papers",
+                input={"query": "sparse attention", "limit": 1},
             ),
             context,
         )
         assert searched.is_error is False
         search_data = json.loads(searched.output)
         assert search_data["citation_format"] == "[paper_id:chunks[chunk_id]]"
-        assert search_data["evidence"][0]["paper_id"] == "paperA"
-        assert search_data["evidence"][0]["source_kind"] == "pdf_text"
-        assert search_data["evidence"][0]["section"] == "Abstract"
-        assert search_data["evidence"][0]["page_start"] == 1
-        assert search_data["evidence"][0]["score_kind"] == "rrf"
-        assert search_data["evidence"][0]["vector_rank"] == 1
-        assert search_data["evidence"][0]["bm25_rank"] == 1
-        assert search_data["evidence"][0]["citation_ref"].startswith("[paperA:chunks[")
-        assert search_data["evidence"][1]["paper_id"] == "paperA"
-        assert search_data["evidence"][1]["chunk_rank"] == 2
-        assert search_data["results"][0]["paper_id"] == "paperA"
-        assert search_data["results"][0]["citation_ref"] == search_data["evidence"][0][
-            "citation_ref"
-        ]
-        assert len(search_data["results"][0]["evidence_chunks"]) == 2
+        assert search_data["papers"][0]["paper_id"] == "paperA"
+        assert search_data["papers"][0]["match_kind"] == "hybrid"
+        evidence = search_data["papers"][0]["evidence"]
+        assert evidence[0]["paper_id"] == "paperA"
+        assert evidence[0]["source_kind"] == "pdf_text"
+        assert evidence[0]["section"] == "Abstract"
+        assert evidence[0]["page_start"] == 1
+        assert evidence[0]["score_kind"] == "rrf"
+        assert evidence[0]["vector_rank"] == 1
+        assert evidence[0]["bm25_rank"] == 1
+        assert evidence[0]["citation_ref"].startswith("[paperA:chunks[")
+        assert evidence[1]["paper_id"] == "paperA"
+        assert evidence[1]["chunk_rank"] == 2
+        assert search_data["papers"][0]["citation_ref"] == evidence[0]["citation_ref"]
 
-        inspected = dispatch_paper_copilot_tool(
+        queried = dispatch_paper_copilot_tool(
             ToolUseRequest(
-                id="t3",
-                name="inspect_paper",
-                input={"paper_id": "paperA", "fields": ["meta", "methods"]},
+                id="t-query",
+                name="query_paper",
+                input={
+                    "paper": {"paper_id": "paperA"},
+                    "question": "How does top-k attention work?",
+                    "evidence_limit": 2,
+                },
             ),
             context,
         )
-        data = json.loads(inspected.output)
-        assert data["meta"]["title"] == "Paper A"
-        assert data["methods"][0]["name"] == "Sparse Attention"
-        assert data["evidence_summary"]["title"] == "Paper A"
-        assert data["evidence_summary"]["top_contributions"][0]["text"] == (
-            "introduces sparse attention"
-        )
-        assert data["evidence_summary"]["top_methods"][0]["name"] == "Sparse Attention"
-        assert data["suggested_citations"][0]["field"] == "meta.title"
-        assert data["suggested_citations"][1]["paper_id"] == "paperA"
-        assert data["suggested_citations"][2]["field"] == "methods[0]"
-        assert data["recommended_followups"][0]["name"] == "find_related_papers"
-        assert data["recommended_followups"][1]["name"] == "search_library"
+        query_data = json.loads(queried.output)
+        assert queried.is_error is False
+        assert query_data["status"] == "ok"
+        assert query_data["paper"]["methods"][0]["name"] == "Sparse Attention"
+        assert len(query_data["evidence"]) == 2
+        assert {item["paper_id"] for item in query_data["evidence"]} == {"paperA"}
+
+
+def test_paper_tool_schemas_expose_locator_and_query_contract() -> None:
+    tools = {tool["name"]: tool for tool in paper_copilot_tools()}
+
+    assert "search_papers" in tools
+    assert {"list_papers", "list_pdfs", "search_library"}.isdisjoint(tools)
+    search_properties = tools["search_papers"]["input_schema"]["properties"]
+    assert set(search_properties) == {"query", "scope", "filters", "limit"}
+    search_schema_text = json.dumps(tools["search_papers"]["input_schema"])
+    assert "max_chunks_per_paper" not in search_schema_text
+    assert "evidence_pool_per_paper" not in search_schema_text
+    assert "inspect_paper" not in tools
+    assert "query_paper" in tools
+    assert tools["read_paper"]["input_schema"]["required"] == ["paper"]
+    locator = tools["read_paper"]["input_schema"]["$defs"]["_PaperLocatorInput"]
+    assert len(locator["anyOf"]) == 3
+    locator_defs = tools["read_paper"]["input_schema"]["$defs"]
+    required_options = {
+        tuple(locator_defs[option["$ref"].rsplit("/", maxsplit=1)[-1]]["required"])
+        for option in locator["anyOf"]
+    }
+    assert required_options == {("paper_id",), ("title",), ("pdf_path",)}
+    assert "Ambiguous titles" in tools["read_paper"]["description"]
+    assert "Search is restricted to the selected paper" in tools["query_paper"]["description"]
+    compare_properties = tools["compare_papers"]["input_schema"]["properties"]
+    assert set(compare_properties) == {"papers", "aspects"}
+    related_properties = tools["find_related_papers"]["input_schema"]["properties"]
+    assert set(related_properties) == {"paper", "direction", "relation_types", "limit"}
 
 
 def test_dispatch_rejects_string_numeric_inputs(tmp_path: Path) -> None:
     with FieldsStore.open(tmp_path / "fields.db") as fs:
         context = PaperCopilotContext(fields_store=fs)
         result = dispatch_paper_copilot_tool(
-            ToolUseRequest(id="t1", name="list_papers", input={"year": "2017"}),
+            ToolUseRequest(
+                id="t1",
+                name="search_papers",
+                input={"filters": {"year_from": "2017"}},
+            ),
             context,
         )
 
     assert result.is_error is True
     assert "valid integer" in json.loads(result.output)["error"]
+
+
+def test_search_papers_filters_dataset_and_baseline(tmp_path: Path) -> None:
+    matching = _payload("Matching Paper", 2024)
+    matching["experiments"] = [
+        {
+            "dataset": "Market-1501",
+            "metric": "mAP",
+            "value": "90.1",
+            "unit": "%",
+            "comparison_baseline": "ResNet-50",
+            "raw": "ResNet-50 baseline on Market-1501",
+        }
+    ]
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        now = datetime.now(UTC).isoformat()
+        fs.upsert("paperA", matching, now)
+        fs.upsert("paperB", _payload("Other Paper", 2019), now)
+        context = PaperCopilotContext(fields_store=fs)
+        result = dispatch_paper_copilot_tool(
+            ToolUseRequest(
+                id="t1",
+                name="search_papers",
+                input={
+                    "filters": {
+                        "year_from": 2020,
+                        "dataset": "market 1501",
+                        "baseline": "resnet-50",
+                    }
+                },
+            ),
+            context,
+        )
+    data = json.loads(result.output)
+    assert result.is_error is False
+    assert data["status"] == "ok"
+    assert [paper["paper_id"] for paper in data["papers"]] == ["paperA"]
+    assert data["papers"][0]["match_kind"] == "structured_filter"
 
 
 def test_dispatch_compare_papers_returns_structured_alignment(tmp_path: Path) -> None:
@@ -200,19 +268,94 @@ def test_dispatch_compare_papers_returns_structured_alignment(tmp_path: Path) ->
             ToolUseRequest(
                 id="t1",
                 name="compare_papers",
-                input={"paper_id_a": "paperA", "paper_id_b": "paperB"},
+                input={
+                    "papers": [
+                        {"paper_id": "paperA"},
+                        {"title": "Paper B"},
+                    ]
+                },
             ),
             context,
         )
 
     data = json.loads(result.output)
     assert result.is_error is False
-    assert data["a"]["paper_id"] == "paperA"
-    assert data["b"]["paper_id"] == "paperB"
-    assert data["methods_aligned"][0]["key"] == "shared method"
-    assert data["methods_aligned"][0]["a"]["name"] == "Shared Method"
-    assert data["methods_aligned"][0]["b"]["name"] == "Shared Method"
+    assert data["status"] == "ok"
+    assert [paper["paper_id"] for paper in data["papers"]] == ["paperA", "paperB"]
+    methods = data["pairwise_alignment"]["methods_aligned"]
+    assert methods[0]["key"] == "shared method"
+    assert methods[0]["a"]["name"] == "Shared Method"
+    assert methods[0]["b"]["name"] == "Shared Method"
+    assert data["shared_exact_matches"]["method_names"] == ["Shared Method"]
     assert data["paper_budget"]["touched_count"] == 2
+
+
+def test_compare_papers_supports_three_papers_and_selected_aspects(tmp_path: Path) -> None:
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        now = datetime.now(UTC).isoformat()
+        for paper_id, title in [
+            ("paperA", "Paper A"),
+            ("paperB", "Paper B"),
+            ("paperC", "Paper C"),
+        ]:
+            fs.upsert(paper_id, _payload(title, method_name="Shared Method"), now)
+        context = PaperCopilotContext(fields_store=fs, max_papers=3)
+        result = dispatch_paper_copilot_tool(
+            ToolUseRequest(
+                id="t1",
+                name="compare_papers",
+                input={
+                    "papers": [
+                        {"paper_id": "paperA"},
+                        {"paper_id": "paperB"},
+                        {"paper_id": "paperC"},
+                    ],
+                    "aspects": ["methods"],
+                },
+            ),
+            context,
+        )
+
+    data = json.loads(result.output)
+    assert result.is_error is False
+    assert len(data["comparison"]) == 3
+    assert set(data["comparison"][0]) == {"paper_id", "meta", "methods"}
+    assert data["shared_exact_matches"] == {"method_names": ["Shared Method"]}
+    assert "pairwise_alignment" not in data
+
+
+def test_compare_papers_returns_resolution_issues_without_spending_budget(
+    tmp_path: Path,
+) -> None:
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        now = datetime.now(UTC).isoformat()
+        fs.upsert("paperA", _payload("Shared Paper"), now)
+        fs.upsert("paperB", _payload("shared-paper", 2023), now)
+        fs.upsert("paperC", _payload("Paper C", 2022), now)
+        context = PaperCopilotContext(fields_store=fs, max_papers=2)
+        result = dispatch_paper_copilot_tool(
+            ToolUseRequest(
+                id="t1",
+                name="compare_papers",
+                input={
+                    "papers": [
+                        {"title": "Shared Paper"},
+                        {"paper_id": "paperC"},
+                    ]
+                },
+            ),
+            context,
+        )
+
+    data = json.loads(result.output)
+    assert result.is_error is False
+    assert data["status"] == "needs_resolution"
+    assert data["issues"][0]["status"] == "ambiguous"
+    assert [candidate["paper_id"] for candidate in data["issues"][0]["candidates"]] == [
+        "paperA",
+        "paperB",
+    ]
+    assert context.touched_paper_ids == set()
 
 
 def test_dispatch_find_related_papers_uses_field_links(tmp_path: Path) -> None:
@@ -238,7 +381,19 @@ def test_dispatch_find_related_papers_uses_field_links(tmp_path: Path) -> None:
             ToolUseRequest(
                 id="t1",
                 name="find_related_papers",
-                input={"paper_id": "paperA", "k": 5},
+                input={"paper": {"title": "Paper A"}, "limit": 5},
+            ),
+            context,
+        )
+        filtered = dispatch_paper_copilot_tool(
+            ToolUseRequest(
+                id="t2",
+                name="find_related_papers",
+                input={
+                    "paper": {"paper_id": "paperA"},
+                    "direction": "incoming",
+                    "relation_types": ["compares_against"],
+                },
             ),
             context,
         )
@@ -250,7 +405,11 @@ def test_dispatch_find_related_papers_uses_field_links(tmp_path: Path) -> None:
     assert [p["candidate_paper_id"] for p in data["related_papers"]] == ["paperB", "paperC"]
     assert [p["direction"] for p in data["related_papers"]] == ["outgoing", "incoming"]
     assert data["related_papers"][0]["link_source"] == "fields"
-    assert data["paper_budget"]["touched_paper_ids"] == ["paperA", "paperB", "paperC"]
+    assert data["paper_budget"]["touched_paper_ids"] == []
+    filtered_data = json.loads(filtered.output)
+    assert [paper["candidate_paper_id"] for paper in filtered_data["related_papers"]] == [
+        "paperC"
+    ]
 
 
 def test_dispatch_find_related_papers_reads_graph_log(tmp_path: Path) -> None:
@@ -276,7 +435,7 @@ def test_dispatch_find_related_papers_reads_graph_log(tmp_path: Path) -> None:
             ToolUseRequest(
                 id="t1",
                 name="find_related_papers",
-                input={"paper_id": "paperA", "k": 1},
+                input={"paper": {"paper_id": "paperA"}, "limit": 1},
             ),
             context,
         )
@@ -289,7 +448,7 @@ def test_dispatch_find_related_papers_reads_graph_log(tmp_path: Path) -> None:
     assert data["related_papers"][0]["indexed_at"] == "2026-05-18T00:00:00+00:00"
 
 
-def test_dispatch_enforces_max_papers_across_inspect_and_compare(tmp_path: Path) -> None:
+def test_dispatch_enforces_max_papers_across_query_and_compare(tmp_path: Path) -> None:
     with FieldsStore.open(tmp_path / "fields.db") as fs:
         now = datetime.now(UTC).isoformat()
         fs.upsert("paperA", _payload("Paper A"), now)
@@ -298,23 +457,49 @@ def test_dispatch_enforces_max_papers_across_inspect_and_compare(tmp_path: Path)
         context = PaperCopilotContext(fields_store=fs, max_papers=2)
 
         first = dispatch_paper_copilot_tool(
-            ToolUseRequest(id="t1", name="inspect_paper", input={"paper_id": "paperA"}),
+            ToolUseRequest(
+                id="t1",
+                name="query_paper",
+                input={
+                    "paper": {"paper_id": "paperA"},
+                    "question": "What is the method?",
+                },
+            ),
             context,
         )
         repeat = dispatch_paper_copilot_tool(
-            ToolUseRequest(id="t2", name="inspect_paper", input={"paper_id": "paperA"}),
+            ToolUseRequest(
+                id="t2",
+                name="query_paper",
+                input={
+                    "paper": {"paper_id": "paperA"},
+                    "question": "What is the method?",
+                },
+            ),
             context,
         )
         second = dispatch_paper_copilot_tool(
             ToolUseRequest(
                 id="t3",
                 name="compare_papers",
-                input={"paper_id_a": "paperA", "paper_id_b": "paperB"},
+                input={
+                    "papers": [
+                        {"paper_id": "paperA"},
+                        {"paper_id": "paperB"},
+                    ]
+                },
             ),
             context,
         )
         over_limit = dispatch_paper_copilot_tool(
-            ToolUseRequest(id="t4", name="inspect_paper", input={"paper_id": "paperC"}),
+            ToolUseRequest(
+                id="t4",
+                name="query_paper",
+                input={
+                    "paper": {"paper_id": "paperC"},
+                    "question": "What is the method?",
+                },
+            ),
             context,
         )
 
@@ -335,7 +520,11 @@ def test_dispatch_read_paper_reports_existing_index_entry(tmp_path: Path) -> Non
         fs.upsert("paperA", _payload("Paper A"), datetime.now(UTC).isoformat())
         context = PaperCopilotContext(fields_store=fs, root=tmp_path, max_papers=1)
         result = dispatch_paper_copilot_tool(
-            ToolUseRequest(id="t1", name="read_paper", input={"paper_id": "paperA"}),
+            ToolUseRequest(
+                id="t1",
+                name="read_paper",
+                input={"paper": {"title": "Paper A"}},
+            ),
             context,
         )
 
@@ -345,9 +534,9 @@ def test_dispatch_read_paper_reports_existing_index_entry(tmp_path: Path) -> Non
     assert data["paper_id"] == "paperA"
     assert data["report_exists"] is True
     assert data["session_exists"] is True
-    assert data["can_inspect_same_paper"] is True
-    assert data["recommended_next_tool"]["name"] == "inspect_paper"
-    assert data["recommended_next_tool"]["input"]["paper_id"] == "paperA"
+    assert data["paper"]["methods"][0]["name"] == "Sparse Attention"
+    assert data["paper"]["suggested_citations"][0]["field"] == "meta.title"
+    assert data["can_query_same_paper"] is True
     assert data["paper_budget"]["touched_paper_ids"] == ["paperA"]
 
 
@@ -365,7 +554,7 @@ def test_dispatch_read_paper_needs_user_action_for_unread_pdf(tmp_path: Path) ->
             ToolUseRequest(
                 id="t1",
                 name="read_paper",
-                input={"pdf_path": str(pdf_path)},
+                input={"paper": {"pdf_path": str(pdf_path)}},
             ),
             context,
         )
@@ -373,12 +562,95 @@ def test_dispatch_read_paper_needs_user_action_for_unread_pdf(tmp_path: Path) ->
     data = json.loads(result.output)
     assert result.is_error is False
     assert data["status"] == "needs_user_action"
-    assert data["can_inspect_same_paper"] is False
+    assert data["can_query_same_paper"] is False
     assert data["paper_id"] in context.touched_paper_ids
     assert data["pdf_path"] == str(pdf_path)
 
 
-def test_dispatch_list_pdfs_reports_candidate_ids(tmp_path: Path) -> None:
+def test_query_paper_returns_ambiguous_title_candidates(tmp_path: Path) -> None:
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        now = datetime.now(UTC).isoformat()
+        fs.upsert("paperA", _payload("Shared Paper"), now)
+        fs.upsert("paperB", _payload("shared-paper", 2023), now)
+        context = PaperCopilotContext(fields_store=fs)
+        result = dispatch_paper_copilot_tool(
+            ToolUseRequest(
+                id="t1",
+                name="query_paper",
+                input={
+                    "paper": {"title": "Shared Paper"},
+                    "question": "What is the method?",
+                },
+            ),
+            context,
+        )
+
+    data = json.loads(result.output)
+    assert result.is_error is False
+    assert data["status"] == "ambiguous"
+    assert [candidate["paper_id"] for candidate in data["candidates"]] == [
+        "paperA",
+        "paperB",
+    ]
+    assert context.touched_paper_ids == set()
+
+
+def test_query_paper_returns_structured_fields_when_rag_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        fs.upsert("paperA", _payload("Paper A"), datetime.now(UTC).isoformat())
+        context = PaperCopilotContext(fields_store=fs)
+        result = dispatch_paper_copilot_tool(
+            ToolUseRequest(
+                id="t1",
+                name="query_paper",
+                input={
+                    "paper": {"paper_id": "paperA"},
+                    "question": "What is the main contribution?",
+                },
+            ),
+            context,
+        )
+
+    data = json.loads(result.output)
+    assert result.is_error is False
+    assert data["status"] == "structured_only"
+    assert data["paper"]["contributions"][0]["claim"] == "introduces sparse attention"
+    assert data["evidence"] == []
+    assert "embedding index is not configured" in data["gaps"][0]
+    assert context.touched_paper_ids == {"paperA"}
+
+
+def test_query_paper_requests_read_for_unindexed_local_pdf(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "Sparse-Attention.pdf"
+    pdf_path.write_bytes(b"%PDF fake")
+    with FieldsStore.open(tmp_path / "fields.db") as fs:
+        context = PaperCopilotContext(fields_store=fs, pdf_dir=tmp_path)
+        result = dispatch_paper_copilot_tool(
+            ToolUseRequest(
+                id="t1",
+                name="query_paper",
+                input={
+                    "paper": {"title": "sparse attention"},
+                    "question": "What is the main contribution?",
+                },
+            ),
+            context,
+        )
+
+    data = json.loads(result.output)
+    assert result.is_error is False
+    assert data["status"] == "needs_read"
+    assert data["paper"]["pdf_path"] == str(pdf_path)
+    assert data["next_tool"] == {
+        "name": "read_paper",
+        "input": {"paper": {"pdf_path": str(pdf_path)}},
+    }
+    assert context.touched_paper_ids == set()
+
+
+def test_search_papers_local_scope_reports_pdf_candidates(tmp_path: Path) -> None:
     pdf_dir = tmp_path / "pdfs"
     pdf_dir.mkdir()
     pdf_path = pdf_dir / "paper.pdf"
@@ -386,14 +658,19 @@ def test_dispatch_list_pdfs_reports_candidate_ids(tmp_path: Path) -> None:
     with FieldsStore.open(tmp_path / "fields.db") as fs:
         context = PaperCopilotContext(fields_store=fs, pdf_dir=pdf_dir)
         result = dispatch_paper_copilot_tool(
-            ToolUseRequest(id="t1", name="list_pdfs", input={"limit": 3}),
+            ToolUseRequest(
+                id="t1",
+                name="search_papers",
+                input={"scope": "local", "limit": 3},
+            ),
             context,
         )
 
     data = json.loads(result.output)
     assert result.is_error is False
-    assert data["pdfs"][0]["filename"] == "paper.pdf"
-    assert len(data["pdfs"][0]["paper_id"]) == 12
+    assert data["papers"][0]["relative_path"] == "paper.pdf"
+    assert data["papers"][0]["indexed"] is False
+    assert len(data["papers"][0]["paper_id"]) == 12
 
 
 def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
@@ -467,9 +744,12 @@ def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
         )
         dispatch_paper_copilot_tool(
             ToolUseRequest(
-                id="inspect-baseline",
-                name="inspect_paper",
-                input={"paper_id": baseline_id},
+                id="query-baseline",
+                name="query_paper",
+                input={
+                    "paper": {"paper_id": baseline_id},
+                    "question": "What makes this a strong baseline?",
+                },
             ),
             context,
         )
@@ -510,9 +790,12 @@ def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
         )
         dispatch_paper_copilot_tool(
             ToolUseRequest(
-                id="inspect-module",
-                name="inspect_paper",
-                input={"paper_id": module_id},
+                id="query-module",
+                name="query_paper",
+                input={
+                    "paper": {"paper_id": module_id},
+                    "question": "How can this module attach to the baseline?",
+                },
             ),
             context,
         )
@@ -557,7 +840,7 @@ def test_dispatch_composer_plan_enforces_pool_workflow(tmp_path: Path) -> None:
     )
     assert baseline_search.is_error is False
     assert json.loads(baseline_search.output)["composer_plan"]["current_step"] == (
-        "inspect_and_select_baseline"
+        "query_and_select_baseline"
     )
     assert premature_module_search.is_error is True
     premature_module_error = json.loads(premature_module_search.output)["error"]
@@ -656,9 +939,12 @@ def test_run_paper_copilot_uses_tool_loop_and_records_trace(tmp_path: Path) -> N
                 MockResponse(
                     content=[
                         ToolUseBlock(
-                            id="inspect1",
-                            name="inspect_paper",
-                            input={"paper_id": "paperA", "fields": ["meta"]},
+                            id="query1",
+                            name="query_paper",
+                            input={
+                                "paper": {"paper_id": "paperA"},
+                                "question": "What is this paper about?",
+                            },
                         )
                     ],
                     stop_reason="tool_use",
@@ -690,16 +976,16 @@ def test_run_paper_copilot_uses_tool_loop_and_records_trace(tmp_path: Path) -> N
     assert run.termination_summary.last_tool_error is None
     assert "paperA is relevant" in run.report_markdown
     assert run.cost.input_tokens == 30
-    assert run.tool_names == ("inspect_paper",)
+    assert run.tool_names == ("query_paper",)
     assert run.composer_used is False
 
     paper_id = run.session_path.parent.name
     entries = SessionStore.load(paper_id, root=tmp_path).read_all()
-    assert any(isinstance(e, ToolUse) and e.name == "inspect_paper" for e in entries)
+    assert any(isinstance(e, ToolUse) and e.name == "query_paper" for e in entries)
     assert any(isinstance(e, ToolResult) and e.is_error is False for e in entries)
     final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
     assert final.payload["prompt"] == "sparse attention"
-    assert final.payload["tool_names"] == ["inspect_paper"]
+    assert final.payload["tool_names"] == ["query_paper"]
     assert "request_route" not in final.payload
     assert final.payload["termination_reason"] == "end_turn"
     assert final.payload["evidence_refs"] == []
@@ -799,7 +1085,7 @@ def test_run_paper_copilot_activates_composer_after_model_uses_tool(tmp_path: Pa
     assert final.payload["proposal_check"]["passed"] is False
 
 
-def test_run_paper_copilot_prefers_inspect_after_read_paper(tmp_path: Path) -> None:
+def test_run_paper_copilot_can_answer_from_read_paper_summary(tmp_path: Path) -> None:
     with FieldsStore.open(tmp_path / "fields.db") as fs:
         fs.upsert("paperA", _payload(), datetime.now(UTC).isoformat())
         pdir = tmp_path / "papers" / "paperA"
@@ -814,25 +1100,11 @@ def test_run_paper_copilot_prefers_inspect_after_read_paper(tmp_path: Path) -> N
                         ToolUseBlock(
                             id="read1",
                             name="read_paper",
-                            input={"paper_id": "paperA"},
+                            input={"paper": {"paper_id": "paperA"}},
                         )
                     ],
                     stop_reason="tool_use",
                     usage={"input_tokens": 10, "output_tokens": 4},
-                ),
-                MockResponse(
-                    content=[
-                        ToolUseBlock(
-                            id="inspect1",
-                            name="inspect_paper",
-                            input={
-                                "paper_id": "paperA",
-                                "fields": ["meta", "contributions", "methods"],
-                            },
-                        )
-                    ],
-                    stop_reason="tool_use",
-                    usage={"input_tokens": 12, "output_tokens": 4},
                 ),
                 MockResponse(
                     content=[
@@ -851,7 +1123,7 @@ def test_run_paper_copilot_prefers_inspect_after_read_paper(tmp_path: Path) -> N
 
         run = asyncio.run(
             run_paper_copilot(
-                prompt="read then inspect",
+                prompt="read then summarize",
                 llm=llm,
                 context=context,
                 root=tmp_path,
@@ -867,10 +1139,10 @@ def test_run_paper_copilot_prefers_inspect_after_read_paper(tmp_path: Path) -> N
     paper_id = run.session_path.parent.name
     entries = SessionStore.load(paper_id, root=tmp_path).read_all()
     tool_names = [e.name for e in entries if isinstance(e, ToolUse)]
-    assert tool_names == ["read_paper", "inspect_paper"]
+    assert tool_names == ["read_paper"]
     tool_results = [e for e in entries if isinstance(e, ToolResult)]
-    assert '"can_inspect_same_paper": true' in tool_results[0].output
-    assert "Sparse Attention" in tool_results[1].output
+    assert '"can_query_same_paper": true' in tool_results[0].output
+    assert "Sparse Attention" in tool_results[0].output
 
 
 def test_run_paper_copilot_synthesis_path_uses_related_and_compare(tmp_path: Path) -> None:
@@ -907,7 +1179,7 @@ def test_run_paper_copilot_synthesis_path_uses_related_and_compare(tmp_path: Pat
                         ToolUseBlock(
                             id="read1",
                             name="read_paper",
-                            input={"paper_id": "paperA"},
+                            input={"paper": {"paper_id": "paperA"}},
                         )
                     ],
                     stop_reason="tool_use",
@@ -916,20 +1188,9 @@ def test_run_paper_copilot_synthesis_path_uses_related_and_compare(tmp_path: Pat
                 MockResponse(
                     content=[
                         ToolUseBlock(
-                            id="inspect-a",
-                            name="inspect_paper",
-                            input={"paper_id": "paperA"},
-                        )
-                    ],
-                    stop_reason="tool_use",
-                    usage={"input_tokens": 12, "output_tokens": 4},
-                ),
-                MockResponse(
-                    content=[
-                        ToolUseBlock(
                             id="related1",
                             name="find_related_papers",
-                            input={"paper_id": "paperA", "k": 1},
+                            input={"paper": {"paper_id": "paperA"}, "limit": 1},
                         )
                     ],
                     stop_reason="tool_use",
@@ -938,20 +1199,14 @@ def test_run_paper_copilot_synthesis_path_uses_related_and_compare(tmp_path: Pat
                 MockResponse(
                     content=[
                         ToolUseBlock(
-                            id="inspect-b",
-                            name="inspect_paper",
-                            input={"paper_id": "paperB"},
-                        )
-                    ],
-                    stop_reason="tool_use",
-                    usage={"input_tokens": 16, "output_tokens": 5},
-                ),
-                MockResponse(
-                    content=[
-                        ToolUseBlock(
                             id="compare1",
                             name="compare_papers",
-                            input={"paper_id_a": "paperA", "paper_id_b": "paperB"},
+                            input={
+                                "papers": [
+                                    {"paper_id": "paperA"},
+                                    {"paper_id": "paperB"},
+                                ]
+                            },
                         )
                     ],
                     stop_reason="tool_use",
@@ -998,14 +1253,12 @@ def test_run_paper_copilot_synthesis_path_uses_related_and_compare(tmp_path: Pat
     tool_names = [e.name for e in entries if isinstance(e, ToolUse)]
     assert tool_names == [
         "read_paper",
-        "inspect_paper",
         "find_related_papers",
-        "inspect_paper",
         "compare_papers",
     ]
     tool_results = [e for e in entries if isinstance(e, ToolResult)]
-    assert "recommended_followups" in tool_results[1].output
-    assert "methods_aligned" in tool_results[-1].output
+    assert "related_papers" in tool_results[1].output
+    assert "pairwise_alignment" in tool_results[-1].output
     final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
     assert final.payload["evidence_refs"] == [
         {"paper_id": "paperA", "field": "methods[0]", "raw": "[paperA:methods[0]]"},
@@ -1030,8 +1283,8 @@ def test_run_paper_copilot_summary_records_last_tool_error(tmp_path: Path) -> No
                     content=[
                         ToolUseBlock(
                             id="missing1",
-                            name="inspect_paper",
-                            input={"paper_id": "missing"},
+                            name="unknown_tool",
+                            input={},
                         )
                     ],
                     stop_reason="tool_use",
@@ -1058,4 +1311,4 @@ def test_run_paper_copilot_summary_records_last_tool_error(tmp_path: Path) -> No
 
     assert run.termination_summary.last_tool_error is not None
     assert run.termination_summary.last_tool_error["tool_use_id"] == "missing1"
-    assert "paper_id not found" in run.termination_summary.last_tool_error["output"]
+    assert "unknown research tool" in run.termination_summary.last_tool_error["output"]

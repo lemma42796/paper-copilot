@@ -160,7 +160,7 @@ class ComposerPlanState:
         if paper_id not in self._searched_ids(role="baseline", pool="ccf_a"):
             raise ValueError("baseline must be selected from ccf_a search results")
         if paper_id not in self.inspected_paper_ids:
-            raise ValueError("inspect the baseline paper before selecting it")
+            raise ValueError("query or read the baseline paper before selecting it")
         self._require_evidence_refs(evidence_refs)
         decision = ComposerDecision(
             action="select_baseline",
@@ -186,7 +186,7 @@ class ComposerPlanState:
         if paper_id in {decision.paper_id for decision in self.accepted_modules}:
             raise ValueError("each module paper can contribute at most one module")
         if paper_id not in self.inspected_paper_ids:
-            raise ValueError("inspect a module paper before accepting it")
+            raise ValueError("query or read a module paper before accepting it")
         if attachment_point is None or compatibility_notes is None:
             raise ValueError(
                 "accept_module requires attachment_point and compatibility_notes"
@@ -265,7 +265,7 @@ class ComposerPlanState:
     def to_payload(self) -> dict[str, Any]:
         return {
             "workflow": (
-                "list library -> ccf_a baseline -> inspect/select baseline -> "
+                "list library -> ccf_a baseline -> query/select baseline -> "
                 "ccf_a module search -> suitability check -> optional ccf_b/other "
                 "fallback -> structured proposal"
             ),
@@ -343,7 +343,7 @@ class ComposerPlanState:
         if not self.baseline_searches:
             return "search_ccf_a_baseline"
         if self.baseline is None:
-            return "inspect_and_select_baseline"
+            return "query_and_select_baseline"
         if not self.module_searches["ccf_a"]:
             return "search_ccf_a_modules"
         if len(self.accepted_modules) >= TARGET_MODULE_COUNT:
@@ -365,13 +365,18 @@ class ComposerPlanState:
                 return ["list_composer_library"]
             case "search_ccf_a_baseline":
                 return ["search_composer_candidates(role=baseline,pool=ccf_a)"]
-            case "inspect_and_select_baseline":
-                return ["inspect_paper", "update_composer_plan(action=select_baseline)"]
+            case "query_and_select_baseline":
+                return [
+                    "read_paper",
+                    "query_paper",
+                    "update_composer_plan(action=select_baseline)",
+                ]
             case "search_ccf_a_modules":
                 return ["search_composer_candidates(role=module,pool=ccf_a)"]
             case "check_or_close_ccf_a_modules":
                 return [
-                    "inspect_paper",
+                    "read_paper",
+                    "query_paper",
                     "update_composer_plan(action=accept_module)",
                     "update_composer_plan(action=reject_module)",
                     "update_composer_plan(action=close_module_pool,pool=ccf_a)",
@@ -380,7 +385,8 @@ class ComposerPlanState:
                 return ["search_composer_candidates(role=module,pool=ccf_b)"]
             case "check_or_close_ccf_b_modules":
                 return [
-                    "inspect_paper",
+                    "read_paper",
+                    "query_paper",
                     "update_composer_plan(action=accept_module)",
                     "update_composer_plan(action=reject_module)",
                     "update_composer_plan(action=close_module_pool,pool=ccf_b)",
