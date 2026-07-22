@@ -1,15 +1,11 @@
-"""Token-usage and CNY cost tracking for Dashscope qwen3.6 tier models.
+"""Token-usage and CNY cost tracking for supported LLM models.
 
 Pricing is keyed on the model id via :func:`pricing_for_model`; supported
-tiers are currently ``qwen3.6-flash`` and ``qwen3.6-plus`` (incl. snapshot
-suffixes like ``qwen3.6-plus-2026-04-02``). New tiers must be added
-explicitly — fall-through would silently mis-charge.
+tiers are Qwen 3.6 Flash/Plus and DeepSeek V4 Flash/Pro. New tiers must be
+added explicitly — fall-through would silently mis-charge.
 
-Consumes the ``usage`` object returned by the Anthropic-compatible API
-(either a real ``anthropic.types.Usage`` instance or a plain ``dict``).
-This module must not import the ``anthropic`` SDK — ``shared/`` is below
-the SDK boundary. The ``UsageLike`` alias describes the shape
-structurally.
+Consumes the provider-neutral usage mapping returned by ``agents.llm_client``.
+The ``UsageLike`` alias also accepts structural objects for injected test clients.
 """
 
 from __future__ import annotations
@@ -53,20 +49,46 @@ class QwenPlusPricing:
     OUTPUT_PER_MTOK_CNY: float = 12.0
 
 
-type Pricing = QwenFlashPricing | QwenPlusPricing
+@dataclass(frozen=True, slots=True)
+class DeepSeekV4FlashPricing:
+    """DeepSeek V4 Flash pricing in CNY per million tokens, accessed 2026-07-22."""
+
+    INPUT_PER_MTOK_CNY: float = 1.0
+    CACHE_CREATE_PER_MTOK_CNY: float = 1.0
+    CACHE_HIT_PER_MTOK_CNY: float = 0.02
+    OUTPUT_PER_MTOK_CNY: float = 2.0
+
+
+@dataclass(frozen=True, slots=True)
+class DeepSeekV4ProPricing:
+    """DeepSeek V4 Pro pricing in CNY per million tokens, accessed 2026-07-22."""
+
+    INPUT_PER_MTOK_CNY: float = 3.0
+    CACHE_CREATE_PER_MTOK_CNY: float = 3.0
+    CACHE_HIT_PER_MTOK_CNY: float = 0.025
+    OUTPUT_PER_MTOK_CNY: float = 6.0
+
+
+type Pricing = (
+    QwenFlashPricing | QwenPlusPricing | DeepSeekV4FlashPricing | DeepSeekV4ProPricing
+)
 
 
 def pricing_for_model(model: str) -> Pricing:
-    """Map a Dashscope qwen3.6 model id to its pricing tier.
+    """Map a supported model id to its pricing tier.
 
-    Accepts both rolling aliases (``qwen3.6-flash``) and snapshot ids
-    (``qwen3.6-plus-2026-04-02``). Raises on unknown — silent fall-through
-    to a default would mis-charge instead of failing loud.
+    Accepts Qwen rolling aliases/snapshot ids and DeepSeek V4 model ids.
+    Raises on unknown — silent fall-through to a default would mis-charge
+    instead of failing loud.
     """
     if model.startswith("qwen3.6-flash"):
         return QwenFlashPricing()
     if model.startswith("qwen3.6-plus"):
         return QwenPlusPricing()
+    if model.startswith("deepseek-v4-flash"):
+        return DeepSeekV4FlashPricing()
+    if model.startswith("deepseek-v4-pro"):
+        return DeepSeekV4ProPricing()
     raise ValueError(f"no pricing registered for model {model!r}")
 
 
@@ -82,21 +104,14 @@ class CostSnapshot:
 class _UsageObject(Protocol):
     input_tokens: int
     output_tokens: int
-    # cache_creation_input_tokens / cache_read_input_tokens are intentionally
-    # absent from the Protocol — Dashscope's Anthropic-compat endpoint does
-    # not always return them, so we read with getattr(..., 0) at runtime.
+    # Optional cache counters are read with getattr(..., 0) at runtime.
 
 
 type UsageLike = _UsageObject | Mapping[str, int | None]
 
 
 def read_usage_field(usage: UsageLike, name: str) -> int:
-    """Read a usage counter from either a dict or an anthropic ``Usage`` object.
-
-    Dashscope's Anthropic-compat endpoint may omit ``cache_creation_input_tokens``
-    and ``cache_read_input_tokens`` entirely; ``getattr``/``.get`` with a 0
-    default handles both shapes identically.
-    """
+    """Read a usage counter from either a mapping or structural object."""
     value = usage.get(name, 0) if isinstance(usage, Mapping) else getattr(usage, name, 0)
     return value or 0
 

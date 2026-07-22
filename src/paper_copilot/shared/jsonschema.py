@@ -1,7 +1,7 @@
 """JSON Schema utilities.
 
 `inline_refs` exists because some LLM endpoints (notably Dashscope's
-qwen3.6-flash Anthropic-compatible gateway) accept a schema containing
+qwen3.6-flash compatibility gateway) accept a schema containing
 `$defs` + `$ref` but then emit stringified JSON for the referenced
 nested fields instead of real nested objects. Inlining every `$ref` into
 its target produces a flat schema the model handles correctly.

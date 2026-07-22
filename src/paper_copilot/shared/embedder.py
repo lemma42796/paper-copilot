@@ -135,7 +135,7 @@ class Embedder:
         if self._api_key is not None and self._api_key:
             return self._api_key
         load_env()
-        for name in ("DASHSCOPE_API_KEY", "ANTHROPIC_API_KEY"):
+        for name in ("DASHSCOPE_API_KEY", "LLM_API_KEY"):
             value = os.environ.get(name)
             if value:
                 self._api_key = value

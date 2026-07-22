@@ -1,4 +1,4 @@
-"""Prompt-cache layer helpers for Anthropic-compatible `cache_control`.
+"""Prompt-cache layer helpers for OpenAI-compatible `cache_control`.
 
 Three wrappers translate the raw strings each agent already holds
 (system prompt, tool schema, user message) into the content-block shapes
@@ -6,8 +6,7 @@ that accept an ``ephemeral`` cache marker. M9 uses a three-break-point
 layout (tools / system / user-with-PDF); the helpers keep agents free of
 dict plumbing.
 
-Must not import the ``anthropic`` SDK — ``shared/`` sits below the SDK
-boundary (see ARCHITECTURE.md "模块依赖方向").
+The LLM client strips these markers for providers that only support implicit caching.
 """
 
 from __future__ import annotations
