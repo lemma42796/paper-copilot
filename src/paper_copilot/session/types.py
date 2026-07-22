@@ -13,6 +13,9 @@ EntryType = Literal[
     "final_output",
     "llm_call",
     "compaction",
+    "runtime_state",
+    "recovery_base",
+    "turn_aborted",
     "branch_summary",
 ]
 
@@ -122,6 +125,37 @@ class Compaction(BaseModel):
     summary_output_tokens: int
     model: str
     summary: dict[str, Any]
+    replacement_history: list[dict[str, Any]] | None = None
+
+
+class RuntimeState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    ts: str
+    type: Literal["runtime_state"] = "runtime_state"
+    parent_id: str | None
+    state: dict[str, Any]
+
+
+class RecoveryBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    ts: str
+    type: Literal["recovery_base"] = "recovery_base"
+    parent_id: str | None
+    source_session_path: str
+    history: list[dict[str, Any]]
+    runtime_state: dict[str, Any] | None = None
+    compaction_summary: dict[str, Any] | None = None
+
+
+class TurnAborted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    ts: str
+    type: Literal["turn_aborted"] = "turn_aborted"
+    parent_id: str | None
+    reason: str
 
 
 SessionEntry = Annotated[
@@ -133,6 +167,9 @@ SessionEntry = Annotated[
     | SchemaValidation
     | FinalOutput
     | LLMCall
-    | Compaction,
+    | Compaction
+    | RuntimeState
+    | RecoveryBase
+    | TurnAborted,
     Field(discriminator="type"),
 ]

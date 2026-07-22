@@ -40,3 +40,7 @@ class EvalError(PaperCopilotError):
 
 class ApiError(PaperCopilotError):
     pass
+
+
+class JobError(PaperCopilotError):
+    pass

@@ -1,171 +1,38 @@
 "use client";
 
-import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-type HealthState = "checking" | "online" | "offline";
-
-type ComposerPoolName = "ccf_a" | "ccf_b" | "other";
-
-type ComposerDecision = {
-  action?: string;
-  paper_id: string;
-  pool: ComposerPoolName;
-  rationale: string;
-  evidence_refs: string[];
-  attachment_point: string | null;
-  compatibility_notes: string | null;
-};
-
-type ComposerPlan = {
-  current_step?: string;
-  report_ready?: boolean;
-  baseline: ComposerDecision | null;
-  accepted_modules: ComposerDecision[];
-};
-
-type ComposerProposalIssue = {
-  code: string;
-  severity: string;
-  message: string;
-  evidence: string | null;
-};
-
-type ComposerProposalCheck = {
-  method: string;
-  passed: boolean;
-  issues: ComposerProposalIssue[];
-  removed_process_chatter: string[];
-  counts: Record<string, number>;
-};
-
-type ChatResponse = {
-  request: string;
-  report_markdown: string;
-  session_path: string;
-  report_path: string;
-  quality_run_path: string | null;
-  eval_report_path: string | null;
-  termination_reason: string;
-  cost_cny: number;
-  events_count: number;
-  paper_budget: Record<string, unknown>;
-  composer_plan: ComposerPlan | null;
-  proposal_check: ComposerProposalCheck | null;
-};
-
-type ReportHistoryResponse = {
-  reports: ReportHistoryEntry[];
-};
-
-type DirectorySelectionResponse = {
-  path: string | null;
-};
-
-type EvidenceResponse = {
-  kind: "chunk" | "field";
-  citation_ref: string;
-  paper_id: string;
-  title: string;
-  year: number | null;
-  chunk_id: number | null;
-  section: string | null;
-  page_start: number | null;
-  page_end: number | null;
-  field: string | null;
-  text: string;
-};
-
-type ComposerPaper = {
-  pool: ComposerPoolName;
-  paper_id: string;
-  path: string;
-  indexed: boolean;
-  title: string;
-  year: number | null;
-  venue: string | null;
-};
-
-type ComposerPool = {
-  count: number;
-  indexed_count: number;
-  unindexed_count: number;
-  papers: ComposerPaper[];
-  unindexed_pdfs: ComposerPaper[];
-};
-
-type ComposerLibraryResponse = {
-  root: string;
-  required_layout: string[];
-  optional_layout?: string[];
-  flat_root_as_ccf_a: boolean;
-  baseline_pool: ComposerPoolName;
-  module_pool_order: ComposerPoolName[];
-  fallback_rule: string;
-  missing_pools: ComposerPoolName[];
-  pools: Record<ComposerPoolName, ComposerPool>;
-};
-
-type ReportHistoryEntry = {
-  id: string;
-  request: string;
-  report_markdown: string;
-  session_path: string;
-  report_path: string;
-  updated_at: string;
-  termination_reason: string;
-  cost_cny: number | null;
-  events_count: number | null;
-  paper_budget: Record<string, unknown>;
-  composer_plan: ComposerPlan | null;
-  proposal_check: ComposerProposalCheck | null;
-};
-
-type RunHistoryItem = {
-  id: string;
-  request: string;
-  cost: number | null;
-  reportPath: string;
-  sessionPath: string;
-  reportMarkdown: string;
-  updatedAt: string;
-  terminationReason: string;
-  eventsCount: number | null;
-  paperBudget: Record<string, unknown>;
-  composerPlan: ComposerPlan | null;
-  proposalCheck: ComposerProposalCheck | null;
-};
-
-type UsageTip = {
-  title: string;
-  description: string;
-  examples: string[];
-};
+import { ContextSidebar } from "../components/context-sidebar";
+import { ReportHistorySidebar } from "../components/report-history-sidebar";
+import { ReportView } from "../components/report-view";
+import { ResearchComposer } from "../components/research-composer";
+import type {
+  ChatJobEventsResponse,
+  ChatJobRecord,
+  ChatJobsResponse,
+  ChatResponse,
+  ChatSession,
+  ComposerLibraryResponse,
+  DirectorySelectionResponse,
+  EvidenceResponse,
+  HealthState,
+  ReportHistoryResponse
+} from "../lib/chat-types";
+import {
+  chatResponseFromSession,
+  chatSessionsFromJobs,
+  chatSessionFromReport,
+  copyText,
+  isResumeIntent
+} from "../lib/report-adapter";
 
 const DEFAULT_API_URL = "http://127.0.0.1:8765";
 const DEFAULT_LIBRARY_DIR = "/Users/a123/paper-copilot-test-pdfs";
 const DEFAULT_PROMPT =
   "基于可见光-红外行人重识别（VI-ReID），先选一个性能强但仍有改进故事的强基线，再从本地 CCF A 论文里找 3 个可兼容模块，给出中文实验方案。";
 const LIBRARY_DIR_STORAGE_KEY = "paper-copilot.libraryDir";
-const USAGE_TIPS: UsageTip[] = [
-  {
-    title: "知识库问答",
-    description: "解释单篇论文、对比多篇论文，或围绕本地论文库追问研究问题。",
-    examples: [
-      "解释 ViT 论文的核心方法、实验设置和主要局限，并给出证据引用。",
-      "对比 Transformer 和 ViT 的注意力机制演化，列出关键差异和证据引用。",
-      "围绕行人重识别的训练技巧，总结常见方法、适用场景和局限。"
-    ]
-  },
-  {
-    title: "新论文模型框架",
-    description: "根据研究方向先找 baseline，再找可接入模块，组合成可验证方案。",
-    examples: [
-      "基于可见光-红外行人重识别（VI-ReID），先选一个性能强但仍有改进故事的强基线，再从本地 CCF A 论文里找 3 个可兼容模块，给出中文实验方案。",
-      "针对行人重识别，先选一个 strong baseline，再从近年论文找 3 个可插拔模块，组合成可验证改进方案。",
-      "基于 diffusion model 的视觉任务，找强 baseline、3 个模块、兼容性风险和实验计划。"
-    ]
-  }
-];
+const ACTIVE_JOB_STORAGE_KEY = "paper-copilot.activeJobId";
+const JOB_POLL_INTERVAL_MS = 1200;
 
 export default function Home() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
@@ -173,13 +40,26 @@ export default function Home() {
   const [pdfDir, setPdfDir] = useState(DEFAULT_LIBRARY_DIR);
   const [health, setHealth] = useState<HealthState>("checking");
   const [isRunning, setIsRunning] = useState(false);
+  const [isInterrupting, setIsInterrupting] = useState(false);
   const [isSelectingLibraryDir, setIsSelectingLibraryDir] = useState(false);
   const [isLoadingLibraryStatus, setIsLoadingLibraryStatus] = useState(false);
   const [libraryStatus, setLibraryStatus] = useState<ComposerLibraryResponse | null>(null);
   const [libraryStatusError, setLibraryStatusError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ChatResponse | null>(null);
-  const [history, setHistory] = useState<RunHistoryItem[]>([]);
+  const [legacySessions, setLegacySessions] = useState<ChatSession[]>([]);
+  const [jobs, setJobs] = useState<ChatJobRecord[]>([]);
+  const [activeJob, setActiveJob] = useState<ChatJobRecord | null>(null);
+  const [jobEvents, setJobEvents] = useState<ChatJobEventsResponse["events"]>([]);
+  const jobEventCursor = useRef<{
+    jobId: string | null;
+    after: number;
+    isLoading: boolean;
+  }>({
+    jobId: null,
+    after: 0,
+    isLoading: false
+  });
   const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isInspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
@@ -189,7 +69,32 @@ export default function Home() {
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
 
   const normalizedApiUrl = useMemo(() => apiUrl.replace(/\/+$/, ""), [apiUrl]);
+  const sessions = useMemo(() => {
+    const jobSessions = chatSessionsFromJobs(jobs);
+    const jobSessionPaths = new Set(
+      jobs
+        .map((job) => job.result?.session_path ?? null)
+        .filter((path): path is string => path !== null)
+    );
+    return [
+      ...jobSessions,
+      ...legacySessions.filter(
+        (session) =>
+          session.run === null || !jobSessionPaths.has(session.run.session_path)
+      )
+    ];
+  }, [jobs, legacySessions]);
+  const activeSession = useMemo(
+    () => sessions.find((session) => session.id === selectedReportId) ?? null,
+    [selectedReportId, sessions]
+  );
+  const activeJobStatus = activeJob?.status ?? null;
+  const jobProgress = jobEvents.at(-1)?.message ?? null;
   const canSubmit = health === "online" && !isRunning;
+  const canStop =
+    health === "online" &&
+    activeJob !== null &&
+    isActiveJobStatus(activeJob.status);
 
   async function checkHealth() {
     setHealth("checking");
@@ -206,6 +111,23 @@ export default function Home() {
   }, [normalizedApiUrl]);
 
   useEffect(() => {
+    if (health !== "offline") {
+      return;
+    }
+    const timer = window.setInterval(async () => {
+      try {
+        const response = await fetch(`${normalizedApiUrl}/health`, { method: "GET" });
+        if (response.ok) {
+          setHealth("online");
+        }
+      } catch {
+        return;
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [health, normalizedApiUrl]);
+
+  useEffect(() => {
     try {
       const saved = window.localStorage.getItem(LIBRARY_DIR_STORAGE_KEY);
       if (saved !== null) {
@@ -218,7 +140,25 @@ export default function Home() {
 
   useEffect(() => {
     void loadReports();
+    void loadJobs(true);
   }, [normalizedApiUrl]);
+
+  useEffect(() => {
+    if (health === "online") {
+      void loadJobs(true);
+    }
+  }, [health]);
+
+  useEffect(() => {
+    if (activeJob === null || !isActiveJobStatus(activeJob.status)) {
+      setIsInterrupting(false);
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void refreshActiveJob(activeJob.id);
+    }, JOB_POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [activeJob?.id, activeJob?.status, normalizedApiUrl]);
 
   useEffect(() => {
     if (health !== "online" || pdfDir.trim().length === 0) {
@@ -234,7 +174,7 @@ export default function Home() {
         return false;
       }
       const payload = (await response.json()) as ReportHistoryResponse;
-      setHistory(payload.reports.map(historyItemFromReport));
+      setLegacySessions(payload.reports.map(chatSessionFromReport));
       return true;
     } catch {
       return false;
@@ -242,8 +182,85 @@ export default function Home() {
   }
 
   async function refreshReports() {
-    const ok = await loadReports();
+    const [reportsOk, jobsOk] = await Promise.all([loadReports(), loadJobs(false)]);
+    const ok = reportsOk || jobsOk;
     showNotice(ok ? "历史已刷新" : "刷新失败");
+  }
+
+  async function loadJobs(restoreActive: boolean): Promise<boolean> {
+    try {
+      const response = await fetch(`${normalizedApiUrl}/jobs`, { method: "GET" });
+      if (!response.ok) {
+        return false;
+      }
+      const payload = (await response.json()) as ChatJobsResponse;
+      setHealth("online");
+      setJobs(payload.jobs);
+      if (restoreActive) {
+        const rememberedId = readActiveJobId();
+        const restored = payload.jobs.find((job) => job.id === rememberedId);
+        if (restored !== undefined) {
+          activateJob(restored);
+          void loadJobEvents(restored.id);
+        }
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function refreshActiveJob(jobId: string): Promise<void> {
+    try {
+      const response = await fetch(`${normalizedApiUrl}/jobs/${jobId}`, {
+        method: "GET"
+      });
+      if (!response.ok) {
+        return;
+      }
+      const record = (await response.json()) as ChatJobRecord;
+      setHealth("online");
+      activateJob(record);
+      await loadJobEvents(jobId);
+      if (record.status === "completed") {
+        void loadReports();
+      }
+    } catch {
+      setHealth("offline");
+    }
+  }
+
+  async function loadJobEvents(jobId: string): Promise<void> {
+    const isNewJob = jobEventCursor.current.jobId !== jobId;
+    if (isNewJob) {
+      jobEventCursor.current = { jobId, after: 0, isLoading: false };
+      setJobEvents([]);
+    }
+    if (jobEventCursor.current.isLoading) {
+      return;
+    }
+    jobEventCursor.current.isLoading = true;
+    try {
+      const params = new URLSearchParams({
+        after: String(jobEventCursor.current.after)
+      });
+      const response = await fetch(
+        `${normalizedApiUrl}/jobs/${jobId}/events?${params.toString()}`,
+        { method: "GET" }
+      );
+      if (!response.ok) {
+        return;
+      }
+      const payload = (await response.json()) as ChatJobEventsResponse;
+      jobEventCursor.current.after = payload.next_after;
+      setJobEvents((events) => (isNewJob ? payload.events : [...events, ...payload.events]));
+    } catch {
+      return;
+    } finally {
+      if (jobEventCursor.current.jobId === jobId) {
+        jobEventCursor.current.isLoading = false;
+      }
+    }
   }
 
   async function loadLibraryStatus(): Promise<boolean> {
@@ -287,7 +304,8 @@ export default function Home() {
 
   async function submitRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (message.trim().length === 0) {
+    const trimmedMessage = message.trim();
+    if (trimmedMessage.length === 0) {
       setError("请输入研究问题。");
       return;
     }
@@ -299,53 +317,167 @@ export default function Home() {
     setIsRunning(true);
     setError(null);
     try {
-      const payload = {
-        message: message.trim(),
-        pdf_dir: pdfDir.trim().length > 0 ? pdfDir.trim() : null
-      };
-      let response: Response;
-      try {
-        response = await fetch(`${normalizedApiUrl}/chat`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-      } catch {
-        setHealth("offline");
-        throw new Error("无法连接本地 API。");
+      const resumableJob =
+        activeJob !== null && isResumableJobStatus(activeJob.status)
+          ? activeJob
+          : undefined;
+      if (isResumeIntent(trimmedMessage)) {
+        if (resumableJob === undefined) {
+          setError("没有可恢复的中断任务。");
+          setIsRunning(false);
+          return;
+        }
+        await resumeJob(resumableJob);
+        return;
       }
 
-      const raw = (await response.json()) as ChatResponse | { error?: { message?: string } };
-      setHealth("online");
-      if (!response.ok) {
-        const messageText =
-          "error" in raw && raw.error?.message ? raw.error.message : "请求失败。";
-        throw new Error(messageText);
-      }
-
-      const chatResult = raw as ChatResponse;
-      setResult(chatResult);
-      setSelectedReportId(chatResult.session_path);
-      setSelectedEvidence(null);
-      setEvidenceError(null);
-      setHistory((items) => [
-        historyItemFromChatResult(chatResult),
-        ...items.filter((item) => item.id !== chatResult.session_path)
-      ]);
+      await createJob(trimmedMessage);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "请求失败。");
-    } finally {
       setIsRunning(false);
     }
   }
 
-  function selectHistoryItem(item: RunHistoryItem) {
+  async function createJob(request: string): Promise<void> {
+    const payload = {
+      message: request,
+      conversation_id: activeJob?.spec.conversation_id ?? null,
+      pdf_dir: pdfDir.trim().length > 0 ? pdfDir.trim() : null
+    };
+    let response: Response;
+    try {
+      response = await fetch(`${normalizedApiUrl}/jobs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+    } catch {
+      setHealth("offline");
+      throw new Error("无法连接本地 API。");
+    }
+
+    const raw = (await response.json()) as
+      | ChatJobRecord
+      | { error?: { message?: string } };
+    setHealth("online");
+    if (!response.ok) {
+      throw new Error(apiErrorMessage(raw, "任务创建失败。"));
+    }
+    const record = raw as ChatJobRecord;
+    activateJob(record);
+    setMessage("");
+    setSelectedEvidence(null);
+    setEvidenceError(null);
+    void loadJobEvents(record.id);
+  }
+
+  async function resumeJob(job: ChatJobRecord): Promise<void> {
+    let response: Response;
+    try {
+      response = await fetch(`${normalizedApiUrl}/jobs/${job.id}/resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+    } catch {
+      setHealth("offline");
+      throw new Error("无法连接本地 API。");
+    }
+
+    const raw = (await response.json()) as
+      | ChatJobRecord
+      | { error?: { message?: string } };
+    setHealth("online");
+    if (!response.ok) {
+      throw new Error(apiErrorMessage(raw, "任务恢复失败。"));
+    }
+    const record = raw as ChatJobRecord;
+    activateJob(record);
+    setMessage("");
+    setSelectedEvidence(null);
+    setEvidenceError(null);
+    void loadJobEvents(record.id);
+  }
+
+  async function interruptActiveJob(): Promise<void> {
+    if (activeJob === null || !isActiveJobStatus(activeJob.status)) {
+      return;
+    }
+    setIsInterrupting(true);
+    setError(null);
+    let response: Response;
+    try {
+      response = await fetch(`${normalizedApiUrl}/jobs/${activeJob.id}/interrupt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+    } catch {
+      setHealth("offline");
+      setIsInterrupting(false);
+      setError("无法连接本地 API，不能停止当前任务。");
+      return;
+    }
+
+    const raw = (await response.json()) as
+      | ChatJobRecord
+      | { error?: { message?: string } };
+    setHealth("online");
+    if (!response.ok) {
+      setIsInterrupting(false);
+      setError(apiErrorMessage(raw, "停止任务失败。"));
+      return;
+    }
+    const record = raw as ChatJobRecord;
+    activateJob(record);
+    void loadJobEvents(record.id);
+  }
+
+  function activateJob(record: ChatJobRecord) {
+    setActiveJob(record);
+    setResult(record.result);
+    setSelectedReportId(record.spec.conversation_id ?? record.id);
+    setIsRunning(isActiveJobStatus(record.status));
+    setJobs((items) => [record, ...items.filter((item) => item.id !== record.id)]);
+    writeActiveJobId(record.id);
+  }
+
+  function createSession() {
+    setError(null);
+    setResult(null);
+    setActiveJob(null);
+    setJobEvents([]);
+    jobEventCursor.current = { jobId: null, after: 0, isLoading: false };
+    setIsRunning(false);
+    setIsInterrupting(false);
+    setMessage("");
+    setSelectedReportId(null);
+    setSelectedEvidence(null);
+    setEvidenceError(null);
+    writeActiveJobId(null);
+  }
+
+  function selectSession(session: ChatSession) {
     setError(null);
     setSelectedEvidence(null);
     setEvidenceError(null);
-    setMessage(item.request);
-    setSelectedReportId(item.id);
-    setResult(chatResponseFromHistoryItem(item));
+    setMessage("");
+    setSelectedReportId(session.id);
+    setResult(chatResponseFromSession(session));
+    if (session.jobId !== null) {
+      const job = jobs.find((item) => item.id === session.jobId);
+      if (job !== undefined) {
+        activateJob(job);
+        void loadJobEvents(job.id);
+      }
+      return;
+    }
+    setActiveJob(null);
+    setJobEvents([]);
+    jobEventCursor.current = { jobId: null, after: 0, isLoading: false };
+    setIsRunning(false);
+    setIsInterrupting(false);
+    writeActiveJobId(null);
   }
 
   function updateLibraryDir(value: string) {
@@ -437,235 +569,104 @@ export default function Home() {
 
   return (
     <main className={`app-shell${isSidebarCollapsed ? " sidebar-collapsed" : ""}`}>
-      <aside className="sidebar" aria-label="报告侧边栏">
-        <div className="sidebar-header">
-          <div className="brand">
-            <span className="brand-mark">PC</span>
-            {!isSidebarCollapsed ? (
-              <div>
-                <p className="brand-title">Paper Copilot</p>
-                <p className="brand-subtitle">本地研究助手</p>
-              </div>
-            ) : null}
-          </div>
-          <button
-            aria-label={isSidebarCollapsed ? "展开侧边栏" : "折叠侧边栏"}
-            className="sidebar-toggle"
-            onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
-            title={isSidebarCollapsed ? "展开侧边栏" : "折叠侧边栏"}
-            type="button"
-          >
-            <span aria-hidden="true">{isSidebarCollapsed ? "›" : "‹"}</span>
-          </button>
-        </div>
-
-        {!isSidebarCollapsed ? (
-          <nav className="history-list" aria-label="报告列表">
-            <p className="nav-label">报告</p>
-            {history.length === 0 ? (
-              <p className="empty-history">暂无历史报告。</p>
-            ) : (
-              history.map((item) => (
-                <button
-                  className={`history-item${item.id === selectedReportId ? " selected" : ""}`}
-                  key={item.id}
-                  onClick={() => selectHistoryItem(item)}
-                  type="button"
-                >
-                  <span>{item.request}</span>
-                  <small>
-                    {formatCost(item.cost)} · {formatHistoryTime(item.updatedAt)}
-                  </small>
-                </button>
-              ))
-            )}
-          </nav>
-        ) : null}
-      </aside>
+      <ReportHistorySidebar
+        canCreate
+        isCollapsed={isSidebarCollapsed}
+        onCreate={createSession}
+        onSelect={selectSession}
+        sessions={sessions}
+        selectedReportId={selectedReportId}
+      />
 
       <section className="workspace">
         <header className="topbar">
-          <div>
-            <h1>研究工作台</h1>
-            <p>{healthLabel(health)}</p>
+          <div className="topbar-leading">
+            <button
+              aria-label={isSidebarCollapsed ? "显示会话栏" : "隐藏会话栏"}
+              className="toolbar-icon-button"
+              onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+              title={isSidebarCollapsed ? "显示会话栏" : "隐藏会话栏"}
+              type="button"
+            >
+              <span aria-hidden="true">☰</span>
+            </button>
+            <div className="workspace-title">
+              <strong>Paper Copilot</strong>
+              <span>研究</span>
+            </div>
           </div>
-          <button className="ghost-button" onClick={checkHealth} type="button">
-            检查 API
-          </button>
+          <div className="topbar-actions">
+            <button className={`api-status ${health}`} onClick={checkHealth} type="button">
+              <span aria-hidden="true" />
+              {healthLabel(health)}
+            </button>
+            <button
+              aria-label={isInspectorCollapsed ? "显示研究上下文" : "隐藏研究上下文"}
+              className="toolbar-icon-button"
+              onClick={() => setInspectorCollapsed((collapsed) => !collapsed)}
+              title={isInspectorCollapsed ? "显示研究上下文" : "隐藏研究上下文"}
+              type="button"
+            >
+              <span aria-hidden="true">▤</span>
+            </button>
+          </div>
         </header>
 
         <div className={`content-grid${isInspectorCollapsed ? " inspector-collapsed" : ""}`}>
           <section className="main-pane" aria-label="研究输入">
-            <form className="composer" onSubmit={submitRequest}>
-              <section className="usage-guide" aria-label="使用提示">
-                <div className="usage-guide-heading">
-                  <h2>可以这样用</h2>
-                  <p>基于右侧资料库目录，输入自然语言研究任务。</p>
-                </div>
-                <div className="usage-groups">
-                  {USAGE_TIPS.map((tip) => (
-                    <section className="usage-group" key={tip.title}>
-                      <h3>{tip.title}</h3>
-                      <p>{tip.description}</p>
-                      <div className="prompt-examples">
-                        {tip.examples.map((example) => (
-                          <button
-                            className="prompt-example"
-                            key={example}
-                            onClick={() => setMessage(example)}
-                            type="button"
-                          >
-                            {example}
-                          </button>
-                        ))}
-                      </div>
-                    </section>
-                  ))}
-                </div>
-              </section>
-              <label htmlFor="message">研究方向或任务</label>
-              <textarea
-                id="message"
-                onChange={(event) => setMessage(event.target.value)}
-                placeholder="例如：先找一个强 baseline，再找 3 个可接入模块，组合成可验证的改进方案。"
-                rows={4}
-                value={message}
-              />
-              <div className="composer-actions">
-                <button className="primary-button" disabled={!canSubmit} type="submit">
-                  {isRunning ? "运行中" : "开始"}
-                </button>
-              </div>
-              {health === "offline" ? (
-                <p className="inline-hint">本地 API 未连接，请先启动后端服务。</p>
-              ) : null}
-            </form>
-
             {error ? <p className="error-strip">{error}</p> : null}
 
-            <article className="report-pane">
-              {copyNotice ? <p className="copy-toast">{copyNotice}</p> : null}
-              {isRunning ? (
-                <LoadingReport />
-              ) : result ? (
-                <>
-                  <ReportToolbar
-                    onCopy={copyWithNotice}
-                    onRefresh={refreshReports}
-                    result={result}
-                  />
-                  <MarkdownReport
-                    markdown={result.report_markdown}
-                    onEvidenceRefClick={openEvidence}
-                  />
-                </>
-              ) : (
-                <div className="empty-report">
-                  <h2>准备就绪</h2>
-                  <p>从左侧选择历史报告，或输入新任务。</p>
-                  <button
-                    className="secondary-button"
-                    onClick={() => void refreshReports()}
-                    type="button"
-                  >
-                    刷新历史
-                  </button>
-                </div>
-              )}
-            </article>
+            <ReportView
+              copyNotice={copyNotice}
+              isRunning={isRunning}
+              jobError={activeJob?.error ?? null}
+              jobStatus={activeJobStatus}
+              onCopy={copyWithNotice}
+              onEvidenceRefClick={openEvidence}
+              onRefresh={refreshReports}
+              progress={jobProgress}
+              messages={activeSession?.messages ?? []}
+              result={result}
+            />
+
+            <ResearchComposer
+              canStop={canStop}
+              canSubmit={canSubmit}
+              health={health}
+              isInterrupting={isInterrupting}
+              isRunning={isRunning}
+              message={message}
+              onMessageChange={setMessage}
+              onStop={interruptActiveJob}
+              onSubmit={submitRequest}
+              showSuggestions={activeSession === null && !isRunning}
+            />
           </section>
 
-          <aside
-            className={`inspector${isInspectorCollapsed ? " collapsed" : ""}`}
-            aria-label="运行信息"
-          >
-            <div className="inspector-header">
-              {!isInspectorCollapsed ? <h2>运行信息</h2> : null}
-              <button
-                aria-label={isInspectorCollapsed ? "展开运行信息" : "折叠运行信息"}
-                className="inspector-toggle"
-                onClick={() => setInspectorCollapsed((collapsed) => !collapsed)}
-                title={isInspectorCollapsed ? "展开运行信息" : "折叠运行信息"}
-                type="button"
-              >
-                <span aria-hidden="true">{isInspectorCollapsed ? "‹" : "›"}</span>
-              </button>
-            </div>
-
-            {!isInspectorCollapsed ? (
-              <>
-                <section className="settings">
-                  <h2>资料库</h2>
-                  <p className="settings-note">
-                    指定本地论文文件夹。之后每次任务都会自动带上这个目录。
-                  </p>
-                  <div className="field-row">
-                    <label htmlFor="pdf-dir">本地论文文件夹</label>
-                    <div className="library-dir-control">
-                      <input
-                        id="pdf-dir"
-                        onChange={(event) => updateLibraryDir(event.target.value)}
-                        placeholder={DEFAULT_LIBRARY_DIR}
-                        value={pdfDir}
-                      />
-                      <button
-                        className="secondary-button"
-                        disabled={isSelectingLibraryDir}
-                        onClick={() => void selectLibraryDir()}
-                        type="button"
-                      >
-                        {isSelectingLibraryDir ? "选择中" : "选择目录"}
-                      </button>
-                    </div>
-                  </div>
-                  <ComposerLibraryPanel
-                    error={libraryStatusError}
-                    isLoading={isLoadingLibraryStatus}
-                    onRefresh={refreshLibraryStatus}
-                    status={libraryStatus}
-                  />
-                </section>
-
-                <section className="settings">
-                  <h2>本地服务</h2>
-                  <div className="field-row">
-                    <label htmlFor="api-url">API</label>
-                    <input
-                      id="api-url"
-                      onChange={(event) => setApiUrl(event.target.value)}
-                      value={apiUrl}
-                    />
-                  </div>
-                </section>
-
-                <RunMetadata onCopy={copyWithNotice} result={result} />
-                <ComposerSummary
-                  onCopy={copyWithNotice}
-                  onEvidenceRefClick={openEvidence}
-                  result={result}
-                />
-                <EvidenceInspector
-                  error={evidenceError}
-                  evidence={selectedEvidence}
-                  isLoading={isLoadingEvidence}
-                  onCopy={copyWithNotice}
-                />
-              </>
-            ) : null}
-          </aside>
+          <ContextSidebar
+            apiUrl={apiUrl}
+            evidenceError={evidenceError}
+            isCollapsed={isInspectorCollapsed}
+            isLoadingEvidence={isLoadingEvidence}
+            isLoadingLibraryStatus={isLoadingLibraryStatus}
+            isSelectingLibraryDir={isSelectingLibraryDir}
+            jobProgress={jobProgress}
+            jobStatus={activeJobStatus}
+            libraryStatus={libraryStatus}
+            libraryStatusError={libraryStatusError}
+            onApiUrlChange={setApiUrl}
+            onCopy={copyWithNotice}
+            onEvidenceRefClick={openEvidence}
+            onLibraryDirChange={updateLibraryDir}
+            onRefreshLibraryStatus={refreshLibraryStatus}
+            onSelectLibraryDir={selectLibraryDir}
+            pdfDir={pdfDir}
+            result={result}
+            selectedEvidence={selectedEvidence}
+          />
         </div>
       </section>
     </main>
-  );
-}
-
-function LoadingReport() {
-  return (
-    <div className="loading-report">
-      <div className="loading-spinner" aria-hidden="true" />
-      <h2>正在生成报告</h2>
-      <p>请稍等，本地后端正在处理这次研究任务。</p>
-    </div>
   );
 }
 
@@ -680,867 +681,44 @@ function healthLabel(health: HealthState): string {
   }
 }
 
-function historyItemFromChatResult(result: ChatResponse): RunHistoryItem {
-  return {
-    id: result.session_path,
-    request: result.request,
-    cost: result.cost_cny,
-    reportPath: result.report_path,
-    sessionPath: result.session_path,
-    reportMarkdown: result.report_markdown,
-    updatedAt: new Date().toISOString(),
-    terminationReason: result.termination_reason,
-    eventsCount: result.events_count,
-    paperBudget: result.paper_budget,
-    composerPlan: result.composer_plan ?? null,
-    proposalCheck: result.proposal_check ?? null
-  };
+function isActiveJobStatus(status: ChatJobRecord["status"]): boolean {
+  return status === "queued" || status === "running";
 }
 
-function historyItemFromReport(entry: ReportHistoryEntry): RunHistoryItem {
-  return {
-    id: entry.session_path,
-    request: entry.request,
-    cost: entry.cost_cny,
-    reportPath: entry.report_path,
-    sessionPath: entry.session_path,
-    reportMarkdown: entry.report_markdown,
-    updatedAt: entry.updated_at,
-    terminationReason: entry.termination_reason,
-    eventsCount: entry.events_count,
-    paperBudget: entry.paper_budget,
-    composerPlan: entry.composer_plan ?? null,
-    proposalCheck: entry.proposal_check ?? null
-  };
+function isResumableJobStatus(status: ChatJobRecord["status"]): boolean {
+  return status === "interrupted" || status === "failed";
 }
 
-function chatResponseFromHistoryItem(item: RunHistoryItem): ChatResponse {
-  return {
-    request: item.request,
-    report_markdown: item.reportMarkdown,
-    session_path: item.sessionPath,
-    report_path: item.reportPath,
-    quality_run_path: null,
-    eval_report_path: null,
-    termination_reason: item.terminationReason,
-    cost_cny: item.cost ?? 0,
-    events_count: item.eventsCount ?? 0,
-    paper_budget: item.paperBudget,
-    composer_plan: item.composerPlan,
-    proposal_check: item.proposalCheck
-  };
-}
-
-function ReportToolbar({
-  onCopy,
-  onRefresh,
-  result
-}: {
-  onCopy: (value: string, label: string) => Promise<void>;
-  onRefresh: () => Promise<void>;
-  result: ChatResponse;
-}) {
-  return (
-    <div className="report-toolbar">
-      <div className="report-toolbar-text">
-        <p className="report-title" title={result.request}>
-          {result.request}
-        </p>
-        <p className="report-subtitle">
-          {formatCost(result.cost_cny)}
-        </p>
-      </div>
-      <div className="report-toolbar-actions">
-        <button className="secondary-button" onClick={() => void onRefresh()} type="button">
-          刷新历史
-        </button>
-        <button
-          className="secondary-button"
-          onClick={() => void onCopy(result.report_path, "报告路径")}
-          type="button"
-        >
-          复制报告路径
-        </button>
-        <button
-          className="secondary-button"
-          onClick={() => void onCopy(result.session_path, "会话路径")}
-          type="button"
-        >
-          复制会话路径
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function RunMetadata({
-  onCopy,
-  result
-}: {
-  onCopy: (value: string, label: string) => Promise<void>;
-  result: ChatResponse | null;
-}) {
-  if (result === null) {
-    return (
-      <section className="metadata">
-        <h2>运行</h2>
-        <dl>
-          <div>
-            <dt>状态</dt>
-            <dd>空闲</dd>
-          </div>
-        </dl>
-      </section>
-    );
+function apiErrorMessage(
+  payload: unknown,
+  fallback: string
+): string {
+  if (typeof payload !== "object" || payload === null || !("error" in payload)) {
+    return fallback;
   }
-
-  return (
-    <section className="metadata">
-      <h2>运行</h2>
-      <dl>
-        <MetaItem label="停止原因" value={formatTermination(result.termination_reason)} />
-        <MetaItem label="费用" value={`¥${result.cost_cny.toFixed(4)}`} />
-        <MetaItem label="事件数" value={String(result.events_count)} />
-        <MetaItem copyable label="会话" onCopy={onCopy} value={result.session_path} />
-        <MetaItem copyable label="报告" onCopy={onCopy} value={result.report_path} />
-        <MetaItem
-          copyable
-          label="质量记录"
-          onCopy={onCopy}
-          value={result.quality_run_path ?? "未记录"}
-        />
-        <MetaItem
-          copyable
-          label="评估报告"
-          onCopy={onCopy}
-          value={result.eval_report_path ?? "未更新"}
-        />
-      </dl>
-    </section>
-  );
-}
-
-function ComposerSummary({
-  onCopy,
-  onEvidenceRefClick,
-  result
-}: {
-  onCopy: (value: string, label: string) => Promise<void>;
-  onEvidenceRefClick: (ref: string) => void | Promise<void>;
-  result: ChatResponse | null;
-}) {
-  const plan = result?.composer_plan ?? null;
-  const check = result?.proposal_check ?? null;
-  const riskItems =
-    result === null ? [] : extractMarkdownSectionItems(result.report_markdown, ["风险与缺口"]);
-  const visibleRiskItems = riskItems.slice(0, 5);
-  const hiddenRiskCount = riskItems.length - visibleRiskItems.length;
-  if (plan === null && check === null) {
-    return null;
+  const error = payload.error;
+  if (typeof error !== "object" || error === null || !("message" in error)) {
+    return fallback;
   }
-
-  const modules = plan?.accepted_modules ?? [];
-  const distinctModuleCount = new Set(modules.map((module) => module.paper_id)).size;
-  const acceptedModuleCount = check?.counts.accepted_module_count ?? modules.length;
-  const requiredModuleCount = 3;
-  const distinctOk =
-    acceptedModuleCount === requiredModuleCount && distinctModuleCount === acceptedModuleCount;
-
-  return (
-    <section className="composer-summary">
-      <div className="composer-summary-header">
-        <h2>Composer</h2>
-        <span className={check?.passed ? "status-pill passed" : "status-pill"}>
-          {check === null ? "未检查" : check.passed ? "通过" : "需处理"}
-        </span>
-      </div>
-
-      <div className="composer-check-grid">
-        <ComposerCheckMetric label="模块" value={`${acceptedModuleCount}/${requiredModuleCount}`} />
-        <ComposerCheckMetric label="来源" value={distinctOk ? "不同 paper" : "需核查"} />
-        <ComposerCheckMetric
-          label="未支撑细节"
-          value={String(check?.counts.unsupported_specific_count ?? 0)}
-        />
-      </div>
-
-      {plan?.baseline ? (
-        <ComposerDecisionSummary
-          decision={plan.baseline}
-          label="Baseline"
-          onCopy={onCopy}
-          onEvidenceRefClick={onEvidenceRefClick}
-        />
-      ) : (
-        <p className="settings-note">尚未记录 baseline。</p>
-      )}
-
-      {modules.length > 0 ? (
-        <div className="composer-module-list">
-          {modules.map((module, index) => (
-            <ComposerDecisionSummary
-              decision={module}
-              key={`${module.paper_id}-${index}`}
-              label={`Module ${index + 1}`}
-              onCopy={onCopy}
-              onEvidenceRefClick={onEvidenceRefClick}
-            />
-          ))}
-        </div>
-      ) : null}
-
-      {check && check.issues.length > 0 ? (
-        <div className="composer-issues">
-          <p>质量检查问题</p>
-          <ul>
-            {check.issues.map((issue) => (
-              <li key={`${issue.code}-${issue.evidence ?? issue.message}`}>
-                <strong>{issue.code}</strong>
-                <span>{issue.message}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : (
-        <p className="settings-note">质量检查无 issues。</p>
-      )}
-
-      {visibleRiskItems.length > 0 ? (
-        <div className="composer-risks">
-          <p>风险与缺口</p>
-          <ul>
-            {visibleRiskItems.map((item, index) => (
-              <li key={`${item}-${index}`}>{renderInlineText(item, onEvidenceRefClick)}</li>
-            ))}
-          </ul>
-          {hiddenRiskCount > 0 ? (
-            <p className="settings-note">另有 {hiddenRiskCount} 条见报告正文。</p>
-          ) : null}
-        </div>
-      ) : (
-        <p className="settings-note">报告正文未提取到风险与缺口小节。</p>
-      )}
-    </section>
-  );
+  return typeof error.message === "string" ? error.message : fallback;
 }
 
-function ComposerCheckMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="composer-check-metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function ComposerDecisionSummary({
-  decision,
-  label,
-  onCopy,
-  onEvidenceRefClick
-}: {
-  decision: ComposerDecision;
-  label: string;
-  onCopy: (value: string, label: string) => Promise<void>;
-  onEvidenceRefClick: (ref: string) => void | Promise<void>;
-}) {
-  return (
-    <div className="composer-decision">
-      <div className="composer-decision-top">
-        <span>{label}</span>
-        <button
-          className="copy-button"
-          onClick={() => void onCopy(decision.paper_id, "paper_id")}
-          type="button"
-        >
-          {decision.paper_id}
-        </button>
-      </div>
-      <p className="composer-decision-meta">{formatComposerPoolName(decision.pool)}</p>
-      <p>{decision.rationale}</p>
-      {decision.attachment_point ? (
-        <p className="composer-decision-detail">接入点: {decision.attachment_point}</p>
-      ) : null}
-      {decision.compatibility_notes ? (
-        <p className="composer-decision-detail">兼容性: {decision.compatibility_notes}</p>
-      ) : null}
-      <EvidenceRefButtons refs={decision.evidence_refs} onEvidenceRefClick={onEvidenceRefClick} />
-    </div>
-  );
-}
-
-function EvidenceRefButtons({
-  onEvidenceRefClick,
-  refs
-}: {
-  onEvidenceRefClick: (ref: string) => void | Promise<void>;
-  refs: string[];
-}) {
-  if (refs.length === 0) {
-    return null;
-  }
-  return (
-    <div className="composer-ref-list">
-      {refs.map((ref) => (
-        <button
-          className="evidence-ref composer-ref"
-          key={ref}
-          onClick={() => void onEvidenceRefClick(ref)}
-          title={isChunkEvidenceRef(ref) ? "打开证据原文" : "打开字段证据"}
-          type="button"
-        >
-          {ref}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function EvidenceInspector({
-  error,
-  evidence,
-  isLoading,
-  onCopy
-}: {
-  error: string | null;
-  evidence: EvidenceResponse | null;
-  isLoading: boolean;
-  onCopy: (value: string, label: string) => Promise<void>;
-}) {
-  return (
-    <section className="evidence-panel">
-      <h2>证据</h2>
-      {isLoading ? <p className="settings-note">正在打开证据。</p> : null}
-      {error ? <p className="evidence-error">{error}</p> : null}
-      {evidence ? (
-        <div className="evidence-card">
-          <div className="evidence-card-header">
-            <p>{evidence.title || evidence.paper_id}</p>
-            <button
-              className="copy-button"
-              onClick={() => void onCopy(evidence.citation_ref, "证据引用")}
-              type="button"
-            >
-              复制
-            </button>
-          </div>
-          <p className="evidence-meta">
-            {evidence.year ? `${evidence.year} · ` : ""}
-            {formatEvidenceMeta(evidence)}
-          </p>
-          <pre>{evidence.text}</pre>
-        </div>
-      ) : !isLoading && !error ? (
-        <p className="settings-note">点击报告中的证据引用查看字段详情或 chunk 原文。</p>
-      ) : null}
-    </section>
-  );
-}
-
-function ComposerLibraryPanel({
-  error,
-  isLoading,
-  onRefresh,
-  status
-}: {
-  error: string | null;
-  isLoading: boolean;
-  onRefresh: () => Promise<void>;
-  status: ComposerLibraryResponse | null;
-}) {
-  return (
-    <section className="library-status" aria-label="资料库状态">
-      <div className="library-status-header">
-        <h3>资料库状态</h3>
-        <button className="copy-button" onClick={() => void onRefresh()} type="button">
-          刷新
-        </button>
-      </div>
-      {isLoading ? <p className="settings-note">正在检查资料库。</p> : null}
-      {error ? <p className="library-status-error">{error}</p> : null}
-      {status ? (
-        <>
-          <p className="settings-note">
-            {status.flat_root_as_ccf_a
-              ? "当前目录直接作为 CCF A 资料池。"
-              : "当前目录使用 ccf_a / ccf_b / other 分层。"}
-          </p>
-          <div className="pool-summary-grid">
-            {(["ccf_a", "ccf_b", "other"] as ComposerPoolName[]).map((poolName) => (
-              <PoolSummary
-                isBaseline={poolName === status.baseline_pool}
-                key={poolName}
-                name={poolName}
-                pool={status.pools[poolName]}
-              />
-            ))}
-          </div>
-          <p className="pool-rule">
-            模块优先级: {status.module_pool_order.map(formatComposerPoolName).join(" -> ")}
-          </p>
-        </>
-      ) : !isLoading && !error ? (
-        <p className="settings-note">连接本地 API 后显示 CCF A / CCF B / Other 状态。</p>
-      ) : null}
-    </section>
-  );
-}
-
-function PoolSummary({
-  isBaseline,
-  name,
-  pool
-}: {
-  isBaseline: boolean;
-  name: ComposerPoolName;
-  pool: ComposerPool;
-}) {
-  return (
-    <div className="pool-summary">
-      <div className="pool-summary-top">
-        <span>{formatComposerPoolName(name)}</span>
-        {isBaseline ? <small>baseline</small> : null}
-      </div>
-      <strong>{pool.count}</strong>
-      <p>
-        indexed {pool.indexed_count}
-        {pool.unindexed_count > 0 ? ` / unread ${pool.unindexed_count}` : ""}
-      </p>
-    </div>
-  );
-}
-
-function MetaItem({
-  copyable = false,
-  label,
-  onCopy,
-  value
-}: {
-  copyable?: boolean;
-  label: string;
-  onCopy?: (value: string, label: string) => Promise<void>;
-  value: string;
-}) {
-  const canCopy = copyable && value !== "未记录" && value !== "未更新";
-
-  return (
-    <div className="metadata-item">
-      <dt>{label}</dt>
-      <div className="metadata-value-row">
-        <dd title={value}>{value}</dd>
-        {canCopy ? (
-          <button
-            className="copy-button"
-            onClick={() => void (onCopy ? onCopy(value, label) : copyText(value))}
-            title={`复制${label}路径`}
-            type="button"
-          >
-            复制
-          </button>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function formatCost(cost: number | null): string {
-  return cost === null ? "费用未知" : `¥${cost.toFixed(4)}`;
-}
-
-function formatHistoryTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return "时间未知";
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "numeric",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(date);
-}
-
-function formatComposerPoolName(pool: ComposerPoolName): string {
-  switch (pool) {
-    case "ccf_a":
-      return "CCF A";
-    case "ccf_b":
-      return "CCF B";
-    case "other":
-      return "Other";
-  }
-}
-
-function formatTermination(reason: string): string {
-  switch (reason) {
-    case "end_turn":
-      return "正常结束";
-    case "max_turns":
-      return "达到轮数上限";
-    case "max_budget_usd":
-    case "max_budget_cny":
-      return "达到预算上限";
-    default:
-      return reason;
-  }
-}
-
-function formatPageRange(start: number, end: number): string {
-  return start === end ? `p.${start}` : `p.${start}-${end}`;
-}
-
-function formatEvidenceMeta(evidence: EvidenceResponse): string {
-  if (evidence.kind === "field") {
-    return evidence.field ? `字段 ${evidence.field}` : "字段证据";
-  }
-  const page =
-    evidence.page_start !== null && evidence.page_end !== null
-      ? formatPageRange(evidence.page_start, evidence.page_end)
-      : "页码未知";
-  return `${evidence.section ?? "section unknown"} · ${page} · chunk ${
-    evidence.chunk_id ?? "unknown"
-  }`;
-}
-
-function isChunkEvidenceRef(ref: string): boolean {
-  return /^\[\s*[A-Za-z0-9_-]{3,64}\s*:\s*chunks\[\d+\]\s*\]$/.test(ref);
-}
-
-function MarkdownReport({
-  markdown,
-  onEvidenceRefClick
-}: {
-  markdown: string;
-  onEvidenceRefClick?: (ref: string) => void | Promise<void>;
-}) {
-  const blocks = useMemo(() => parseMarkdown(markdown), [markdown]);
-  return (
-    <div className="markdown-body">
-      {blocks.map((block, index) => {
-        switch (block.kind) {
-          case "heading":
-            return block.level === 1 ? (
-              <h1 key={index}>{renderInlineText(block.text, onEvidenceRefClick)}</h1>
-            ) : block.level === 2 ? (
-              <h2 key={index}>{renderInlineText(block.text, onEvidenceRefClick)}</h2>
-            ) : (
-              <h3 key={index}>{renderInlineText(block.text, onEvidenceRefClick)}</h3>
-            );
-          case "list":
-            return (
-              <ul key={index}>
-                {block.items.map((item, itemIndex) => (
-                  <li key={itemIndex}>{renderInlineText(item, onEvidenceRefClick)}</li>
-                ))}
-              </ul>
-            );
-          case "code":
-            return (
-              <pre key={index}>
-                <code>{block.text}</code>
-              </pre>
-            );
-          case "table":
-            return (
-              <div className="markdown-table-wrap" key={index}>
-                <table>
-                  <thead>
-                    <tr>
-                      {block.headers.map((header, headerIndex) => (
-                        <th key={`${header}-${headerIndex}`}>
-                          {renderInlineText(header, onEvidenceRefClick)}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {block.rows.map((row, rowIndex) => (
-                      <tr key={rowIndex}>
-                        {block.headers.map((_header, cellIndex) => (
-                          <td key={`${rowIndex}-${cellIndex}`}>
-                            {renderInlineText(row[cellIndex] ?? "", onEvidenceRefClick)}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            );
-          case "rule":
-            return <hr key={index} />;
-          case "paragraph":
-            return <p key={index}>{renderInlineText(block.text, onEvidenceRefClick)}</p>;
-        }
-      })}
-    </div>
-  );
-}
-
-function renderInlineText(
-  text: string,
-  onEvidenceRefClick?: (ref: string) => void | Promise<void>
-): ReactNode[] {
-  const parts: ReactNode[] = [];
-  const refPattern =
-    /(\[\s*[A-Za-z0-9_-]{3,64}\s*:\s*(?:chunks\[\d+\]|[A-Za-z_][A-Za-z0-9_]*(?:\[\d+\])?(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\[\d+\])?)*)\s*\])/g;
-  let lastIndex = 0;
-  for (const match of text.matchAll(refPattern)) {
-    const matchIndex = match.index ?? 0;
-    if (matchIndex > lastIndex) {
-      parts.push(text.slice(lastIndex, matchIndex));
-    }
-    const ref = match[0];
-    parts.push(
-      <button
-        className="evidence-ref"
-        key={`${ref}-${matchIndex}`}
-        onClick={() => void (onEvidenceRefClick ? onEvidenceRefClick(ref) : copyText(ref))}
-        title={isChunkEvidenceRef(ref) ? "打开证据原文" : "打开字段证据"}
-        type="button"
-      >
-        {ref}
-      </button>
-    );
-    lastIndex = matchIndex + ref.length;
-  }
-  if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex));
-  }
-  return parts.length > 0 ? parts : [text];
-}
-
-function extractMarkdownSectionItems(markdown: string, headings: string[]): string[] {
-  const targets = new Set(headings.map(normalizeMarkdownHeadingText));
-  const lines = markdown.split(/\r?\n/);
-  const items: string[] = [];
-  let paragraph: string[] = [];
-  let inSection = false;
-  let sectionLevel = 0;
-
-  function flushParagraph() {
-    if (paragraph.length === 0) {
-      return;
-    }
-    items.push(normalizeSummaryText(paragraph.join(" ")));
-    paragraph = [];
-  }
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    const heading = /^(#{1,6})\s+(.+)$/.exec(trimmed);
-    if (heading !== null) {
-      if (inSection) {
-        flushParagraph();
-        if (heading[1].length <= sectionLevel) {
-          break;
-        }
-      }
-      if (targets.has(normalizeMarkdownHeadingText(heading[2]))) {
-        inSection = true;
-        sectionLevel = heading[1].length;
-      }
-      continue;
-    }
-
-    if (!inSection) {
-      continue;
-    }
-
-    if (trimmed.length === 0) {
-      flushParagraph();
-      continue;
-    }
-
-    const listItem = /^[-*]\s+(.+)$/.exec(trimmed) ?? /^\d+[.)]\s+(.+)$/.exec(trimmed);
-    if (listItem !== null) {
-      flushParagraph();
-      items.push(normalizeSummaryText(listItem[1]));
-      continue;
-    }
-
-    if (trimmed.startsWith("|")) {
-      flushParagraph();
-      const cells = trimmed
-        .split("|")
-        .map((cell) => cell.trim())
-        .filter((cell) => cell.length > 0);
-      if (cells.length > 0 && !cells.every((cell) => /^:?-{3,}:?$/.test(cell))) {
-        items.push(normalizeSummaryText(cells.join(" / ")));
-      }
-      continue;
-    }
-
-    paragraph.push(trimmed);
-  }
-
-  flushParagraph();
-  return items.filter((item) => item.length > 0);
-}
-
-function normalizeMarkdownHeadingText(text: string): string {
-  return text
-    .replace(/^\d+[.)、]\s*/, "")
-    .replace(/[*_`]/g, "")
-    .trim()
-    .toLowerCase();
-}
-
-function normalizeSummaryText(text: string): string {
-  return text
-    .replace(/\*\*([^*]+)\*\*/g, "$1")
-    .replace(/`([^`]+)`/g, "$1")
-    .trim();
-}
-
-async function copyText(value: string): Promise<boolean> {
-  if (!navigator.clipboard) {
-    return false;
-  }
+function readActiveJobId(): string | null {
   try {
-    await navigator.clipboard.writeText(value);
-    return true;
+    return window.localStorage.getItem(ACTIVE_JOB_STORAGE_KEY);
   } catch {
-    return false;
+    return null;
   }
 }
 
-type MarkdownBlock =
-  | { kind: "heading"; level: 1 | 2 | 3; text: string }
-  | { kind: "paragraph"; text: string }
-  | { kind: "list"; items: string[] }
-  | { kind: "code"; text: string }
-  | { kind: "table"; headers: string[]; rows: string[][] }
-  | { kind: "rule" };
-
-function parseMarkdown(markdown: string): MarkdownBlock[] {
-  const blocks: MarkdownBlock[] = [];
-  const lines = markdown.split(/\r?\n/);
-  let paragraph: string[] = [];
-  let list: string[] = [];
-  let code: string[] | null = null;
-
-  function flushParagraph() {
-    if (paragraph.length > 0) {
-      blocks.push({ kind: "paragraph", text: paragraph.join(" ") });
-      paragraph = [];
+function writeActiveJobId(jobId: string | null): void {
+  try {
+    if (jobId === null) {
+      window.localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, jobId);
     }
+  } catch {
+    return;
   }
-
-  function flushList() {
-    if (list.length > 0) {
-      blocks.push({ kind: "list", items: list });
-      list = [];
-    }
-  }
-
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    const line = lines[lineIndex];
-    if (line.trim().startsWith("```")) {
-      if (code === null) {
-        flushParagraph();
-        flushList();
-        code = [];
-      } else {
-        blocks.push({ kind: "code", text: code.join("\n") });
-        code = null;
-      }
-      continue;
-    }
-
-    if (code !== null) {
-      code.push(line);
-      continue;
-    }
-
-    const trimmed = line.trim();
-    const nextTrimmed = lines[lineIndex + 1]?.trim() ?? "";
-    if (trimmed.length === 0) {
-      flushParagraph();
-      flushList();
-      continue;
-    }
-
-    if (trimmed === "---") {
-      flushParagraph();
-      flushList();
-      blocks.push({ kind: "rule" });
-      continue;
-    }
-
-    if (isMarkdownTableRow(trimmed) && isMarkdownTableSeparator(nextTrimmed)) {
-      flushParagraph();
-      flushList();
-      const headers = parseMarkdownTableCells(trimmed);
-      const rows: string[][] = [];
-      lineIndex += 2;
-      while (lineIndex < lines.length) {
-        const rowText = lines[lineIndex].trim();
-        if (!isMarkdownTableRow(rowText) || isMarkdownTableSeparator(rowText)) {
-          lineIndex -= 1;
-          break;
-        }
-        rows.push(normalizeMarkdownTableRow(parseMarkdownTableCells(rowText), headers.length));
-        lineIndex += 1;
-      }
-      blocks.push({ kind: "table", headers, rows });
-      continue;
-    }
-
-    const heading = /^(#{1,3})\s+(.+)$/.exec(trimmed);
-    if (heading !== null) {
-      flushParagraph();
-      flushList();
-      blocks.push({
-        kind: "heading",
-        level: Math.min(heading[1].length, 3) as 1 | 2 | 3,
-        text: heading[2]
-      });
-      continue;
-    }
-
-    const listItem = /^[-*]\s+(.+)$/.exec(trimmed);
-    if (listItem !== null) {
-      flushParagraph();
-      list.push(listItem[1]);
-      continue;
-    }
-
-    flushList();
-    paragraph.push(trimmed);
-  }
-
-  flushParagraph();
-  flushList();
-  if (code !== null) {
-    blocks.push({ kind: "code", text: code.join("\n") });
-  }
-  return blocks;
-}
-
-function isMarkdownTableRow(line: string): boolean {
-  return line.startsWith("|") && line.includes("|", 1);
-}
-
-function isMarkdownTableSeparator(line: string): boolean {
-  if (!isMarkdownTableRow(line)) {
-    return false;
-  }
-  const cells = parseMarkdownTableCells(line);
-  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")));
-}
-
-function parseMarkdownTableCells(line: string): string[] {
-  return line
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((cell) => cell.trim());
-}
-
-function normalizeMarkdownTableRow(cells: string[], length: number): string[] {
-  if (cells.length >= length) {
-    return cells.slice(0, length);
-  }
-  return [...cells, ...Array.from({ length: length - cells.length }, () => "")];
 }

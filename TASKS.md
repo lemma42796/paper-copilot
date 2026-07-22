@@ -5,7 +5,7 @@
 
 ## Current Status
 
-更新于 2026-07-21。新会话先读本节，再看 `git log -n 10`。
+更新于 2026-07-22。新会话先读本节，再看 `git log -n 10`。
 
 ### 产品与架构
 
@@ -32,7 +32,34 @@
 - M18 paper-level RAG gate 和 chunk/evidence baseline 已完成。当前不再针对
   seed eval 盲调 ranking。
 - Web shell 已落地：历史报告、Markdown 表格、Composer 摘要、chunk/field
-  evidence ref 点击反查和 4K README 截图均已接入。
+  evidence ref 点击反查和 4K README 截图均已接入。前端已把旧报告适配为
+  单轮已完成会话，并提供新建会话入口。新 job 通过 `conversation_id` 关联到同一个
+  用户会话，已完成回答后可继续追问；侧栏按 conversation 聚合，中央消息流展示多轮。
+  视觉壳层采用当前 ChatGPT 桌面端的信息架构：最近会话、中央消息流、底部
+  输入框和可独立完全隐藏的左右侧栏。
+- 后端已增加持久化 chat job 边界：任务状态、attempt 和生命周期/工具进度事件
+  写入 `jobs/<job_id>/job.json` 与 `events.jsonl`；客户端断线不终止后台线程，
+  服务重启会把遗留的 queued/running 任务标为 interrupted，并记录 `turn_aborted`。
+  显式恢复会从前一 attempt 的 append-only session rollout 重建模型 history：已完成
+  tool result 原样复用，缺失 result 的 tool call 补 `aborted`，再创建新 attempt/turn；
+  compaction replacement history、论文预算、LLM 成本和完整 Composer plan 都随
+  `recovery_base` / `runtime_state` 持久化。它不是 LLM token 级或外部进程级续跑；
+  前端已切换到 job API，会记住当前任务、重连后恢复状态并增量读取进度事件。
+  interrupted/failed 不会自动重跑；用户在输入框明确输入“继续刚才中断的任务”时，
+  才会为原 job 创建新 attempt。界面不提供额外的“继续任务”按钮。运行期间发送按钮会
+  切换为 ChatGPT 桌面端式的停止按钮；`POST /jobs/<id>/interrupt` 线程安全地取消当前
+  asyncio Agent task，实际退出后持久化 `turn_aborted` 并标记 interrupted。
+  2026-07-22 的无外网专项验收覆盖了客户端在提交后断开、上游断网失败、服务带
+  running 记录重启、用户在阻塞工具期间显式停止，以及 rollout replay 的细粒度恢复：已完成 tool result 不会再次
+  dispatch，缺失 result 的 tool call 补 `aborted`，连续恢复正确形成 attempt 1→2→3，
+  JSONL 损坏尾行会在下一次 append 前修复。当前相关后端限定测试 28 项与前端 TypeScript
+  检查全部通过。
+- 多轮上下文使用同一 conversation 中已经 completed 的前序 job。未达到压缩阈值时，
+  后端携带全部尚未压缩的轮次，不做固定 token 滑动截断；现有 200K 自动压缩触发后，
+  completed job 持久化结构化 conversation checkpoint，后续从该摘要加 checkpoint
+  所在轮及之后的完整轮次继续。job 文件仍保留全部原始问答，failed/interrupted 输出不进入
+  会话记忆。该设计复用现有压缩调用，没有新增 LLM call site，整次 job 仍受 ¥2
+  默认预算限制。
 - 指令遵循硬化已完成：Composer checker 失败时最多 repair 一次；三个结构化
   worker 隔离不可信论文来源；主 loop 在每批工具结果后刷新权威运行状态。
 - 上下文自动压缩已接入主 loop：qwen3.6-flash 按 1M 模型窗口、256K 工作窗口、
@@ -128,7 +155,7 @@ anchor precision 只衡量已标注论文返回 chunk 对人工 anchor 或语义
 | M17 | Superseded | bounded research loop 的有效部分并入单 Agent chat runtime |
 | M18 | Done | FTS5/BM25 + vector RRF、多 chunk evidence、retrieval eval |
 | M19 | Closed | Composer plan、checker 和单例验收完成；其余原 DoD 按用户决策删除 |
-| M20 | Partial | Next.js 本地 Web shell 与证据/报告 UI 已落地；job streaming/upload 未做 |
+| M20 | Partial | 桌面式 Web shell、持久 job、断线恢复和多轮追加已落地；本地 PDF upload 未做 |
 
 ## Stable Decisions From Completed Work
 

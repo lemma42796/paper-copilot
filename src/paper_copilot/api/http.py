@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from paper_copilot.agents.composer_library import load_composer_library
 from paper_copilot.chat.evidence import EvidenceChunk, EvidenceField, lookup_evidence_ref
 from paper_copilot.chat.history import ChatReportItem, list_chat_reports
+from paper_copilot.chat.jobs import ChatJobSpec, job_registry
 from paper_copilot.chat.runtime import ChatRunResult, handle_chat_request
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.session.paths import default_root
@@ -34,11 +35,39 @@ class ChatHttpRequest(BaseModel):
     update_report: bool = True
 
 
+class JobCreateHttpRequest(ChatHttpRequest):
+    conversation_id: str | None = Field(
+        default=None,
+        pattern=r"^conversation-[0-9A-Za-z-]{8,80}$",
+    )
+
+
 class ReportsHttpRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     root: Path | None = None
     limit: int = Field(default=20, ge=1, le=100)
+
+
+class JobsHttpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    root: Path | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class JobActionHttpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    root: Path | None = None
+
+
+class JobEventsHttpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    root: Path | None = None
+    after: int = Field(default=0, ge=0)
+    limit: int = Field(default=200, ge=1, le=1000)
 
 
 class EvidenceHttpRequest(BaseModel):
@@ -217,6 +246,62 @@ class _ChatHandler(BaseHTTPRequestHandler):
                 return
             self._write_json(HTTPStatus.OK, response.model_dump(mode="json"))
             return
+        if parsed.path == "/jobs":
+            try:
+                request = JobsHttpRequest.model_validate(_single_query_values(parsed.query))
+                records = job_registry(request.root).list(limit=request.limit)
+            except ValidationError as exc:
+                self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
+                return
+            except PaperCopilotError as exc:
+                self._write_error(HTTPStatus.BAD_REQUEST, exc.__class__.__name__, str(exc))
+                return
+            self._write_json(
+                HTTPStatus.OK,
+                {"jobs": [record.model_dump(mode="json") for record in records]},
+            )
+            return
+        job_route = _job_route(parsed.path)
+        if job_route is not None and job_route[1] is None:
+            job_id, _action = job_route
+            try:
+                request = JobActionHttpRequest.model_validate(
+                    _single_query_values(parsed.query)
+                )
+                record = job_registry(request.root).get(job_id)
+            except ValidationError as exc:
+                self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
+                return
+            except PaperCopilotError as exc:
+                self._write_error(HTTPStatus.BAD_REQUEST, exc.__class__.__name__, str(exc))
+                return
+            self._write_json(HTTPStatus.OK, record.model_dump(mode="json"))
+            return
+        if job_route is not None and job_route[1] == "events":
+            job_id, _action = job_route
+            try:
+                request = JobEventsHttpRequest.model_validate(
+                    _single_query_values(parsed.query)
+                )
+                events = job_registry(request.root).events(
+                    job_id,
+                    after=request.after,
+                    limit=request.limit,
+                )
+            except ValidationError as exc:
+                self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
+                return
+            except PaperCopilotError as exc:
+                self._write_error(HTTPStatus.BAD_REQUEST, exc.__class__.__name__, str(exc))
+                return
+            self._write_json(
+                HTTPStatus.OK,
+                {
+                    "events": [event.model_dump(mode="json") for event in events],
+                    "next_after": events[-1].seq if events else request.after,
+                },
+            )
+            return
         if parsed.path == "/evidence":
             try:
                 request = EvidenceHttpRequest.model_validate(_single_query_values(parsed.query))
@@ -254,6 +339,16 @@ class _ChatHandler(BaseHTTPRequestHandler):
         if parsed.path == "/chat":
             self._handle_chat()
             return
+        if parsed.path == "/jobs":
+            self._handle_create_job()
+            return
+        job_route = _job_route(parsed.path)
+        if job_route is not None and job_route[1] == "resume":
+            self._handle_resume_job(job_route[0])
+            return
+        if job_route is not None and job_route[1] == "interrupt":
+            self._handle_interrupt_job(job_route[0])
+            return
 
         self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"unknown path: {parsed.path}")
 
@@ -288,6 +383,68 @@ class _ChatHandler(BaseHTTPRequestHandler):
             HTTPStatus.OK,
             ChatHttpResponse.from_result(result).model_dump(mode="json"),
         )
+
+    def _handle_create_job(self) -> None:
+        try:
+            request = JobCreateHttpRequest.model_validate(self._read_json_body())
+        except ValidationError as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
+            return
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, "invalid_json", str(exc))
+            return
+
+        try:
+            record = job_registry(request.root).create(
+                ChatJobSpec(
+                    request=request.message,
+                    conversation_id=request.conversation_id,
+                    pdf_dir=str(request.pdf_dir) if request.pdf_dir is not None else None,
+                    max_turns=request.max_turns,
+                    budget_cny=request.budget_cny,
+                    max_papers=request.max_papers,
+                    record_quality=request.record_quality,
+                    update_report=request.update_report,
+                )
+            )
+        except PaperCopilotError as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, exc.__class__.__name__, str(exc))
+            return
+        self._write_json(HTTPStatus.ACCEPTED, record.model_dump(mode="json"))
+
+    def _handle_resume_job(self, job_id: str) -> None:
+        try:
+            request = JobActionHttpRequest.model_validate(self._read_json_body())
+        except ValidationError as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
+            return
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, "invalid_json", str(exc))
+            return
+
+        try:
+            record = job_registry(request.root).resume(job_id)
+        except PaperCopilotError as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, exc.__class__.__name__, str(exc))
+            return
+        self._write_json(HTTPStatus.ACCEPTED, record.model_dump(mode="json"))
+
+    def _handle_interrupt_job(self, job_id: str) -> None:
+        try:
+            request = JobActionHttpRequest.model_validate(self._read_json_body())
+        except ValidationError as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
+            return
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, "invalid_json", str(exc))
+            return
+
+        try:
+            record = job_registry(request.root).interrupt(job_id)
+        except PaperCopilotError as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, exc.__class__.__name__, str(exc))
+            return
+        self._write_json(HTTPStatus.ACCEPTED, record.model_dump(mode="json"))
 
     def _handle_select_directory(self) -> None:
         try:
@@ -336,6 +493,19 @@ class _ChatHandler(BaseHTTPRequestHandler):
 
 def _single_query_values(query: str) -> dict[str, str]:
     return {key: values[-1] for key, values in parse_qs(query).items() if values}
+
+
+def _job_route(path: str) -> tuple[str, str | None] | None:
+    parts = path.strip("/").split("/")
+    if len(parts) == 2 and parts[0] == "jobs":
+        return parts[1], None
+    if (
+        len(parts) == 3
+        and parts[0] == "jobs"
+        and parts[2] in {"events", "resume", "interrupt"}
+    ):
+        return parts[1], parts[2]
+    return None
 
 
 def _composer_library_payload(request: ComposerLibraryHttpRequest) -> dict[str, Any]:

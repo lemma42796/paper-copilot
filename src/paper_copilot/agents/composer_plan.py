@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from paper_copilot.agents.composer_library import ComposerPool
 
@@ -337,6 +337,61 @@ class ComposerPlanState:
             },
         }
 
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> ComposerPlanState:
+        state = cls(library_listed=bool(payload.get("library_listed", False)))
+        state.baseline_searches = [
+            _search_record_from_payload(item)
+            for item in _mapping_list(payload.get("baseline_searches"))
+        ]
+        module_searches = _mapping(payload.get("module_searches"))
+        state.module_searches = {
+            pool: [
+                _search_record_from_payload(item)
+                for item in _mapping_list(module_searches.get(pool))
+            ]
+            for pool in MODULE_POOL_ORDER
+        }
+        state.inspected_paper_ids = set(
+            _string_list(payload.get("inspected_paper_ids"))
+        )
+        baseline = payload.get("baseline")
+        state.baseline = (
+            _decision_from_payload(_mapping(baseline))
+            if baseline is not None
+            else None
+        )
+        state.accepted_modules = [
+            _decision_from_payload(item)
+            for item in _mapping_list(payload.get("accepted_modules"))
+        ]
+        rejected_modules = _mapping(payload.get("rejected_modules"))
+        state.rejected_modules = {
+            pool: [
+                _decision_from_payload(item)
+                for item in _mapping_list(rejected_modules.get(pool))
+            ]
+            for pool in MODULE_POOL_ORDER
+        }
+        closures = _mapping(payload.get("closed_module_pools"))
+        state.closed_module_pools = {
+            pool: _closure_from_payload(_mapping(item))
+            for key, item in closures.items()
+            if (pool := _composer_pool(key)) in MODULE_POOL_ORDER
+        }
+        return state
+
+    def restore_payload(self, payload: dict[str, Any]) -> None:
+        restored = self.from_payload(payload)
+        self.library_listed = restored.library_listed
+        self.baseline_searches = restored.baseline_searches
+        self.module_searches = restored.module_searches
+        self.inspected_paper_ids = restored.inspected_paper_ids
+        self.baseline = restored.baseline
+        self.accepted_modules = restored.accepted_modules
+        self.rejected_modules = restored.rejected_modules
+        self.closed_module_pools = restored.closed_module_pools
+
     def current_step(self) -> str:
         if not self.library_listed:
             return "list_composer_library"
@@ -424,3 +479,92 @@ class ComposerPlanState:
             if record.pool == pool
             for paper_id in record.paper_ids
         }
+
+
+def _search_record_from_payload(payload: dict[str, Any]) -> ComposerSearchRecord:
+    return ComposerSearchRecord(
+        role=_composer_role(payload.get("role")),
+        pool=_composer_pool(payload.get("pool")),
+        query=_string(payload.get("query")),
+        status=_string(payload.get("status")),
+        paper_ids=tuple(_string_list(payload.get("paper_ids"))),
+    )
+
+
+def _decision_from_payload(payload: dict[str, Any]) -> ComposerDecision:
+    attachment_point = payload.get("attachment_point")
+    compatibility_notes = payload.get("compatibility_notes")
+    return ComposerDecision(
+        action=_decision_action(payload.get("action")),
+        paper_id=_string(payload.get("paper_id")),
+        pool=_composer_pool(payload.get("pool")),
+        rationale=_string(payload.get("rationale")),
+        evidence_refs=tuple(_string_list(payload.get("evidence_refs"))),
+        attachment_point=(
+            _string(attachment_point) if attachment_point is not None else None
+        ),
+        compatibility_notes=(
+            _string(compatibility_notes) if compatibility_notes is not None else None
+        ),
+    )
+
+
+def _closure_from_payload(payload: dict[str, Any]) -> ComposerPoolClosure:
+    return ComposerPoolClosure(
+        pool=_composer_pool(payload.get("pool")),
+        rationale=_string(payload.get("rationale")),
+        rejected_module_ids=tuple(
+            _string_list(payload.get("rejected_module_ids"))
+        ),
+        evidence_refs=tuple(_string_list(payload.get("evidence_refs"))),
+    )
+
+
+def _mapping(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): item for key, item in value.items()}
+
+
+def _mapping_list(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [_mapping(item) for item in value if isinstance(item, dict)]
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _string(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("composer recovery payload contains a non-string field")
+    return value
+
+
+def _composer_pool(value: object) -> ComposerPool:
+    pool = _string(value)
+    if pool not in MODULE_POOL_ORDER:
+        raise ValueError(f"unknown composer pool in recovery payload: {pool}")
+    return cast(ComposerPool, pool)
+
+
+def _composer_role(value: object) -> ComposerRole:
+    role = _string(value)
+    if role not in {"baseline", "module"}:
+        raise ValueError(f"unknown composer role in recovery payload: {role}")
+    return cast(ComposerRole, role)
+
+
+def _decision_action(value: object) -> ComposerDecisionAction:
+    action = _string(value)
+    if action not in {
+        "select_baseline",
+        "accept_module",
+        "reject_module",
+        "close_module_pool",
+    }:
+        raise ValueError(f"unknown composer action in recovery payload: {action}")
+    return cast(ComposerDecisionAction, action)

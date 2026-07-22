@@ -19,12 +19,15 @@ from .types import (
     FinalOutput,
     LLMCall,
     Message,
+    RecoveryBase,
+    RuntimeState,
     SchemaValidation,
     SessionEntry,
     SessionHeader,
     SystemMessage,
     ToolResult,
     ToolUse,
+    TurnAborted,
 )
 
 _log = get_logger(__name__)
@@ -87,10 +90,26 @@ class SessionStore:
         return store
 
     def _write(self, entry: SessionEntry) -> None:
+        self._truncate_torn_tail()
         line = json.dumps(entry.model_dump(mode="json"), ensure_ascii=False)
         with self._path.open("a", encoding="utf-8") as f:
             f.write(line + "\n")
+            f.flush()
+            os.fsync(f.fileno())
         self._last_id = entry.id
+
+    def _truncate_torn_tail(self) -> None:
+        if not self._path.exists():
+            return
+        raw = self._path.read_bytes()
+        if not raw or raw.endswith(b"\n"):
+            return
+        last_newline = raw.rfind(b"\n")
+        complete = raw[: last_newline + 1] if last_newline >= 0 else b""
+        with self._path.open("wb") as stream:
+            stream.write(complete)
+            stream.flush()
+            os.fsync(stream.fileno())
 
     def append_system_message(self, text: str) -> str:
         """Record the system prompt passed to an LLM call."""
@@ -192,6 +211,7 @@ class SessionStore:
         summary_output_tokens: int,
         model: str,
         summary: dict[str, Any],
+        replacement_history: list[dict[str, Any]],
     ) -> str:
         entry = Compaction(
             id=_new_id(),
@@ -207,6 +227,47 @@ class SessionStore:
             summary_output_tokens=summary_output_tokens,
             model=model,
             summary=summary,
+            replacement_history=replacement_history,
+        )
+        self._write(entry)
+        return entry.id
+
+    def append_runtime_state(self, state: dict[str, Any]) -> str:
+        entry = RuntimeState(
+            id=_new_id(),
+            ts=_now_ts(),
+            parent_id=self._last_id,
+            state=state,
+        )
+        self._write(entry)
+        return entry.id
+
+    def append_recovery_base(
+        self,
+        *,
+        source_session_path: str,
+        history: list[dict[str, Any]],
+        runtime_state: dict[str, Any] | None,
+        compaction_summary: dict[str, Any] | None,
+    ) -> str:
+        entry = RecoveryBase(
+            id=_new_id(),
+            ts=_now_ts(),
+            parent_id=self._last_id,
+            source_session_path=source_session_path,
+            history=history,
+            runtime_state=runtime_state,
+            compaction_summary=compaction_summary,
+        )
+        self._write(entry)
+        return entry.id
+
+    def append_turn_aborted(self, reason: str) -> str:
+        entry = TurnAborted(
+            id=_new_id(),
+            ts=_now_ts(),
+            parent_id=self._last_id,
+            reason=reason,
         )
         self._write(entry)
         return entry.id

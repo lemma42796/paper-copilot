@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from paper_copilot.agents.llm_client import LLMClient
-from paper_copilot.agents.loop import LLMClientProtocol
+from paper_copilot.agents.loop import Event, LLMClientProtocol
 from paper_copilot.agents.paper_copilot import (
     PaperCopilotContext,
     PaperCopilotRun,
@@ -19,6 +19,7 @@ from paper_copilot.eval.runs import load_history, write_research_quality_run
 from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.knowledge.meta import IndexMeta, require_match, write_meta
+from paper_copilot.schemas.compaction import CompactionSummary
 from paper_copilot.session.paths import default_pdf_dir, default_root, embedding_cache_file
 from paper_copilot.shared.embedder import EMBEDDING_DIM, MODEL_NAME, Embedder
 from paper_copilot.shared.embedding_cache import CachedEmbedder, EmbeddingCache, EmbeddingEncoder
@@ -39,6 +40,7 @@ class ChatRunResult:
     paper_budget: dict[str, object]
     composer_plan: dict[str, Any] | None
     proposal_check: dict[str, Any] | None
+    conversation_compaction: CompactionSummary | None = None
 
 
 async def handle_chat_request(
@@ -55,6 +57,13 @@ async def handle_chat_request(
     eval_report_path: Path | None = None,
     llm: LLMClientProtocol | None = None,
     read_llm: LLMClient | None = None,
+    session_id: str | None = None,
+    event_callback: Callable[[Event], None] | None = None,
+    conversation_context: str | None = None,
+    previous_compaction_summary: CompactionSummary | None = None,
+    resume_history: list[dict[str, Any]] | None = None,
+    resume_runtime_state: dict[str, Any] | None = None,
+    recovery_source_session: str | None = None,
 ) -> ChatRunResult:
     home = root if root is not None else default_root()
     library_dir = pdf_dir if pdf_dir is not None else default_pdf_dir()
@@ -119,6 +128,13 @@ async def handle_chat_request(
             root=home,
             max_turns=max_turns,
             max_budget_cny=budget_cny,
+            session_id=session_id,
+            event_callback=event_callback,
+            conversation_context=conversation_context,
+            previous_compaction_summary=previous_compaction_summary,
+            resume_history=resume_history,
+            resume_runtime_state=resume_runtime_state,
+            recovery_source_session=recovery_source_session,
         )
 
     return _persist_chat_result(
@@ -166,6 +182,7 @@ def _persist_chat_result(
         paper_budget=run.termination_summary.paper_budget,
         composer_plan=_optional_payload_dict(run.final_payload.get("composer_plan")),
         proposal_check=_optional_payload_dict(run.final_payload.get("proposal_check")),
+        conversation_compaction=run.conversation_compaction,
     )
 
 

@@ -174,6 +174,7 @@ async def run_agent_loop(
     model: str | None = None,
     system: str | list[dict[str, Any]] | None = None,
     build_runtime_context: Callable[[], str] | None = None,
+    build_recovery_state: Callable[[], dict[str, Any]] | None = None,
     context_token_estimator: Callable[[list[dict[str, Any]]], int] | None = None,
     compact_history_callback: Callable[
         [list[dict[str, Any]], int],
@@ -328,6 +329,8 @@ async def run_agent_loop(
                         store.append_message(role="assistant", text=block.text)
                     elif isinstance(block, ToolUseBlock):
                         store.append_tool_use(block.id, block.name, block.input)
+                if build_recovery_state is not None:
+                    store.append_runtime_state(build_recovery_state())
             yield AssistantMessage(content=response.content)
             history.append(
                 {"role": "assistant", "content": _content_blocks_to_wire(response.content)}
@@ -350,6 +353,8 @@ async def run_agent_loop(
                 )
                 if store is not None:
                     store.append_tool_result(block.id, result.output, result.is_error)
+                    if build_recovery_state is not None:
+                        store.append_runtime_state(build_recovery_state())
                 yield ToolResult(id=block.id, output=result.output, is_error=result.is_error)
                 tool_results.append(
                     {

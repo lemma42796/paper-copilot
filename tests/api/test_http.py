@@ -12,6 +12,7 @@ from paper_copilot.api.http import (
     ChatHttpResponse,
     ChatReportsHttpResponse,
     DirectorySelectionHttpResponse,
+    JobCreateHttpRequest,
 )
 from paper_copilot.chat.history import list_chat_reports
 from paper_copilot.chat.runtime import ChatRunResult
@@ -34,6 +35,17 @@ def test_chat_http_request_accepts_frontend_payload() -> None:
     assert request.pdf_dir == Path("/tmp/pdfs")
     assert request.max_papers == 3
     assert request.record_quality is True
+
+
+def test_job_create_request_accepts_conversation_follow_up() -> None:
+    request = JobCreateHttpRequest.model_validate(
+        {
+            "message": "继续解释上一轮的 baseline",
+            "conversation_id": "conversation-20260722T120000-1234567890",
+        }
+    )
+
+    assert request.conversation_id == "conversation-20260722T120000-1234567890"
 
 
 def test_chat_http_response_serializes_chat_result() -> None:

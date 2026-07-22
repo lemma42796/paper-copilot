@@ -64,6 +64,7 @@ def build_compaction_user_prompt(
     history_to_compact: list[dict[str, Any]],
     previous_summary: CompactionSummary | None,
     required_identifiers: set[str],
+    conversation_context: str | None = None,
 ) -> str:
     payload = {
         "original_request": original_request,
@@ -75,6 +76,7 @@ def build_compaction_user_prompt(
             else None
         ),
         "history_to_compact": history_to_compact,
+        "conversation_context": conversation_context,
     }
     return (
         "Create the next CompactionSummary from this application-generated payload. "
@@ -100,10 +102,12 @@ async def compact_history(
     model: str,
     cost: CostTracker,
     store: SessionStore,
+    conversation_context: str | None = None,
 ) -> CompactionResult:
     history_to_compact, retained_history = _partition_history(
         history,
         recent_history_budget_tokens=recent_history_budget_tokens,
+        allow_context_only=conversation_context is not None,
     )
     runtime_context_before_compaction = build_runtime_context()
     prompt = build_compaction_user_prompt(
@@ -112,6 +116,7 @@ async def compact_history(
         history_to_compact=history_to_compact,
         previous_summary=previous_summary,
         required_identifiers=required_identifiers,
+        conversation_context=conversation_context,
     )
     source_text = prompt
     tool = {
@@ -176,6 +181,7 @@ async def compact_history(
         summary_output_tokens=summary_output_tokens,
         model=model,
         summary=validated.parsed.model_dump(mode="json"),
+        replacement_history=compacted_history,
     )
     return CompactionResult(
         history=compacted_history,
@@ -218,6 +224,7 @@ def _partition_history(
     history: list[dict[str, Any]],
     *,
     recent_history_budget_tokens: int,
+    allow_context_only: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if recent_history_budget_tokens <= 0:
         raise ValueError("recent_history_budget_tokens must be positive")
@@ -225,6 +232,8 @@ def _partition_history(
         _without_runtime_context_blocks(round_messages)
         for round_messages in _completed_rounds(history)
     ]
+    if len(rounds) < 2 and allow_context_only:
+        return [], [message for round_messages in rounds for message in round_messages]
     if len(rounds) < 2:
         raise AgentError("history has no completed prefix available for compaction")
 

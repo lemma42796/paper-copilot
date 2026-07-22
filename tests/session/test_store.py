@@ -136,3 +136,22 @@ def test_torn_tail_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     entries = s2.read_all()
     assert len(entries) == 4
     assert any(w[0] == "session.torn_tail_line" for w in warnings)
+
+
+def test_append_repairs_torn_tail_before_writing(tmp_path: Path) -> None:
+    store = SessionStore.create("abc", model="m", agent="skim", root=tmp_path)
+    store.append_message("user", "before crash")
+    with store.path.open("a", encoding="utf-8") as stream:
+        stream.write('{"incomplete":')
+
+    store.append_message("assistant", "after restart")
+
+    entries = SessionStore.load("abc", root=tmp_path).read_all()
+    assert [entry.type for entry in entries] == [
+        "session_header",
+        "message",
+        "message",
+    ]
+    assert isinstance(entries[-1], Message)
+    assert entries[-1].text == "after restart"
+    assert entries[-1].parent_id == entries[-2].id
