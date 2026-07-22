@@ -209,8 +209,15 @@ API key、token、cookie、password 和 secret，并处理文本中的常见 Bea
 模型历史；完整会话与恢复仍以 `session.jsonl` 为准。旧 manifest 缺少 policy 字段时按
 默认字段保持 schema 可读，但不会把已经落盘的旧 payload 伪装成已脱敏或自动重写。
 
-当前没有自动删除历史 attempt bundle。保留天数、容量上限以及整 bundle 删除策略涉及
-不可恢复的数据清理，只有用户明确选择后才启用。
+Payload 生命周期采用显式、可审计的 tombstone 策略，不删除 attempt bundle。运行
+`uv run python scripts/observability_payloads.py` 只扫描并输出报告：manifest 未显式记录
+policy 的历史 bundle 归为 `legacy_unclassified`，报告仅给出文件身份、哈希和汇总，不输出
+原始内容。默认 30 天前且 rollout 已终止的 payload 进入 candidate；运行中 attempt 即使
+过期也跳过。只有追加 `--apply` 才会在同一次扫描后原子改写 candidate，tombstone 保留
+原值 SHA-256、原文件 SHA-256、原大小、policy 与清理时间，所以 trace 引用、严格 reducer
+和重复工具签名仍然可用，正文与错误预览不再保留。改写前重新校验路径、manifest 身份和
+扫描时的文件哈希，扫描后发生变化就拒绝执行。当前没有后台自动清理，也不删除整个
+bundle；容量上限和整 bundle 删除仍需另行明确授权。
 
 ### `retrieval/`
 **仅用于单篇论文内部**的 chunk 检索（计划给 ExtractPaperTool 使用）。

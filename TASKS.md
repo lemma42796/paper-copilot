@@ -82,7 +82,10 @@
 - Trace payload 默认采用 `local_safe_v1`：敏感键和常见内联凭据写盘前脱敏；长字符串、
   集合、嵌套深度和单 payload 文件均有上限，超限保留预览、长度与 SHA-256。manifest
   记录 2000 字符/256 KiB policy，旧 manifest 可兼容归约但旧 payload 不会自动重写。
-  自动历史删除尚未启用，等待用户明确选择保留期限与容量策略。
+  Payload retention 工具默认只扫描：缺少显式 policy 的旧 bundle 归类为
+  `legacy_unclassified` 并汇总数量/字节数；超过 30 天且 rollout 已终止的 payload 才进入
+  candidate 列表。只有显式 `--apply` 才会原子改写为 tombstone，保留引用、原值哈希、
+  原文件哈希、大小、策略和清理时间；运行中 attempt 不改写，也没有后台自动删除。
 - 多轮上下文使用同一 conversation 中已经 completed 的前序 job。未达到压缩阈值时，
   后端携带全部尚未压缩的轮次，不做固定 token 滑动截断；现有 200K 自动压缩触发后，
   completed job 持久化结构化 conversation checkpoint，后续从该摘要加 checkpoint

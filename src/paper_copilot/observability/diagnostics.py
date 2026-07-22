@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from paper_copilot.observability.reducer import load_payload
+from paper_copilot.observability.retention import tombstone_value_sha256
 from paper_copilot.observability.types import (
     ReducedOperation,
     RolloutState,
@@ -144,13 +145,16 @@ def _repeated_tool_calls(
             continue
         tool_name = str(operation.attributes.get("tool_name", "unknown"))
         payload = load_payload(bundle_dir, payload_id)
-        canonical = json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        signature = (tool_name, hashlib.sha256(canonical).hexdigest())
+        retained_sha256 = tombstone_value_sha256(payload)
+        if retained_sha256 is None:
+            canonical = json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            retained_sha256 = hashlib.sha256(canonical).hexdigest()
+        signature = (tool_name, retained_sha256)
         signatures[signature] += 1
         entity_ids[signature].append(operation.entity_id)
 
