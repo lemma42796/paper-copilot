@@ -48,6 +48,7 @@ class JobCreateHttpRequest(ChatHttpRequest):
         default=None,
         pattern=r"^conversation-[0-9A-Za-z-]{8,80}$",
     )
+    rollout_timeout_seconds: float | None = Field(default=3600.0, gt=0)
 
 
 class ReportsHttpRequest(BaseModel):
@@ -76,6 +77,15 @@ class JobEventsHttpRequest(BaseModel):
     root: Path | None = None
     after: int = Field(default=0, ge=0)
     limit: int = Field(default=200, ge=1, le=1000)
+
+
+class JobDiagnosticsHttpRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    root: Path | None = None
+    attempt: int | None = Field(default=None, ge=1)
+    slow_ms: int = Field(default=1000, ge=0)
+    repeat_threshold: int = Field(default=3, ge=2)
 
 
 class EvidenceHttpRequest(BaseModel):
@@ -363,6 +373,29 @@ class _ChatHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if job_route is not None and job_route[1] == "diagnostics":
+            job_id, _action = job_route
+            try:
+                diagnostics_request = JobDiagnosticsHttpRequest.model_validate(
+                    _single_query_values(parsed.query)
+                )
+                diagnostics = job_registry(diagnostics_request.root).diagnostics(
+                    job_id,
+                    attempt=diagnostics_request.attempt,
+                    slow_ms=diagnostics_request.slow_ms,
+                    repeat_threshold=diagnostics_request.repeat_threshold,
+                )
+            except (json.JSONDecodeError, ValidationError) as exc:
+                self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
+                return
+            except PaperCopilotError as exc:
+                self._write_error(HTTPStatus.BAD_REQUEST, exc.__class__.__name__, str(exc))
+                return
+            self._write_json(
+                HTTPStatus.OK,
+                diagnostics.model_dump(mode="json"),
+            )
+            return
         if job_route is not None and job_route[1] == "stream":
             self._handle_job_event_stream(job_route[0], parsed.query)
             return
@@ -469,6 +502,7 @@ class _ChatHandler(BaseHTTPRequestHandler):
                     max_papers=request.max_papers,
                     record_quality=request.record_quality,
                     update_report=request.update_report,
+                    rollout_timeout_seconds=request.rollout_timeout_seconds,
                 )
             )
         except PaperCopilotError as exc:
@@ -633,7 +667,8 @@ def _job_route(path: str) -> tuple[str, str | None] | None:
     if (
         len(parts) == 3
         and parts[0] == "jobs"
-        and parts[2] in {"events", "stream", "resume", "interrupt"}
+        and parts[2]
+        in {"diagnostics", "events", "stream", "resume", "interrupt"}
     ):
         return parts[1], parts[2]
     return None

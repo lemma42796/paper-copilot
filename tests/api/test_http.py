@@ -42,10 +42,12 @@ def test_job_create_request_accepts_conversation_follow_up() -> None:
         {
             "message": "继续解释上一轮的 baseline",
             "conversation_id": "conversation-20260722T120000-1234567890",
+            "rollout_timeout_seconds": 900,
         }
     )
 
     assert request.conversation_id == "conversation-20260722T120000-1234567890"
+    assert request.rollout_timeout_seconds == 900
 
 
 def test_chat_http_response_serializes_chat_result() -> None:

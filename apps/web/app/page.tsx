@@ -20,7 +20,8 @@ import type {
   DirectorySelectionResponse,
   EvidenceResponse,
   HealthState,
-  ReportHistoryResponse
+  ReportHistoryResponse,
+  RolloutDiagnostics
 } from "../lib/chat-types";
 import {
   chatResponseFromSession,
@@ -37,6 +38,7 @@ const DEFAULT_PROMPT =
 const LIBRARY_DIR_STORAGE_KEY = "paper-copilot.libraryDir";
 const ACTIVE_JOB_STORAGE_KEY = "paper-copilot.activeJobId";
 const JOB_POLL_INTERVAL_MS = 1200;
+const DIAGNOSTICS_POLL_INTERVAL_MS = 3000;
 
 export default function Home() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
@@ -56,6 +58,10 @@ export default function Home() {
   const [jobs, setJobs] = useState<ChatJobRecord[]>([]);
   const [activeJob, setActiveJob] = useState<ChatJobRecord | null>(null);
   const [jobEvents, setJobEvents] = useState<ChatJobEventsResponse["events"]>([]);
+  const [diagnostics, setDiagnostics] = useState<RolloutDiagnostics | null>(null);
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
+  const [isLoadingDiagnostics, setIsLoadingDiagnostics] = useState(false);
+  const diagnosticsRequestId = useRef(0);
   const jobEventCursor = useRef<{
     jobId: string | null;
     after: number;
@@ -302,6 +308,30 @@ export default function Home() {
   }, [activeJob?.id, activeJob?.status, normalizedApiUrl, jobWebsocketUrl]);
 
   useEffect(() => {
+    if (activeJob === null || activeJob.attempts.length === 0) {
+      diagnosticsRequestId.current += 1;
+      setDiagnostics(null);
+      setDiagnosticsError(null);
+      setIsLoadingDiagnostics(false);
+      return;
+    }
+    const jobId = activeJob.id;
+    const attempt = activeJob.attempts.at(-1)?.number ?? null;
+    setDiagnostics((current) =>
+      current?.job_id === jobId && current.attempt === attempt ? current : null
+    );
+    setDiagnosticsError(null);
+    void loadJobDiagnostics(jobId, true);
+    if (!isActiveJobStatus(activeJob.status)) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void loadJobDiagnostics(jobId, false);
+    }, DIAGNOSTICS_POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [activeJob?.id, activeJob?.status, activeJob?.attempts.length, normalizedApiUrl]);
+
+  useEffect(() => {
     if (health !== "online" || pdfDir.trim().length === 0) {
       return;
     }
@@ -469,6 +499,53 @@ export default function Home() {
         jobEventCursor.current.isLoading = false;
       }
     }
+  }
+
+  async function loadJobDiagnostics(
+    jobId: string,
+    showLoading: boolean
+  ): Promise<boolean> {
+    diagnosticsRequestId.current += 1;
+    const requestId = diagnosticsRequestId.current;
+    if (showLoading) {
+      setIsLoadingDiagnostics(true);
+    }
+    try {
+      const response = await fetch(`${normalizedApiUrl}/jobs/${jobId}/diagnostics`, {
+        method: "GET"
+      });
+      const raw = (await response.json()) as
+        | RolloutDiagnostics
+        | { error?: { message?: string } };
+      if (requestId !== diagnosticsRequestId.current) {
+        return false;
+      }
+      if (!response.ok) {
+        throw new Error(apiErrorMessage(raw, "运行诊断读取失败。"));
+      }
+      setDiagnostics(raw as RolloutDiagnostics);
+      setDiagnosticsError(null);
+      return true;
+    } catch (exc) {
+      if (requestId !== diagnosticsRequestId.current) {
+        return false;
+      }
+      setDiagnosticsError(exc instanceof Error ? exc.message : "运行诊断读取失败。");
+      return false;
+    } finally {
+      if (requestId === diagnosticsRequestId.current) {
+        setIsLoadingDiagnostics(false);
+      }
+    }
+  }
+
+  async function refreshJobDiagnostics(): Promise<void> {
+    if (activeJob === null || activeJob.attempts.length === 0) {
+      showNotice("Trace 尚未开始写入");
+      return;
+    }
+    const ok = await loadJobDiagnostics(activeJob.id, true);
+    showNotice(ok ? "运行诊断已刷新" : "运行诊断刷新失败");
   }
 
   async function loadLibraryStatus(): Promise<boolean> {
@@ -879,11 +956,15 @@ export default function Home() {
 
           <ContextSidebar
             apiUrl={apiUrl}
+            diagnostics={diagnostics}
+            diagnosticsError={diagnosticsError}
             evidenceError={evidenceError}
             isCollapsed={isInspectorCollapsed}
             isLoadingEvidence={isLoadingEvidence}
+            isLoadingDiagnostics={isLoadingDiagnostics}
             isLoadingLibraryStatus={isLoadingLibraryStatus}
             isSelectingLibraryDir={isSelectingLibraryDir}
+            jobId={activeJob?.id ?? null}
             jobProgress={jobProgress}
             jobStatus={activeJobStatus}
             libraryStatus={libraryStatus}
@@ -893,6 +974,7 @@ export default function Home() {
             onEvidenceRefClick={openEvidence}
             onLibraryDirChange={updateLibraryDir}
             onRefreshLibraryStatus={refreshLibraryStatus}
+            onRefreshDiagnostics={refreshJobDiagnostics}
             onSelectLibraryDir={selectLibraryDir}
             pdfDir={pdfDir}
             result={result}

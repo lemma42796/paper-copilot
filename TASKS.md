@@ -37,7 +37,9 @@
   单轮已完成会话，并提供新建会话入口。新 job 通过 `conversation_id` 关联到同一个
   用户会话，已完成回答后可继续追问；侧栏按 conversation 聚合，中央消息流展示多轮。
   视觉壳层采用当前 ChatGPT 桌面端的信息架构：最近会话、中央消息流、底部
-  输入框和可独立完全隐藏的左右侧栏。
+  输入框和可独立完全隐藏的左右侧栏。右侧运行诊断面板读取当前 job attempt 的
+  diagnostics，展示总/LLM/工具耗时、首错、慢调用、未完成 span 和重复工具调用；
+  running job 每 3 秒后台刷新，终态切换时立即刷新。
 - 后端已增加持久化 chat job 边界：任务状态、attempt 和生命周期/工具进度事件
   写入 `jobs/<job_id>/job.json` 与 `events.jsonl`；客户端断线不终止后台线程，
   服务重启会把遗留的 queued/running 任务标为 interrupted，并记录 `turn_aborted`。
@@ -58,6 +60,29 @@
   dispatch，缺失 result 的 tool call 补 `aborted`，连续恢复正确形成 attempt 1→2→3，
   JSONL 损坏尾行会在下一次 append 前修复。当前相关后端限定测试 28 项与前端 TypeScript
   检查全部通过。
+- 本地 rollout observability 的 Obs-1/Obs-2 已落地：每个 job attempt 写独立 manifest、
+  append-only `trace.jsonl` 和 payload files；rollout、turn、生产 LLM、tool、compaction
+  形成带父子关系、状态和 duration 的事件链。严格 reducer 生成可重建 `state.json`；
+  job diagnostics HTTP 接口报告阶段耗时、首错、慢调用、未完成实体和重复工具签名。
+  reducer/diagnostics 专项测试与真实 HTTP job 的完成、断网失败、用户中断验收已覆盖；
+  Web 诊断面板已接入。现有 session/recovery、job projection 和前端事件协议保持不变；
+  OTEL 尚未实现。
+- 在线工具循环熔断已接入主 Agent loop：工具名和规范化 JSON 参数连续相同达到 3 次时，
+  第 3 次在 dispatch 前写入 `tool_call.aborted` 并抛出 `ToolLoopError`。参数或工具变化会
+  重置计数；失败 job 恢复时复用既有 rollout replay，把被拦截调用规范化为 aborted
+  tool result，不自动重放。专项与端到端恢复验收确认只派发前 2 次调用。
+- 单工具 dispatch 默认使用 600 秒 timeout；超时抛出 `ToolTimeoutError`，对应
+  `tool_call.failed` 保存实际持续时间和 timeout 配置，job 失败后可从 diagnostics 首错
+  直接定位。用户主动取消仍走 cancelled 路径，不会被误报为 timeout；未完成 tool result
+  继续复用现有 aborted recovery 语义。
+- 每个持久 job attempt 默认有 3600 秒 rollout deadline。父协程监管独立 Agent task；
+  deadline 到期会取消并收敛 child task，再以 `RolloutTimeoutError` 把 rollout/attempt/job
+  标为 failed。用户显式停止仍标为 interrupted/cancelled；deadline 可在 job spec 中设为
+  `None` 关闭，配置同时写入 rollout trace attributes。
+- Trace payload 默认采用 `local_safe_v1`：敏感键和常见内联凭据写盘前脱敏；长字符串、
+  集合、嵌套深度和单 payload 文件均有上限，超限保留预览、长度与 SHA-256。manifest
+  记录 2000 字符/256 KiB policy，旧 manifest 可兼容归约但旧 payload 不会自动重写。
+  自动历史删除尚未启用，等待用户明确选择保留期限与容量策略。
 - 多轮上下文使用同一 conversation 中已经 completed 的前序 job。未达到压缩阈值时，
   后端携带全部尚未压缩的轮次，不做固定 token 滑动截断；现有 200K 自动压缩触发后，
   completed job 持久化结构化 conversation checkpoint，后续从该摘要加 checkpoint

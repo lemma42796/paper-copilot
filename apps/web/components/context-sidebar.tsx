@@ -1,26 +1,37 @@
 "use client";
 
-import type { ChatResponse, ComposerLibraryResponse, EvidenceResponse } from "../lib/chat-types";
+import type {
+  ChatResponse,
+  ComposerLibraryResponse,
+  EvidenceResponse,
+  RolloutDiagnostics
+} from "../lib/chat-types";
 import {
   ComposerLibraryPanel,
   ComposerSummary,
   EvidenceInspector,
-  RunMetadata
+  RunMetadata,
+  TraceDiagnosticsPanel
 } from "./report-panels";
 
 export function ContextSidebar({
   apiUrl,
+  diagnostics,
+  diagnosticsError,
   evidenceError,
   isCollapsed,
   isLoadingEvidence,
+  isLoadingDiagnostics,
   isLoadingLibraryStatus,
   isSelectingLibraryDir,
+  jobId,
   jobProgress,
   jobStatus,
   libraryStatus,
   libraryStatusError,
   onApiUrlChange,
   onCopy,
+  onRefreshDiagnostics,
   onEvidenceRefClick,
   onLibraryDirChange,
   onRefreshLibraryStatus,
@@ -30,17 +41,22 @@ export function ContextSidebar({
   selectedEvidence
 }: {
   apiUrl: string;
+  diagnostics: RolloutDiagnostics | null;
+  diagnosticsError: string | null;
   evidenceError: string | null;
   isCollapsed: boolean;
   isLoadingEvidence: boolean;
+  isLoadingDiagnostics: boolean;
   isLoadingLibraryStatus: boolean;
   isSelectingLibraryDir: boolean;
+  jobId: string | null;
   jobProgress: string | null;
   jobStatus: "queued" | "running" | "completed" | "interrupted" | "failed" | null;
   libraryStatus: ComposerLibraryResponse | null;
   libraryStatusError: string | null;
   onApiUrlChange: (value: string) => void;
   onCopy: (value: string, label: string) => Promise<void>;
+  onRefreshDiagnostics: () => Promise<void>;
   onEvidenceRefClick: (ref: string) => void | Promise<void>;
   onLibraryDirChange: (value: string) => void;
   onRefreshLibraryStatus: () => Promise<void>;
@@ -109,6 +125,13 @@ export function ContextSidebar({
         jobStatus={jobStatus}
         onCopy={onCopy}
         result={result}
+      />
+      <TraceDiagnosticsPanel
+        diagnostics={diagnostics}
+        error={diagnosticsError}
+        isLoading={isLoadingDiagnostics}
+        jobId={jobId}
+        onRefresh={onRefreshDiagnostics}
       />
       <ComposerSummary
         onCopy={onCopy}

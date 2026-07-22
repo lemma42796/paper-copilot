@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from dataclasses import field as dataclass_field
@@ -79,6 +80,7 @@ from paper_copilot.knowledge.hybrid_search import (
     SearchResult,
     search,
 )
+from paper_copilot.observability import current_recorder
 from paper_copilot.schemas import CompactionSummary
 from paper_copilot.session import SessionStore
 from paper_copilot.session.paths import compute_paper_id, paper_dir
@@ -698,59 +700,119 @@ async def run_paper_copilot(
         trigger_estimated_input_tokens: int,
     ) -> list[dict[str, Any]]:
         nonlocal conversation_compaction, latest_compaction_summary
-        result = await compact_history(
-            llm,
-            history=history,
-            original_request=prompt,
-            build_runtime_context=build_runtime_context,
-            previous_summary=latest_compaction_summary,
-            required_identifiers=_compaction_required_identifiers(context),
-            recent_history_budget_tokens=RECENT_HISTORY_BUDGET_TOKENS,
-            max_output_tokens=COMPACTION_MAX_OUTPUT_TOKENS,
-            trigger_estimated_input_tokens=trigger_estimated_input_tokens,
-            model=DEFAULT_MODEL,
-            cost=cost,
-            store=store,
-            conversation_context=conversation_context,
+        recorder = current_recorder()
+        compaction_id = recorder.new_entity_id("compaction") if recorder is not None else ""
+        trace = (
+            recorder.operation(
+                "compaction",
+                compaction_id,
+                attributes={
+                    "model": DEFAULT_MODEL,
+                    "trigger_estimated_input_tokens": trigger_estimated_input_tokens,
+                },
+                input_payload={"history": history},
+            )
+            if recorder is not None
+            else nullcontext()
         )
+        with trace as operation:
+            result = await compact_history(
+                llm,
+                history=history,
+                original_request=prompt,
+                build_runtime_context=build_runtime_context,
+                previous_summary=latest_compaction_summary,
+                required_identifiers=_compaction_required_identifiers(context),
+                recent_history_budget_tokens=RECENT_HISTORY_BUDGET_TOKENS,
+                max_output_tokens=COMPACTION_MAX_OUTPUT_TOKENS,
+                trigger_estimated_input_tokens=trigger_estimated_input_tokens,
+                model=DEFAULT_MODEL,
+                cost=cost,
+                store=store,
+                conversation_context=conversation_context,
+            )
+            if operation is not None:
+                operation.set_result(
+                    output_payload={
+                        "summary": result.summary,
+                        "history": result.history,
+                    },
+                    attributes={
+                        "source_message_count": result.source_message_count,
+                        "retained_message_count": result.retained_message_count,
+                        "estimated_before_tokens": result.estimated_before_tokens,
+                        "estimated_after_tokens": result.estimated_after_tokens,
+                    },
+                )
         latest_compaction_summary = result.summary
         conversation_compaction = result.summary
         return result.history
 
-    async for event in run_agent_loop(
-        messages=messages,
-        tools=tools,
-        config=LoopConfig(
-            max_turns=max_turns,
-            max_budget_cny=max_budget_cny,
-            max_tokens=_MAX_TOKENS,
-            model_context_window_tokens=MODEL_CONTEXT_WINDOW_TOKENS,
-            working_context_limit_tokens=WORKING_CONTEXT_LIMIT_TOKENS,
-            auto_compact_trigger_tokens=AUTO_COMPACT_TRIGGER_TOKENS,
-            compacted_target_tokens=COMPACTED_TARGET_TOKENS,
-            emergency_compact_tokens=EMERGENCY_COMPACT_TOKENS,
-        ),
-        llm=llm,
-        dispatch_tool=dispatch,
-        cost=cost,
-        store=store,
-        agent_name=_AGENT_NAME,
-        model=DEFAULT_MODEL,
-        system=cached_system(system_prompt),
-        build_runtime_context=build_runtime_context,
-        build_recovery_state=build_recovery_state,
-        context_token_estimator=estimate_history_tokens,
-        compact_history_callback=compact_main_history,
-    ):
-        events.append(event)
-        if event_callback is not None:
-            event_callback(event)
-        if isinstance(event, AssistantMessage):
-            text = _assistant_text(event)
-            if text:
-                report_markdown = text
-        elif isinstance(event, Terminated):
-            termination_reason = event.reason
+    recorder = current_recorder()
+    turn_trace = (
+        recorder.operation(
+            "turn",
+            recorder.turn_id,
+            parent_entity_id=recorder.rollout_entity_id,
+            attributes={
+                "agent": _AGENT_NAME,
+                "model": DEFAULT_MODEL,
+                "max_turns": max_turns,
+                "max_budget_cny": max_budget_cny,
+            },
+        )
+        if recorder is not None
+        else nullcontext()
+    )
+    with turn_trace as turn_operation:
+        async for event in run_agent_loop(
+            messages=messages,
+            tools=tools,
+            config=LoopConfig(
+                max_turns=max_turns,
+                max_budget_cny=max_budget_cny,
+                max_tokens=_MAX_TOKENS,
+                model_context_window_tokens=MODEL_CONTEXT_WINDOW_TOKENS,
+                working_context_limit_tokens=WORKING_CONTEXT_LIMIT_TOKENS,
+                auto_compact_trigger_tokens=AUTO_COMPACT_TRIGGER_TOKENS,
+                compacted_target_tokens=COMPACTED_TARGET_TOKENS,
+                emergency_compact_tokens=EMERGENCY_COMPACT_TOKENS,
+            ),
+            llm=llm,
+            dispatch_tool=dispatch,
+            cost=cost,
+            store=store,
+            agent_name=_AGENT_NAME,
+            model=DEFAULT_MODEL,
+            system=cached_system(system_prompt),
+            build_runtime_context=build_runtime_context,
+            build_recovery_state=build_recovery_state,
+            context_token_estimator=estimate_history_tokens,
+            compact_history_callback=compact_main_history,
+        ):
+            events.append(event)
+            if event_callback is not None:
+                event_callback(event)
+            if isinstance(event, AssistantMessage):
+                text = _assistant_text(event)
+                if text:
+                    report_markdown = text
+            elif isinstance(event, Terminated):
+                termination_reason = event.reason
+        if turn_operation is not None:
+            turn_status: Literal["completed", "failed", "cancelled"] = "completed"
+            if termination_reason == "cancelled":
+                turn_status = "cancelled"
+            elif termination_reason == "unknown":
+                turn_status = "failed"
+            turn_operation.set_result(
+                status=turn_status,
+                attributes={
+                    "termination_reason": termination_reason,
+                    "events_count": len(events),
+                    "cost_cny": cost.total_cost_cny,
+                },
+            )
 
     tool_names = tuple(
         dict.fromkeys(

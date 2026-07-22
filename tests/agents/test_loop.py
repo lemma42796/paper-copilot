@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import cast
+
+import pytest
 
 from paper_copilot.agents.loop import (
     Event,
@@ -16,7 +19,13 @@ from paper_copilot.agents.loop import (
     run_agent_loop,
 )
 from paper_copilot.agents.mock_llm import MockLLM, MockResponse, TextBlock
+from paper_copilot.observability import (
+    RolloutRecorder,
+    diagnose_rollout,
+    reduce_trace_bundle,
+)
 from paper_copilot.shared.cost import CostSnapshot, CostTracker
+from paper_copilot.shared.errors import ToolLoopError, ToolTimeoutError
 
 
 def test_end_turn_terminates_with_cost_snapshot() -> None:
@@ -374,3 +383,190 @@ def test_loop_config_passes_max_tokens_to_llm() -> None:
     term = events[-1]
     assert isinstance(term, Terminated)
     assert term.reason == "end_turn"
+
+
+def test_repeated_identical_tool_call_is_aborted_before_third_dispatch(
+    tmp_path: Path,
+) -> None:
+    equivalent_inputs = [
+        {"filters": {"year": 2024, "venue": "A"}, "query": "same"},
+        {"query": "same", "filters": {"venue": "A", "year": 2024}},
+        {"filters": {"venue": "A", "year": 2024}, "query": "same"},
+    ]
+    llm = MockLLM(
+        [
+            MockResponse(
+                content=[
+                    ToolUseBlock(id=f"tool-{index}", name="search", input=tool_input)
+                ],
+                stop_reason="tool_use",
+            )
+            for index, tool_input in enumerate(equivalent_inputs, start=1)
+        ]
+    )
+    dispatched: list[str] = []
+    recorder = RolloutRecorder.create(
+        tmp_path / "attempt",
+        job_id="job-12345678",
+        attempt=1,
+        session_id="session-1",
+        turn_id="turn-1",
+    )
+    recorder.record(
+        entity_type="rollout",
+        entity_id=recorder.rollout_entity_id,
+        event_type="rollout.started",
+        status="running",
+    )
+
+    async def dispatch_tool(req: ToolUseRequest) -> ToolResultData:
+        dispatched.append(req.id)
+        return ToolResultData(output="ok")
+
+    async def run() -> None:
+        with recorder.activate():
+            async for _ in run_agent_loop(
+                messages=[{"role": "user", "content": "repeat"}],
+                tools=[],
+                config=LoopConfig(max_turns=5, max_budget_cny=10.0),
+                llm=llm,
+                dispatch_tool=dispatch_tool,
+            ):
+                pass
+
+    with pytest.raises(ToolLoopError, match="search repeated with identical input 3 times"):
+        asyncio.run(run())
+    recorder.record(
+        entity_type="rollout",
+        entity_id=recorder.rollout_entity_id,
+        event_type="rollout.failed",
+        status="failed",
+        duration_ms=10,
+        error_type="ToolLoopError",
+        error_message="repeated tool call",
+    )
+
+    state = reduce_trace_bundle(recorder.bundle_dir)
+    diagnostics = diagnose_rollout(recorder.bundle_dir, state)
+
+    assert dispatched == ["tool-1", "tool-2"]
+    assert diagnostics.first_error is not None
+    assert diagnostics.first_error.entity_id == "tool-3"
+    assert diagnostics.first_error.status == "aborted"
+    assert diagnostics.first_error.error_type == "ToolLoopError"
+    assert len(diagnostics.repeated_tool_calls) == 1
+    assert diagnostics.repeated_tool_calls[0].count == 3
+
+
+def test_different_tool_input_resets_consecutive_repeat_guard() -> None:
+    calls = [
+        ("tool-1", "search", {"query": "same"}),
+        ("tool-2", "search", {"query": "same"}),
+        ("tool-3", "search", {"query": "different"}),
+        ("tool-4", "search", {"query": "same"}),
+    ]
+    llm = MockLLM(
+        [
+            *[
+                MockResponse(
+                    content=[ToolUseBlock(id=call_id, name=name, input=tool_input)],
+                    stop_reason="tool_use",
+                )
+                for call_id, name, tool_input in calls
+            ],
+            MockResponse(content=[TextBlock(text="done")], stop_reason="end_turn"),
+        ]
+    )
+    dispatched: list[str] = []
+
+    async def dispatch_tool(req: ToolUseRequest) -> ToolResultData:
+        dispatched.append(req.id)
+        return ToolResultData(output="ok")
+
+    async def run() -> list[Event]:
+        events: list[Event] = []
+        async for event in run_agent_loop(
+            messages=[{"role": "user", "content": "repeat safely"}],
+            tools=[],
+            config=LoopConfig(max_turns=6, max_budget_cny=10.0),
+            llm=llm,
+            dispatch_tool=dispatch_tool,
+        ):
+            events.append(event)
+        return events
+
+    events = asyncio.run(run())
+
+    assert dispatched == ["tool-1", "tool-2", "tool-3", "tool-4"]
+    assert isinstance(events[-1], Terminated)
+    assert events[-1].reason == "end_turn"
+
+
+def test_tool_timeout_records_failed_tool_trace(tmp_path: Path) -> None:
+    llm = MockLLM(
+        [
+            MockResponse(
+                content=[
+                    ToolUseBlock(
+                        id="tool-timeout",
+                        name="read_paper",
+                        input={"paper_id": "paper-1"},
+                    )
+                ],
+                stop_reason="tool_use",
+            )
+        ]
+    )
+    recorder = RolloutRecorder.create(
+        tmp_path / "attempt",
+        job_id="job-12345678",
+        attempt=1,
+        session_id="session-1",
+        turn_id="turn-1",
+    )
+    recorder.record(
+        entity_type="rollout",
+        entity_id=recorder.rollout_entity_id,
+        event_type="rollout.started",
+        status="running",
+    )
+
+    async def dispatch_tool(_req: ToolUseRequest) -> ToolResultData:
+        await asyncio.Event().wait()
+        raise AssertionError("timed out tool must not finish")
+
+    async def run() -> None:
+        with recorder.activate():
+            async for _ in run_agent_loop(
+                messages=[{"role": "user", "content": "read"}],
+                tools=[],
+                config=LoopConfig(
+                    max_turns=3,
+                    max_budget_cny=10.0,
+                    tool_timeout_seconds=0.01,
+                ),
+                llm=llm,
+                dispatch_tool=dispatch_tool,
+            ):
+                pass
+
+    with pytest.raises(ToolTimeoutError, match=r"read_paper timed out after 0\.01 seconds"):
+        asyncio.run(run())
+    recorder.record(
+        entity_type="rollout",
+        entity_id=recorder.rollout_entity_id,
+        event_type="rollout.failed",
+        status="failed",
+        duration_ms=20,
+        error_type="ToolTimeoutError",
+        error_message="tool timed out",
+    )
+
+    state = reduce_trace_bundle(recorder.bundle_dir)
+    diagnostics = diagnose_rollout(recorder.bundle_dir, state, slow_ms=0)
+
+    assert diagnostics.first_error is not None
+    assert diagnostics.first_error.entity_id == "tool-timeout"
+    assert diagnostics.first_error.status == "failed"
+    assert diagnostics.first_error.error_type == "ToolTimeoutError"
+    assert diagnostics.first_error.duration_ms is not None

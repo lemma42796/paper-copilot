@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from contextlib import nullcontext
 from typing import Any, Final
 from urllib.parse import urlparse
 
@@ -17,6 +18,7 @@ from paper_copilot.agents.loop import (
     TextBlock,
     ToolUseBlock,
 )
+from paper_copilot.observability import current_recorder, set_last_llm_call_id
 from paper_copilot.shared.env import load_env
 from paper_copilot.shared.errors import AgentError
 
@@ -99,38 +101,74 @@ class LLMClient:
         elif DEFAULT_MODEL.startswith("deepseek-"):
             payload["thinking"] = {"type": "disabled"}
 
-        t0 = time.perf_counter()
-        try:
-            response = await self._client.post(
-                self._endpoint,
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
+        recorder = current_recorder()
+        llm_call_id = recorder.new_entity_id("llm") if recorder is not None else ""
+        trace = (
+            recorder.operation(
+                "llm_call",
+                llm_call_id,
+                attributes={"model": DEFAULT_MODEL, "endpoint": self._endpoint},
+                input_payload=payload,
             )
-        except httpx.TimeoutException as exc:
-            raise AgentError(f"LLM request timed out: {exc}") from exc
-        except httpx.RequestError as exc:
-            raise AgentError(f"cannot reach LLM endpoint: {exc}") from exc
-        latency_ms = int((time.perf_counter() - t0) * 1000)
+            if recorder is not None
+            else nullcontext()
+        )
+        with trace as operation:
+            t0 = time.perf_counter()
+            try:
+                response = await self._client.post(
+                    self._endpoint,
+                    headers={
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+            except httpx.TimeoutException as exc:
+                raise AgentError(f"LLM request timed out: {exc}") from exc
+            except httpx.RequestError as exc:
+                raise AgentError(f"cannot reach LLM endpoint: {exc}") from exc
+            latency_ms = int((time.perf_counter() - t0) * 1000)
+            if operation is not None:
+                operation.set_result(
+                    status="failed" if response.is_error else "completed",
+                    output_payload={
+                        "http_status": response.status_code,
+                        "body": response.text,
+                    },
+                    attributes={
+                        "http_status": response.status_code,
+                        "latency_ms": latency_ms,
+                    },
+                )
 
-        if response.status_code == 401:
-            raise AgentError("authentication failed — check LLM_API_KEY")
-        if response.status_code == 429:
-            raise AgentError(f"upstream rate limited: {_compact_response(response)}")
-        if response.is_error:
-            raise AgentError(
-                f"upstream {response.status_code}: {_compact_response(response)}"
-            )
+            if response.status_code == 401:
+                raise AgentError("authentication failed — check LLM_API_KEY")
+            if response.status_code == 429:
+                raise AgentError(f"upstream rate limited: {_compact_response(response)}")
+            if response.is_error:
+                raise AgentError(
+                    f"upstream {response.status_code}: {_compact_response(response)}"
+                )
 
-        try:
-            body = response.json()
-        except json.JSONDecodeError as exc:
-            raise AgentError("LLM endpoint returned invalid JSON") from exc
-        if not isinstance(body, dict):
-            raise AgentError("LLM endpoint returned a non-object response")
-        return _convert_response(body, latency_ms=latency_ms)
+            try:
+                body = response.json()
+            except json.JSONDecodeError as exc:
+                raise AgentError("LLM endpoint returned invalid JSON") from exc
+            if not isinstance(body, dict):
+                raise AgentError("LLM endpoint returned a non-object response")
+            converted = _convert_response(body, latency_ms=latency_ms)
+            if operation is not None:
+                operation.set_result(
+                    output_payload=body,
+                    attributes={
+                        "http_status": response.status_code,
+                        "latency_ms": latency_ms,
+                        "stop_reason": converted.stop_reason,
+                    },
+                )
+                set_last_llm_call_id(llm_call_id)
+            return converted
 
 
 def _chat_completions_endpoint(base_url: str) -> str:

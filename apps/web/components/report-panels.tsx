@@ -6,7 +6,10 @@ import type {
   ComposerLibraryResponse,
   ComposerPool,
   ComposerPoolName,
-  EvidenceResponse
+  EvidenceResponse,
+  OperationDiagnostic,
+  RolloutDiagnostics,
+  TraceStatus
 } from "../lib/chat-types";
 import {
   copyText,
@@ -121,6 +124,196 @@ export function RunMetadata({
       </dl>
     </section>
   );
+}
+
+export function TraceDiagnosticsPanel({
+  diagnostics,
+  error,
+  isLoading,
+  jobId,
+  onRefresh
+}: {
+  diagnostics: RolloutDiagnostics | null;
+  error: string | null;
+  isLoading: boolean;
+  jobId: string | null;
+  onRefresh: () => Promise<void>;
+}) {
+  if (jobId === null) {
+    return null;
+  }
+
+  return (
+    <section className="trace-diagnostics" aria-label="运行诊断">
+      <div className="trace-diagnostics-header">
+        <div>
+          <h2>运行诊断</h2>
+          {diagnostics ? <p>Attempt {diagnostics.attempt}</p> : null}
+        </div>
+        <div className="trace-diagnostics-actions">
+          {diagnostics ? (
+            <span className={`trace-status ${diagnostics.status}`}>
+              {formatTraceStatus(diagnostics.status)}
+            </span>
+          ) : null}
+          <button
+            className="copy-button"
+            disabled={isLoading}
+            onClick={() => void onRefresh()}
+            type="button"
+          >
+            {isLoading ? "读取中" : "刷新"}
+          </button>
+        </div>
+      </div>
+
+      {error ? <p className="trace-diagnostics-error">{error}</p> : null}
+      {diagnostics === null && !isLoading && error === null ? (
+        <p className="settings-note">Trace 尚未开始写入。</p>
+      ) : null}
+      {diagnostics ? (
+        <>
+          <div className="trace-metrics">
+            <TraceMetric label="总耗时" value={formatDuration(diagnostics.total_duration_ms)} />
+            <TraceMetric
+              label="LLM"
+              value={formatDuration(diagnostics.phase_duration_ms.llm_call ?? 0)}
+            />
+            <TraceMetric
+              label="工具"
+              value={formatDuration(diagnostics.phase_duration_ms.tool_call ?? 0)}
+            />
+          </div>
+
+          {diagnostics.first_error ? (
+            <div className="trace-first-error">
+              <strong>首个错误 · {diagnostics.first_error.label}</strong>
+              <span>{diagnostics.first_error.error_type ?? "工具返回错误"}</span>
+              {diagnostics.first_error.error_message ? (
+                <p>{diagnostics.first_error.error_message}</p>
+              ) : null}
+            </div>
+          ) : null}
+
+          <TraceOperationList
+            emptyText="没有超过阈值的慢调用。"
+            items={diagnostics.slow_operations}
+            title={`慢调用 ${diagnostics.slow_operations.length}`}
+          />
+          <TraceOperationList
+            defaultOpen={diagnostics.unfinished_operations.length > 0}
+            emptyText="没有未完成的运行对象。"
+            items={diagnostics.unfinished_operations}
+            title={`未完成 ${diagnostics.unfinished_operations.length}`}
+          />
+
+          <details className="trace-details">
+            <summary>重复工具调用 {diagnostics.repeated_tool_calls.length}</summary>
+            {diagnostics.repeated_tool_calls.length > 0 ? (
+              <ul className="trace-operation-list">
+                {diagnostics.repeated_tool_calls.map((item) => (
+                  <li key={`${item.tool_name}-${item.input_sha256}`}>
+                    <div>
+                      <strong>{item.tool_name}</strong>
+                      <span>相同输入累计 {item.count} 次</span>
+                    </div>
+                    <code title={item.input_sha256}>{item.input_sha256.slice(0, 10)}</code>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="settings-note">没有达到重复阈值的工具调用。</p>
+            )}
+          </details>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function TraceMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function TraceOperationList({
+  defaultOpen = false,
+  emptyText,
+  items,
+  title
+}: {
+  defaultOpen?: boolean;
+  emptyText: string;
+  items: OperationDiagnostic[];
+  title: string;
+}) {
+  return (
+    <details className="trace-details" open={defaultOpen || undefined}>
+      <summary>{title}</summary>
+      {items.length > 0 ? (
+        <ul className="trace-operation-list">
+          {items.slice(0, 5).map((item) => (
+            <li key={item.entity_id}>
+              <div>
+                <strong>{item.label}</strong>
+                <span>{formatTraceEntityType(item.entity_type)}</span>
+              </div>
+              <span>{formatDuration(item.duration_ms)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="settings-note">{emptyText}</p>
+      )}
+      {items.length > 5 ? (
+        <p className="settings-note">另有 {items.length - 5} 项未展开。</p>
+      ) : null}
+    </details>
+  );
+}
+
+function formatDuration(durationMs: number | null): string {
+  if (durationMs === null) {
+    return "进行中";
+  }
+  if (durationMs < 1000) {
+    return `${durationMs} ms`;
+  }
+  return `${(durationMs / 1000).toFixed(durationMs < 10000 ? 1 : 0)} s`;
+}
+
+function formatTraceStatus(status: TraceStatus): string {
+  switch (status) {
+    case "running":
+      return "运行中";
+    case "completed":
+      return "完成";
+    case "failed":
+      return "失败";
+    case "cancelled":
+      return "已取消";
+    case "aborted":
+      return "已中止";
+  }
+}
+
+function formatTraceEntityType(entityType: OperationDiagnostic["entity_type"]): string {
+  switch (entityType) {
+    case "rollout":
+      return "Rollout";
+    case "turn":
+      return "Turn";
+    case "llm_call":
+      return "LLM";
+    case "tool_call":
+      return "工具";
+    case "compaction":
+      return "压缩";
+  }
 }
 
 function formatJobStatus(

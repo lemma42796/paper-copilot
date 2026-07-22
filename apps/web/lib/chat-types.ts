@@ -158,6 +158,7 @@ export type ChatJobSpec = {
   record_quality: boolean;
   update_report: boolean;
   recovery_mode: "restart_from_request" | "rollout_replay";
+  rollout_timeout_seconds: number | null;
 };
 
 export type ChatJobAttempt = {
@@ -210,6 +211,51 @@ export type ChatJobEventsResponse = {
 
 export type ChatJobStreamPayload = ChatJobEventsResponse & {
   record: ChatJobRecord;
+};
+
+export type TraceEntityType =
+  | "rollout"
+  | "turn"
+  | "llm_call"
+  | "tool_call"
+  | "compaction";
+
+export type TraceStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "aborted";
+
+export type OperationDiagnostic = {
+  entity_id: string;
+  entity_type: TraceEntityType;
+  label: string;
+  status: TraceStatus;
+  duration_ms: number | null;
+  error_type: string | null;
+  error_message: string | null;
+};
+
+export type RepeatedToolCallDiagnostic = {
+  tool_name: string;
+  input_sha256: string;
+  count: number;
+  entity_ids: string[];
+};
+
+export type RolloutDiagnostics = {
+  job_id: string;
+  attempt: number;
+  trace_id: string;
+  status: TraceStatus;
+  event_count: number;
+  total_duration_ms: number | null;
+  phase_duration_ms: Partial<Record<TraceEntityType, number>>;
+  first_error: OperationDiagnostic | null;
+  slow_operations: OperationDiagnostic[];
+  unfinished_operations: OperationDiagnostic[];
+  repeated_tool_calls: RepeatedToolCallDiagnostic[];
 };
 
 export type ChatJobWebsocketNotification = {

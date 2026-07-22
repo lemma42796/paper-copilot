@@ -5,6 +5,7 @@ import json
 import os
 import re
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -20,10 +21,16 @@ from paper_copilot.agents.loop import (
     ToolUse,
 )
 from paper_copilot.chat.runtime import ChatRunResult, handle_chat_request
+from paper_copilot.observability import (
+    RolloutDiagnostics,
+    RolloutRecorder,
+    diagnose_rollout,
+    reduce_trace_bundle,
+)
 from paper_copilot.schemas.compaction import CompactionSummary
 from paper_copilot.session import SessionStore, reconstruct_rollout
 from paper_copilot.session.paths import default_root, session_file
-from paper_copilot.shared.errors import JobError
+from paper_copilot.shared.errors import JobError, RolloutTimeoutError
 
 JobStatus = Literal["queued", "running", "completed", "interrupted", "failed"]
 AttemptStatus = Literal["running", "completed", "interrupted", "failed"]
@@ -49,6 +56,7 @@ class ChatJobSpec(BaseModel):
     record_quality: bool = True
     update_report: bool = True
     recovery_mode: Literal["restart_from_request", "rollout_replay"] = "rollout_replay"
+    rollout_timeout_seconds: float | None = Field(default=3600.0, gt=0)
 
 
 class ChatJobResult(BaseModel):
@@ -202,6 +210,35 @@ class ChatJobRegistry:
             events = self._read_events(job_id)
         return [event for event in events if event.seq > after][:limit]
 
+    def diagnostics(
+        self,
+        job_id: str,
+        *,
+        attempt: int | None = None,
+        slow_ms: int = 1000,
+        repeat_threshold: int = 3,
+    ) -> RolloutDiagnostics:
+        _validate_job_id(job_id)
+        with self._lock:
+            record = self._read_record(job_id)
+            if not record.attempts:
+                raise JobError(f"job {job_id} has no attempts")
+            attempt_number = (
+                attempt if attempt is not None else record.attempts[-1].number
+            )
+            if not any(item.number == attempt_number for item in record.attempts):
+                raise JobError(
+                    f"job {job_id} has no attempt {attempt_number}"
+                )
+            bundle_dir = self._job_dir(job_id) / "attempts" / str(attempt_number)
+            state = reduce_trace_bundle(bundle_dir)
+            return diagnose_rollout(
+                bundle_dir,
+                state,
+                slow_ms=slow_ms,
+                repeat_threshold=repeat_threshold,
+            )
+
     def wait_for_events(
         self,
         job_id: str,
@@ -326,7 +363,29 @@ class ChatJobRegistry:
                 self._build_conversation_context(record)
             )
 
+        rollout_started_at = time.perf_counter()
+        recorder: RolloutRecorder | None = None
         try:
+            recorder = RolloutRecorder.create(
+                self._job_dir(job_id) / "attempts" / str(attempt_number),
+                job_id=job_id,
+                attempt=attempt_number,
+                session_id=session_id,
+                turn_id=f"turn:{job_id}:{attempt_number}",
+            )
+            recorder.record(
+                entity_type="rollout",
+                entity_id=recorder.rollout_entity_id,
+                event_type="rollout.started",
+                status="running",
+                attributes={
+                    "resumed_from_attempt": (
+                        source_attempt.number if source_attempt is not None else None
+                    ),
+                    "rollout_timeout_seconds": record.spec.rollout_timeout_seconds,
+                },
+                payloads={"request": {"text": record.spec.request}},
+            )
             resume_history: list[dict[str, Any]] | None = None
             resume_runtime_state: dict[str, Any] | None = None
             recovery_source_session: str | None = None
@@ -370,10 +429,35 @@ class ChatJobRegistry:
                     return
                 self._record_progress(job_id, attempt_number, message)
 
+            async def execute_request() -> ChatRunResult:
+                with recorder.activate():
+                    return await handle_chat_request(
+                        record.spec.request,
+                        pdf_dir=(
+                            Path(record.spec.pdf_dir)
+                            if record.spec.pdf_dir is not None
+                            else None
+                        ),
+                        max_turns=record.spec.max_turns,
+                        budget_cny=record.spec.budget_cny,
+                        max_papers=record.spec.max_papers,
+                        root=self._root,
+                        record_quality=record.spec.record_quality,
+                        update_report=record.spec.update_report,
+                        session_id=session_id,
+                        event_callback=record_event,
+                        conversation_context=conversation_context,
+                        previous_compaction_summary=previous_compaction_summary,
+                        resume_history=resume_history,
+                        resume_runtime_state=resume_runtime_state,
+                        recovery_source_session=recovery_source_session,
+                    )
+
             async def run_request() -> ChatRunResult:
-                task = asyncio.current_task()
-                if task is None:
-                    raise RuntimeError("chat job is not running in an asyncio task")
+                task = asyncio.create_task(
+                    execute_request(),
+                    name=f"paper-copilot-agent-{job_id}-{attempt_number}",
+                )
                 with self._lock:
                     self._async_tasks[job_id] = (
                         asyncio.get_running_loop(),
@@ -382,30 +466,28 @@ class ChatJobRegistry:
                     interrupt_requested = job_id in self._interrupt_requested
                 if interrupt_requested:
                     task.cancel()
-                return await handle_chat_request(
-                    record.spec.request,
-                    pdf_dir=(
-                        Path(record.spec.pdf_dir)
-                        if record.spec.pdf_dir is not None
-                        else None
-                    ),
-                    max_turns=record.spec.max_turns,
-                    budget_cny=record.spec.budget_cny,
-                    max_papers=record.spec.max_papers,
-                    root=self._root,
-                    record_quality=record.spec.record_quality,
-                    update_report=record.spec.update_report,
-                    session_id=session_id,
-                    event_callback=record_event,
-                    conversation_context=conversation_context,
-                    previous_compaction_summary=previous_compaction_summary,
-                    resume_history=resume_history,
-                    resume_runtime_state=resume_runtime_state,
-                    recovery_source_session=recovery_source_session,
+                timeout_seconds = record.spec.rollout_timeout_seconds
+                if timeout_seconds is None:
+                    return await task
+                done, _pending = await asyncio.wait((task,), timeout=timeout_seconds)
+                if task in done:
+                    return task.result()
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise RolloutTimeoutError(
+                    f"rollout attempt timed out after {timeout_seconds:g} seconds"
                 )
 
             result = asyncio.run(run_request())
         except asyncio.CancelledError:
+            if recorder is not None:
+                recorder.record(
+                    entity_type="rollout",
+                    entity_id=recorder.rollout_entity_id,
+                    event_type="rollout.cancelled",
+                    status="cancelled",
+                    duration_ms=int((time.perf_counter() - rollout_started_at) * 1000),
+                )
             self._finish_interrupted(
                 job_id,
                 attempt_number,
@@ -414,21 +496,60 @@ class ChatJobRegistry:
             return
         except Exception as exc:
             if self._is_interrupt_requested(job_id):
+                if recorder is not None:
+                    recorder.record(
+                        entity_type="rollout",
+                        entity_id=recorder.rollout_entity_id,
+                        event_type="rollout.cancelled",
+                        status="cancelled",
+                        duration_ms=int((time.perf_counter() - rollout_started_at) * 1000),
+                        error_type=exc.__class__.__name__,
+                        error_message=str(exc),
+                    )
                 self._finish_interrupted(
                     job_id,
                     attempt_number,
                     "任务已由用户中断。",
                 )
                 return
+            if recorder is not None:
+                recorder.record(
+                    entity_type="rollout",
+                    entity_id=recorder.rollout_entity_id,
+                    event_type="rollout.failed",
+                    status="failed",
+                    duration_ms=int((time.perf_counter() - rollout_started_at) * 1000),
+                    error_type=exc.__class__.__name__,
+                    error_message=str(exc),
+                )
             self._finish_failed(job_id, attempt_number, str(exc))
             return
         if result.termination_reason == "cancelled":
+            recorder.record(
+                entity_type="rollout",
+                entity_id=recorder.rollout_entity_id,
+                event_type="rollout.cancelled",
+                status="cancelled",
+                duration_ms=int((time.perf_counter() - rollout_started_at) * 1000),
+            )
             self._finish_interrupted(
                 job_id,
                 attempt_number,
                 "任务已由用户中断。",
             )
             return
+        recorder.record(
+            entity_type="rollout",
+            entity_id=recorder.rollout_entity_id,
+            event_type="rollout.completed",
+            status="completed",
+            duration_ms=int((time.perf_counter() - rollout_started_at) * 1000),
+            attributes={
+                "termination_reason": result.termination_reason,
+                "cost_cny": result.cost_cny,
+                "events_count": result.events_count,
+            },
+        )
         self._finish_completed(job_id, attempt_number, result)
 
     def _finish_completed(

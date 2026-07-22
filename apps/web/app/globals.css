@@ -812,10 +812,180 @@ input {
 .settings h2,
 .metadata h2,
 .composer-summary h2,
-.evidence-panel h2 {
+.evidence-panel h2,
+.trace-diagnostics h2 {
   margin: 0;
   font-size: 13px;
   font-weight: 760;
+}
+
+.trace-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 2px 18px;
+  border-bottom: 1px solid rgba(13, 13, 13, 0.08);
+}
+
+.trace-diagnostics-header,
+.trace-diagnostics-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.trace-diagnostics-header h2,
+.trace-diagnostics-header p {
+  margin: 0;
+}
+
+.trace-diagnostics-header p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.trace-status {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #eef3fb;
+  color: var(--accent-strong);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.trace-status.failed,
+.trace-status.aborted {
+  background: #fff0ed;
+  color: var(--danger);
+}
+
+.trace-status.completed {
+  background: #eaf6ef;
+  color: #257647;
+}
+
+.trace-status.cancelled {
+  background: #f1f1f1;
+  color: #666666;
+}
+
+.trace-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.trace-metrics > div {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(13, 13, 13, 0.08);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.trace-metrics span,
+.trace-metrics strong {
+  display: block;
+}
+
+.trace-metrics span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.trace-metrics strong {
+  margin-top: 3px;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-first-error,
+.trace-diagnostics-error {
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(180, 35, 24, 0.14);
+  border-radius: 8px;
+  background: #fff5f3;
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.trace-first-error strong,
+.trace-first-error span {
+  display: block;
+}
+
+.trace-first-error span {
+  margin-top: 2px;
+  font-size: 10px;
+}
+
+.trace-first-error p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 6px 0 0;
+  color: #6f2d27;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.trace-details {
+  border-top: 1px solid rgba(13, 13, 13, 0.06);
+  padding-top: 8px;
+}
+
+.trace-details summary {
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.trace-operation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trace-operation-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: #ffffff;
+  font-size: 10px;
+}
+
+.trace-operation-list li div {
+  min-width: 0;
+}
+
+.trace-operation-list strong,
+.trace-operation-list span {
+  display: block;
+}
+
+.trace-operation-list strong {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-operation-list span,
+.trace-operation-list code {
+  color: var(--muted);
 }
 
 .settings-note {

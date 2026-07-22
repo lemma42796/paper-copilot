@@ -6,10 +6,13 @@ See `run_agent_loop` for termination and cost semantics.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
+from paper_copilot.observability import current_llm_call_id, current_recorder
 from paper_copilot.session import SessionStore
 from paper_copilot.shared.cost import (
     CostSnapshot,
@@ -17,7 +20,7 @@ from paper_copilot.shared.cost import (
     UsageLike,
     read_usage_field,
 )
-from paper_copilot.shared.errors import AgentError
+from paper_copilot.shared.errors import AgentError, ToolLoopError, ToolTimeoutError
 from paper_copilot.shared.logging import get_logger
 from paper_copilot.shared.prompt_fingerprint import compute_prompt_sha256
 
@@ -156,6 +159,8 @@ class LoopConfig:
     auto_compact_trigger_tokens: int | None = None
     compacted_target_tokens: int | None = None
     emergency_compact_tokens: int | None = None
+    max_consecutive_identical_tool_calls: int | None = 3
+    tool_timeout_seconds: float | None = 600.0
 
 
 # ---- Main loop -----------------------------------------------------------
@@ -205,6 +210,8 @@ async def run_agent_loop(
     input_token_high_watermark = 0
     last_context_input_tokens: int | None = None
     last_request_history_tokens: int | None = None
+    previous_tool_signature: str | None = None
+    consecutive_identical_tool_calls = 0
     prompt_sha256 = compute_prompt_sha256(
         system=system,
         tools=tools,
@@ -347,10 +354,103 @@ async def run_agent_loop(
 
             tool_results: list[dict[str, Any]] = []
             for block in tool_use_blocks:
-                yield ToolUse(id=block.id, name=block.name, input=block.input)
-                result = await dispatch_tool(
-                    ToolUseRequest(id=block.id, name=block.name, input=block.input)
+                tool_signature = _tool_call_signature(block)
+                if tool_signature == previous_tool_signature:
+                    consecutive_identical_tool_calls += 1
+                else:
+                    previous_tool_signature = tool_signature
+                    consecutive_identical_tool_calls = 1
+                repeat_limit = config.max_consecutive_identical_tool_calls
+                loop_error = (
+                    ToolLoopError(
+                        f"tool loop blocked before dispatch: {block.name} repeated "
+                        f"with identical input {consecutive_identical_tool_calls} times"
+                    )
+                    if repeat_limit is not None
+                    and consecutive_identical_tool_calls >= repeat_limit
+                    else None
                 )
+                yield ToolUse(id=block.id, name=block.name, input=block.input)
+                recorder = current_recorder()
+                trace = (
+                    recorder.operation(
+                        "tool_call",
+                        block.id,
+                        parent_entity_id=current_llm_call_id(),
+                        attributes={
+                            "tool_name": block.name,
+                            "turn": turns,
+                            "timeout_seconds": config.tool_timeout_seconds,
+                        },
+                        input_payload=block.input,
+                    )
+                    if recorder is not None
+                    else nullcontext()
+                )
+                result: ToolResultData | None = None
+                with trace as operation:
+                    if loop_error is not None:
+                        if operation is not None:
+                            operation.set_result(
+                                status="aborted",
+                                output_payload={
+                                    "output": str(loop_error),
+                                    "is_error": True,
+                                },
+                                attributes={
+                                    "guard": "repeated_tool_call",
+                                    "repeat_count": consecutive_identical_tool_calls,
+                                    "repeat_limit": repeat_limit,
+                                },
+                                error_type=loop_error.__class__.__name__,
+                                error_message=str(loop_error),
+                            )
+                    else:
+                        request = ToolUseRequest(
+                            id=block.id,
+                            name=block.name,
+                            input=block.input,
+                        )
+                        try:
+                            if config.tool_timeout_seconds is None:
+                                result = await dispatch_tool(request)
+                            else:
+                                async with asyncio.timeout(config.tool_timeout_seconds):
+                                    result = await dispatch_tool(request)
+                        except TimeoutError as exc:
+                            timeout_error = ToolTimeoutError(
+                                f"tool {block.name} timed out after "
+                                f"{config.tool_timeout_seconds:g} seconds"
+                            )
+                            _log.error(
+                                "agent.tool_timeout",
+                                agent=agent_name,
+                                tool_name=block.name,
+                                timeout_seconds=config.tool_timeout_seconds,
+                            )
+                            raise timeout_error from exc
+                    if operation is not None and result is not None:
+                        operation.set_result(
+                            status="failed" if result.is_error else "completed",
+                            output_payload={
+                                "output": result.output,
+                                "is_error": result.is_error,
+                            },
+                            attributes={
+                                "output_length": len(result.output),
+                                "is_error": result.is_error,
+                            },
+                        )
+                if loop_error is not None:
+                    _log.error(
+                        "agent.repeated_tool_call_blocked",
+                        agent=agent_name,
+                        tool_name=block.name,
+                        repeat_count=consecutive_identical_tool_calls,
+                        repeat_limit=repeat_limit,
+                    )
+                    raise loop_error
+                assert result is not None
                 if store is not None:
                     store.append_tool_result(block.id, result.output, result.is_error)
                     if build_recovery_state is not None:
@@ -420,3 +520,12 @@ def _content_blocks_to_wire(blocks: list[ContentBlock]) -> list[dict[str, Any]]:
                 }
             )
     return out
+
+
+def _tool_call_signature(block: ToolUseBlock) -> str:
+    return json.dumps(
+        {"input": block.input, "name": block.name},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )

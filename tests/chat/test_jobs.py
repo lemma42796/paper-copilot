@@ -33,10 +33,10 @@ from paper_copilot.chat.jobs import (
     ChatJobRegistry,
     ChatJobSpec,
 )
-from paper_copilot.shared.errors import AgentError
-from paper_copilot.session import SessionStore, ToolResult as SessionToolResult
+from paper_copilot.session import SessionStore, TurnAborted
+from paper_copilot.session import ToolResult as SessionToolResult
 from paper_copilot.session import ToolUse as SessionToolUse
-from paper_copilot.session import TurnAborted
+from paper_copilot.shared.errors import AgentError
 
 
 class _DirectAnswerLLM:
@@ -65,6 +65,19 @@ class _DisconnectedLLM:
         max_tokens: int | None = None,
     ) -> LLMResponse:
         raise AgentError("simulated network outage")
+
+
+class _BlockingLLM:
+    async def generate(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | None = None,
+        system: str | list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        await asyncio.Event().wait()
+        raise AssertionError("rollout deadline must cancel the LLM call")
 
 
 class _ConversationLLM:
@@ -157,6 +170,31 @@ class _ToolThenBlockedDispatchLLM:
         )
 
 
+class _RepeatedToolLoopLLM:
+    calls: ClassVar[int] = 0
+
+    async def generate(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_choice: dict[str, Any] | None = None,
+        system: str | list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
+    ) -> LLMResponse:
+        type(self).calls += 1
+        return LLMResponse(
+            content=[
+                ToolUseBlock(
+                    id=f"call-loop-{type(self).calls}",
+                    name="search_papers",
+                    input={"query": "same forever"},
+                )
+            ],
+            stop_reason="tool_use",
+            usage={"input_tokens": 10, "output_tokens": 5},
+        )
+
+
 class _ResumeInspectLLM:
     calls: ClassVar[list[list[dict[str, Any]]]] = []
 
@@ -232,6 +270,41 @@ def test_http_job_completes_after_request_client_disconnects(
     ]
 
 
+def test_http_job_diagnostics_reduces_completed_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_llm(monkeypatch, _DirectAnswerLLM)
+
+    with _api_server() as api_url:
+        created = _request_json(
+            "POST",
+            f"{api_url}/jobs",
+            {
+                "message": "检查本地 trace 诊断",
+                "root": str(tmp_path),
+                "record_quality": False,
+                "update_report": False,
+            },
+        )
+        job_id = str(created["id"])
+        _wait_for_http_status(api_url, job_id, tmp_path, expected="completed")
+        diagnostics = _request_json(
+            "GET",
+            _job_url(api_url, job_id, tmp_path, action="diagnostics"),
+        )
+
+    attempt_dir = tmp_path / "jobs" / job_id / "attempts" / "1"
+    assert diagnostics["job_id"] == job_id
+    assert diagnostics["attempt"] == 1
+    assert diagnostics["status"] == "completed"
+    assert diagnostics["total_duration_ms"] is not None
+    assert diagnostics["phase_duration_ms"]["rollout"] >= 0
+    assert diagnostics["phase_duration_ms"]["turn"] >= 0
+    assert diagnostics["unfinished_operations"] == []
+    assert (attempt_dir / "state.json").is_file()
+
+
 def test_failed_job_waits_for_explicit_resume_and_creates_new_attempt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -256,6 +329,10 @@ def test_failed_job_waits_for_explicit_resume_and_creates_new_attempt(
             tmp_path,
             expected="failed",
         )
+        failed_diagnostics = _request_json(
+            "GET",
+            _job_url(api_url, job_id, tmp_path, action="diagnostics"),
+        )
 
         time.sleep(0.05)
         unchanged = _request_json("GET", _job_url(api_url, job_id, tmp_path))
@@ -276,6 +353,9 @@ def test_failed_job_waits_for_explicit_resume_and_creates_new_attempt(
         )
 
     assert failed["attempts"][0]["status"] == "failed"
+    assert failed_diagnostics["status"] == "failed"
+    assert failed_diagnostics["first_error"]["error_type"] == "AgentError"
+    assert failed_diagnostics["unfinished_operations"] == []
     assert resumed["status"] == "queued"
     assert [attempt["status"] for attempt in completed["attempts"]] == [
         "failed",
@@ -284,6 +364,34 @@ def test_failed_job_waits_for_explicit_resume_and_creates_new_attempt(
     assert completed["attempts"][0]["session_id"] != completed["attempts"][1][
         "session_id"
     ]
+
+
+def test_rollout_deadline_fails_attempt_without_marking_user_interrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_llm(monkeypatch, _BlockingLLM)
+    registry = ChatJobRegistry(tmp_path)
+    created = registry.create(
+        ChatJobSpec(
+            request="verify rollout deadline",
+            record_quality=False,
+            update_report=False,
+            rollout_timeout_seconds=0.02,
+        )
+    )
+
+    failed = _wait_for_registry_status(registry, created.id, expected="failed")
+    diagnostics = registry.diagnostics(created.id)
+
+    assert failed.attempts[0].status == "failed"
+    assert failed.error == "rollout attempt timed out after 0.02 seconds"
+    assert registry.events(created.id)[-1].type == "failed"
+    assert diagnostics.status == "failed"
+    assert diagnostics.first_error is not None
+    assert diagnostics.first_error.entity_type == "rollout"
+    assert diagnostics.first_error.error_type == "RolloutTimeoutError"
+    assert diagnostics.unfinished_operations == []
 
 
 def test_registry_restart_marks_running_job_interrupted_until_resume(
@@ -440,6 +548,57 @@ def test_resume_marks_missing_result_aborted_across_multiple_attempts(
     )
 
 
+def test_repeated_tool_loop_fails_job_and_resume_sees_aborted_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _RepeatedToolLoopLLM.calls = 0
+    _ResumeInspectLLM.calls = []
+    dispatch_count = 0
+
+    def fake_dispatch(
+        _req: ToolUseRequest,
+        _context: PaperCopilotContext,
+    ) -> ToolResultData:
+        nonlocal dispatch_count
+        dispatch_count += 1
+        return ToolResultData(output="same result")
+
+    _use_llm(monkeypatch, _RepeatedToolLoopLLM)
+    monkeypatch.setattr(
+        paper_copilot_module,
+        "dispatch_paper_copilot_tool",
+        fake_dispatch,
+    )
+    registry = ChatJobRegistry(tmp_path)
+    created = registry.create(
+        ChatJobSpec(
+            request="verify repeated tool loop guard",
+            record_quality=False,
+            update_report=False,
+        )
+    )
+    failed = _wait_for_registry_status(registry, created.id, expected="failed")
+    diagnostics = registry.diagnostics(created.id)
+
+    assert dispatch_count == 2
+    assert "tool loop blocked before dispatch" in (failed.error or "")
+    assert diagnostics.first_error is not None
+    assert diagnostics.first_error.entity_id == "call-loop-3"
+    assert diagnostics.first_error.error_type == "ToolLoopError"
+    assert diagnostics.repeated_tool_calls[0].count == 3
+
+    _use_llm(monkeypatch, _ResumeInspectLLM)
+    registry.resume(created.id)
+    completed = _wait_for_registry_status(registry, created.id, expected="completed")
+
+    assert dispatch_count == 2
+    assert [attempt.status for attempt in completed.attempts] == ["failed", "completed"]
+    recovered = _tool_result(_ResumeInspectLLM.calls[0], "call-loop-3")
+    assert recovered["content"] == "aborted"
+    assert recovered["is_error"] is True
+
+
 def test_http_interrupt_cancels_tool_and_resume_sees_aborted_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -494,6 +653,10 @@ def test_http_interrupt_cancels_tool_and_resume_sees_aborted_result(
             tmp_path,
             expected="interrupted",
         )
+        interrupted_diagnostics = _request_json(
+            "GET",
+            _job_url(api_url, job_id, tmp_path, action="diagnostics"),
+        )
 
         assert accepted["status"] == "running"
         assert dispatch_count == 1
@@ -520,6 +683,8 @@ def test_http_interrupt_cancels_tool_and_resume_sees_aborted_result(
         )
 
     assert dispatch_count == 1
+    assert interrupted_diagnostics["status"] == "cancelled"
+    assert interrupted_diagnostics["unfinished_operations"] == []
     assert [attempt["status"] for attempt in completed["attempts"]] == [
         "interrupted",
         "completed",

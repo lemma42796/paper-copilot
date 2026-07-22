@@ -14,6 +14,14 @@ class AgentError(PaperCopilotError):
     pass
 
 
+class ToolLoopError(AgentError):
+    pass
+
+
+class ToolTimeoutError(AgentError):
+    pass
+
+
 class SchemaValidationError(PaperCopilotError):
     pass
 
@@ -43,4 +51,12 @@ class ApiError(PaperCopilotError):
 
 
 class JobError(PaperCopilotError):
+    pass
+
+
+class RolloutTimeoutError(JobError):
+    pass
+
+
+class TraceIntegrityError(PaperCopilotError):
     pass
