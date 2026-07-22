@@ -57,7 +57,8 @@ Paper Copilot 已经推进到 chat-first 本地研究助手：
 
 - 终端命令行界面已移除；本地 HTTP API 由宿主进程调用
   `paper_copilot.api.http.serve_http_api()` 提供，Web 前端使用持久 job 接口，
-  `POST /chat` 保留为同步兼容入口。
+  任务进度优先通过 WebSocket 推送，自动回退到 SSE 和增量轮询；`POST /chat`
+  保留为同步兼容入口。
 - `apps/web/` 已有 ChatGPT 桌面端信息架构的 Next.js chat shell，可展示资料库、
   多轮会话、任务进度、成本、Composer 摘要和 evidence；左右侧栏可独立隐藏。
 - 检索侧已切到百炼 `text-embedding-v4`，并落地 FTS5/BM25 + vector RRF + multi-chunk evidence；已算过的文本 embedding 会复用本地缓存，避免重复调用模型。
@@ -141,8 +142,9 @@ cp .env.example .env
 编辑 `.env`：
 
 ```bash
-ANTHROPIC_BASE_URL=https://dashscope.aliyuncs.com/apps/anthropic
-ANTHROPIC_API_KEY=sk-your-key-here
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_API_KEY=sk-your-key-here
+LLM_MODEL=qwen3.6-flash
 DASHSCOPE_API_KEY=sk-your-key-here
 PAPER_COPILOT_PDF_DIR=/path/to/your/papers
 ```
@@ -156,6 +158,9 @@ from paper_copilot.api.http import serve_http_api
 
 serve_http_api(host="127.0.0.1", port=8765)
 ```
+
+HTTP API 默认监听 `8765`，任务 WebSocket 默认监听相邻的 `8766`。如需调整，
+传入 `websocket_port`；前端从 `/health` 响应发现地址，无需单独配置。
 
 Web 前端开发：
 
@@ -186,18 +191,31 @@ uv sync --dev
 
 ## 配置
 
-`.env.example` 默认使用阿里云百炼 DashScope 的 Anthropic-compatible LLM endpoint，以及 DashScope OpenAI-compatible embedding endpoint。
+`.env.example` 默认使用阿里云百炼 DashScope 的 OpenAI-compatible Chat
+Completions endpoint，以及 DashScope embedding endpoint。LLM 客户端也可连接
+DeepSeek 官方 OpenAI-compatible endpoint。
 
 | 变量 | 用途 |
 | --- | --- |
-| `ANTHROPIC_BASE_URL` | LLM endpoint，默认指向百炼 Anthropic-compatible API |
-| `ANTHROPIC_API_KEY` | LLM API key |
+| `LLM_BASE_URL` | OpenAI-compatible LLM base URL，默认指向百炼 compatible-mode API |
+| `LLM_API_KEY` | LLM API key |
+| `LLM_MODEL` | 模型 ID，默认 `qwen3.6-flash` |
 | `DASHSCOPE_API_KEY` | `text-embedding-v4` embedding API key |
 | `PAPER_COPILOT_HOME` | 运行时数据根目录，默认 `~/.paper-copilot` |
 | `PAPER_COPILOT_PDF_DIR` | chat/research 默认本地论文目录 |
 
 新环境需要先准备本地论文目录。索引会在产品读取论文时同步更新；embedding
 模型或维度变化后，宿主应用必须在继续查询前触发索引重建。
+
+使用 DeepSeek 官方 API 时，把三个 LLM 变量改为：
+
+```bash
+LLM_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=sk-your-deepseek-key
+LLM_MODEL=deepseek-v4-flash
+```
+
+embedding 仍使用独立的 `DASHSCOPE_API_KEY`。
 
 ## 运行
 
@@ -218,21 +236,38 @@ npm run dev
 
 ## 本地 HTTP API
 
-本地 API 故意保持轻量，当前基于 Python stdlib HTTP server，不引入 FastAPI。
+本地 API 故意保持轻量，当前基于 Python stdlib HTTP server 和 `websockets`，
+不引入 FastAPI。
 
 | Method | Path | 说明 |
 | --- | --- | --- |
-| `GET` | `/health` | 健康检查 |
+| `GET` | `/health` | 健康检查和 WebSocket 地址发现 |
 | `POST` | `/jobs` | 创建持久后台任务 |
 | `GET` | `/jobs` | 列出最近任务 |
 | `GET` | `/jobs/<id>` | 查询任务状态和结果 |
 | `GET` | `/jobs/<id>/events?after=N` | 增量读取任务进度 |
+| `GET` | `/jobs/<id>/stream?after=N` | SSE 任务进度流（WebSocket 故障回退） |
 | `POST` | `/jobs/<id>/interrupt` | 请求停止正在运行的 attempt |
 | `POST` | `/jobs/<id>/resume` | 为中断或失败任务创建新 attempt |
 | `POST` | `/chat` | 同步运行自然语言请求（兼容入口） |
 | `GET` | `/reports` | 列出最近 chat/research 报告 |
 | `GET` | `/evidence?ref=...` | 把 evidence ref 解析为 chunk 原文 |
 | `POST` | `/library/select-directory` | Web UI 使用的桌面目录选择器 |
+
+WebSocket 使用 `ws://127.0.0.1:8766/jobs/<id>/stream?after=N`。它同时承载
+`job/events` 服务端通知，以及带请求 id 的 `job/interrupt`、`job/resume` 双向控制。
+连接尚未建立时，控制操作回退到对应 HTTP API；事件流连接失败时切换到同路径的
+SSE，SSE 也不可用时才轮询 `events` 和 job 状态接口。三个事件通道使用同一个事件
+序号游标，因此切换不会重复展示进度。
+
+WebSocket 控制请求示例：
+
+```json
+{"id":1,"method":"job/interrupt","params":{}}
+```
+
+对应响应包含同一个 `id` 和更新后的 job record；业务错误通过 `error` 返回。事件通知
+不带请求 id，格式为 `{"method":"job/events","params":{...}}`。
 
 `POST /jobs` 示例：
 

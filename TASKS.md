@@ -16,7 +16,8 @@
 - 本地 Python API 提供 chat、报告、证据反查和 Composer library preview；
   session、报告和索引继续 local-first 落盘。
 - 默认模型是 `qwen3.6-flash`；所有 LLM 调用统一经过
-  `agents/llm_client.py`。模型分配的单一真源是 `ARCHITECTURE.md`。
+  `agents/llm_client.py` 的 OpenAI-compatible `httpx` 客户端；可通过环境变量
+  切换到 DeepSeek V4。模型分配的单一真源是 `ARCHITECTURE.md`。
 - 跨论文检索使用 `text-embedding-v4`（1024 维）、sqlite-vec、FTS5/BM25、
   RRF 和每篇论文内部的 deterministic evidence chunk selector。
 
@@ -45,6 +46,9 @@
   compaction replacement history、论文预算、LLM 成本和完整 Composer plan 都随
   `recovery_base` / `runtime_state` 持久化。它不是 LLM token 级或外部进程级续跑；
   前端已切换到 job API，会记住当前任务、重连后恢复状态并增量读取进度事件。
+  活跃任务的前后端通信首选双向 WebSocket，interrupt/resume 控制和事件通知复用同一
+  连接；控制连接未建立时回退 HTTP，事件连接失败自动回退 SSE，SSE 不可用时保留
+  增量轮询作为最终兜底，三个事件通道共享事件序号游标。
   interrupted/failed 不会自动重跑；用户在输入框明确输入“继续刚才中断的任务”时，
   才会为原 job 创建新 attempt。界面不提供额外的“继续任务”按钮。运行期间发送按钮会
   切换为 ChatGPT 桌面端式的停止按钮；`POST /jobs/<id>/interrupt` 线程安全地取消当前
@@ -165,7 +169,7 @@ anchor precision 只衡量已标注论文返回 chunk 对人工 anchor 或语义
   validator、retry 或 output filter。
 - graded fields 优先用有清晰锚点的小枚举，不用容易挤到上界的 float。
 - 有时间、因果或层级结构的方向枚举必须做 deterministic post-validation。
-- qwen3.6-flash 在当前 Anthropic-compatible endpoint 下对嵌套 `$ref` 不稳定；
+- qwen3.6-flash 在历史 Anthropic-compatible endpoint 下对嵌套 `$ref` 不稳定；
   tool schema 继续通过 `shared/jsonschema.py` 展开。
 
 ### Eval

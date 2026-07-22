@@ -143,6 +143,7 @@ class ChatJobRegistry:
         self._jobs_dir = self._root / "jobs"
         self._jobs_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._events_changed = threading.Condition(self._lock)
         self._threads: dict[str, threading.Thread] = {}
         self._async_tasks: dict[
             str,
@@ -200,6 +201,28 @@ class ChatJobRegistry:
             self._read_record(job_id)
             events = self._read_events(job_id)
         return [event for event in events if event.seq > after][:limit]
+
+    def wait_for_events(
+        self,
+        job_id: str,
+        *,
+        after: int,
+        limit: int = 200,
+        timeout: float = 15.0,
+    ) -> tuple[ChatJobRecord, list[ChatJobEvent]]:
+        _validate_job_id(job_id)
+        with self._events_changed:
+            record = self._read_record(job_id)
+            events = [
+                event for event in self._read_events(job_id) if event.seq > after
+            ][:limit]
+            if not events and record.status in {"queued", "running"}:
+                self._events_changed.wait(timeout=timeout)
+                record = self._read_record(job_id)
+                events = [
+                    event for event in self._read_events(job_id) if event.seq > after
+                ][:limit]
+            return record, events
 
     def resume(self, job_id: str) -> ChatJobRecord:
         _validate_job_id(job_id)
@@ -667,21 +690,23 @@ class ChatJobRegistry:
         attempt: int,
         message: str,
     ) -> None:
-        path = self._job_dir(job_id) / "events.jsonl"
-        self._truncate_torn_event_tail(path)
-        seq = len(self._read_events(job_id)) + 1
-        event = ChatJobEvent(
-            seq=seq,
-            ts=_now_ts(),
-            type=event_type,
-            status=status,
-            attempt=attempt,
-            message=message,
-        )
-        with path.open("a", encoding="utf-8") as stream:
-            stream.write(event.model_dump_json() + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
+        with self._events_changed:
+            path = self._job_dir(job_id) / "events.jsonl"
+            self._truncate_torn_event_tail(path)
+            seq = len(self._read_events(job_id)) + 1
+            event = ChatJobEvent(
+                seq=seq,
+                ts=_now_ts(),
+                type=event_type,
+                status=status,
+                attempt=attempt,
+                message=message,
+            )
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(event.model_dump_json() + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            self._events_changed.notify_all()
 
     def _truncate_torn_event_tail(self, path: Path) -> None:
         if not path.exists():

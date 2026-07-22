@@ -7,8 +7,12 @@ import { ReportHistorySidebar } from "../components/report-history-sidebar";
 import { ReportView } from "../components/report-view";
 import { ResearchComposer } from "../components/research-composer";
 import type {
+  ApiHealthResponse,
   ChatJobEventsResponse,
   ChatJobRecord,
+  ChatJobStreamPayload,
+  ChatJobWebsocketNotification,
+  ChatJobWebsocketResponse,
   ChatJobsResponse,
   ChatResponse,
   ChatSession,
@@ -36,6 +40,7 @@ const JOB_POLL_INTERVAL_MS = 1200;
 
 export default function Home() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
+  const [jobWebsocketUrl, setJobWebsocketUrl] = useState<string | null>(null);
   const [message, setMessage] = useState(DEFAULT_PROMPT);
   const [pdfDir, setPdfDir] = useState(DEFAULT_LIBRARY_DIR);
   const [health, setHealth] = useState<HealthState>("checking");
@@ -60,6 +65,18 @@ export default function Home() {
     after: 0,
     isLoading: false
   });
+  const jobWebsocket = useRef<WebSocket | null>(null);
+  const jobWebsocketJobId = useRef<string | null>(null);
+  const jobWebsocketRequestId = useRef(0);
+  const pendingJobWebsocketRequests = useRef(
+    new Map<
+      number,
+      {
+        resolve: (record: ChatJobRecord) => void;
+        reject: (error: Error) => void;
+      }
+    >()
+  );
   const [isSidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isInspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
@@ -100,8 +117,16 @@ export default function Home() {
     setHealth("checking");
     try {
       const response = await fetch(`${normalizedApiUrl}/health`, { method: "GET" });
-      setHealth(response.ok ? "online" : "offline");
+      if (!response.ok) {
+        setJobWebsocketUrl(null);
+        setHealth("offline");
+        return;
+      }
+      const payload = (await response.json()) as ApiHealthResponse;
+      setJobWebsocketUrl(payload.websocket_url ?? null);
+      setHealth("online");
     } catch {
+      setJobWebsocketUrl(null);
       setHealth("offline");
     }
   }
@@ -118,6 +143,8 @@ export default function Home() {
       try {
         const response = await fetch(`${normalizedApiUrl}/health`, { method: "GET" });
         if (response.ok) {
+          const payload = (await response.json()) as ApiHealthResponse;
+          setJobWebsocketUrl(payload.websocket_url ?? null);
           setHealth("online");
         }
       } catch {
@@ -150,15 +177,129 @@ export default function Home() {
   }, [health]);
 
   useEffect(() => {
-    if (activeJob === null || !isActiveJobStatus(activeJob.status)) {
+    if (activeJob === null) {
       setIsInterrupting(false);
       return;
     }
-    const timer = window.setInterval(() => {
-      void refreshActiveJob(activeJob.id);
-    }, JOB_POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [activeJob?.id, activeJob?.status, normalizedApiUrl]);
+    const isActive = isActiveJobStatus(activeJob.status);
+    const isResumable = isResumableJobStatus(activeJob.status);
+    if (!isActive) {
+      setIsInterrupting(false);
+    }
+    if (!isActive && !isResumable) {
+      return;
+    }
+
+    const jobId = activeJob.id;
+    let disposed = false;
+    let terminalReceived = false;
+    let websocket: WebSocket | null = null;
+    let eventSource: EventSource | null = null;
+    let pollTimer: number | null = null;
+
+    const currentAfter = () =>
+      jobEventCursor.current.jobId === jobId ? jobEventCursor.current.after : 0;
+
+    const startPolling = () => {
+      if (disposed || terminalReceived || pollTimer !== null) {
+        return;
+      }
+      void refreshActiveJob(jobId);
+      pollTimer = window.setInterval(() => {
+        void refreshActiveJob(jobId);
+      }, JOB_POLL_INTERVAL_MS);
+    };
+
+    const startSse = () => {
+      if (disposed || terminalReceived || eventSource !== null || pollTimer !== null) {
+        return;
+      }
+      websocket?.close();
+      websocket = null;
+      const streamUrl = `${normalizedApiUrl}/jobs/${jobId}/stream?after=${currentAfter()}`;
+      eventSource = new EventSource(streamUrl);
+      eventSource.onmessage = (event) => {
+        const payload = JSON.parse(event.data) as ChatJobStreamPayload;
+        terminalReceived = !isActiveJobStatus(payload.record.status);
+        applyJobStreamPayload(jobId, payload);
+        if (terminalReceived) {
+          eventSource?.close();
+          eventSource = null;
+        }
+      };
+      eventSource.onerror = () => {
+        eventSource?.close();
+        eventSource = null;
+        startPolling();
+      };
+    };
+
+    if (jobWebsocketUrl === null) {
+      startSse();
+    } else {
+      try {
+        const websocketBase = jobWebsocketUrl.replace(/\/+$/, "");
+        const socket = new WebSocket(
+          `${websocketBase}/jobs/${jobId}/stream?after=${currentAfter()}`
+        );
+        websocket = socket;
+        socket.onopen = () => {
+          jobWebsocket.current = socket;
+          jobWebsocketJobId.current = jobId;
+        };
+        socket.onmessage = (event) => {
+          const message = JSON.parse(String(event.data)) as
+            | ChatJobWebsocketNotification
+            | ChatJobWebsocketResponse;
+          if ("method" in message && message.method === "job/events") {
+            terminalReceived = !isActiveJobStatus(message.params.record.status);
+            applyJobStreamPayload(jobId, message.params);
+            return;
+          }
+          if (!("id" in message)) {
+            return;
+          }
+          const pending = pendingJobWebsocketRequests.current.get(message.id);
+          if (pending === undefined) {
+            return;
+          }
+          pendingJobWebsocketRequests.current.delete(message.id);
+          if (message.error !== undefined) {
+            pending.reject(new Error(message.error.message));
+          } else if (message.result !== undefined) {
+            pending.resolve(message.result.record);
+          }
+        };
+        socket.onerror = () => {
+          startSse();
+        };
+        socket.onclose = () => {
+          if (jobWebsocket.current === socket) {
+            jobWebsocket.current = null;
+            jobWebsocketJobId.current = null;
+            rejectPendingJobWebsocketRequests("WebSocket 连接已关闭。");
+          }
+          startSse();
+        };
+      } catch {
+        startSse();
+      }
+    }
+
+    return () => {
+      disposed = true;
+      if (jobWebsocket.current === websocket) {
+        jobWebsocket.current = null;
+        jobWebsocketJobId.current = null;
+        rejectPendingJobWebsocketRequests("WebSocket 连接已切换。");
+      }
+      websocket?.close();
+      eventSource?.close();
+      if (pollTimer !== null) {
+        window.clearInterval(pollTimer);
+      }
+    };
+  }, [activeJob?.id, activeJob?.status, normalizedApiUrl, jobWebsocketUrl]);
 
   useEffect(() => {
     if (health !== "online" || pdfDir.trim().length === 0) {
@@ -230,6 +371,66 @@ export default function Home() {
     }
   }
 
+  function applyJobStreamPayload(
+    jobId: string,
+    payload: ChatJobStreamPayload
+  ): void {
+    const isNewJob = jobEventCursor.current.jobId !== jobId;
+    if (isNewJob) {
+      jobEventCursor.current = { jobId, after: 0, isLoading: false };
+      setJobEvents([]);
+    }
+    const after = jobEventCursor.current.after;
+    const freshEvents = payload.events.filter((event) => event.seq > after);
+    jobEventCursor.current.after = Math.max(after, payload.next_after);
+    if (freshEvents.length > 0) {
+      setJobEvents((events) => [...events, ...freshEvents]);
+    }
+    setHealth("online");
+    activateJob(payload.record);
+    if (payload.record.status === "completed") {
+      void loadReports();
+    }
+  }
+
+  function rejectPendingJobWebsocketRequests(message: string): void {
+    for (const pending of pendingJobWebsocketRequests.current.values()) {
+      pending.reject(new Error(message));
+    }
+    pendingJobWebsocketRequests.current.clear();
+  }
+
+  function requestJobWebsocketControl(
+    method: "job/interrupt" | "job/resume",
+    jobId: string
+  ): Promise<ChatJobRecord | null> {
+    const socket = jobWebsocket.current;
+    if (
+      socket === null ||
+      socket.readyState !== WebSocket.OPEN ||
+      jobWebsocketJobId.current !== jobId
+    ) {
+      return Promise.resolve(null);
+    }
+    jobWebsocketRequestId.current += 1;
+    const requestId = jobWebsocketRequestId.current;
+    return new Promise((resolve, reject) => {
+      pendingJobWebsocketRequests.current.set(requestId, { resolve, reject });
+      try {
+        socket.send(
+          JSON.stringify({
+            id: requestId,
+            method,
+            params: {}
+          })
+        );
+      } catch (exc) {
+        pendingJobWebsocketRequests.current.delete(requestId);
+        reject(exc instanceof Error ? exc : new Error("WebSocket 控制请求失败。"));
+      }
+    });
+  }
+
   async function loadJobEvents(jobId: string): Promise<void> {
     const isNewJob = jobEventCursor.current.jobId !== jobId;
     if (isNewJob) {
@@ -252,8 +453,15 @@ export default function Home() {
         return;
       }
       const payload = (await response.json()) as ChatJobEventsResponse;
-      jobEventCursor.current.after = payload.next_after;
-      setJobEvents((events) => (isNewJob ? payload.events : [...events, ...payload.events]));
+      if (jobEventCursor.current.jobId !== jobId) {
+        return;
+      }
+      const after = jobEventCursor.current.after;
+      const freshEvents = payload.events.filter((event) => event.seq > after);
+      jobEventCursor.current.after = Math.max(after, payload.next_after);
+      if (freshEvents.length > 0) {
+        setJobEvents((events) => [...events, ...freshEvents]);
+      }
     } catch {
       return;
     } finally {
@@ -372,6 +580,16 @@ export default function Home() {
   }
 
   async function resumeJob(job: ChatJobRecord): Promise<void> {
+    const websocketRecord = await requestJobWebsocketControl("job/resume", job.id);
+    if (websocketRecord !== null) {
+      activateJob(websocketRecord);
+      setMessage("");
+      setSelectedEvidence(null);
+      setEvidenceError(null);
+      void loadJobEvents(websocketRecord.id);
+      return;
+    }
+
     let response: Response;
     try {
       response = await fetch(`${normalizedApiUrl}/jobs/${job.id}/resume`, {
@@ -405,6 +623,22 @@ export default function Home() {
     }
     setIsInterrupting(true);
     setError(null);
+    try {
+      const websocketRecord = await requestJobWebsocketControl(
+        "job/interrupt",
+        activeJob.id
+      );
+      if (websocketRecord !== null) {
+        activateJob(websocketRecord);
+        void loadJobEvents(websocketRecord.id);
+        return;
+      }
+    } catch (exc) {
+      setIsInterrupting(false);
+      setError(exc instanceof Error ? exc.message : "停止任务失败。");
+      return;
+    }
+
     let response: Response;
     try {
       response = await fetch(`${normalizedApiUrl}/jobs/${activeJob.id}/interrupt`, {

@@ -1,5 +1,10 @@
 export type HealthState = "checking" | "online" | "offline";
 
+export type ApiHealthResponse = {
+  status: string;
+  websocket_url?: string;
+};
+
 export type ComposerPoolName = "ccf_a" | "ccf_b" | "other";
 
 export type ComposerDecision = {
@@ -201,6 +206,21 @@ export type ChatJobEvent = {
 export type ChatJobEventsResponse = {
   events: ChatJobEvent[];
   next_after: number;
+};
+
+export type ChatJobStreamPayload = ChatJobEventsResponse & {
+  record: ChatJobRecord;
+};
+
+export type ChatJobWebsocketNotification = {
+  method: "job/events";
+  params: ChatJobStreamPayload;
+};
+
+export type ChatJobWebsocketResponse = {
+  id: number;
+  result?: { record: ChatJobRecord };
+  error?: { code: string; message: string };
 };
 
 export type UsageTip = {
