@@ -614,6 +614,41 @@ input {
   font-size: 13px;
 }
 
+.tool-approval {
+  align-items: center;
+  background: #fff8e8;
+  border: 1px solid #e4b95f;
+  border-radius: 14px;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  margin: 16px 22px 0;
+  padding: 16px 18px;
+}
+
+.tool-approval p {
+  margin: 6px 0;
+}
+
+.tool-approval-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.tool-approval-actions button {
+  border: 1px solid #c9b58c;
+  border-radius: 9px;
+  cursor: pointer;
+  padding: 8px 12px;
+}
+
+.tool-approval-actions .tool-approval-confirm {
+  background: #1f6f50;
+  border-color: #1f6f50;
+  color: white;
+}
+
 .report-pane {
   position: relative;
   min-height: 0;

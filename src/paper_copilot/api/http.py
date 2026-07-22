@@ -71,6 +71,11 @@ class JobActionHttpRequest(BaseModel):
     root: Path | None = None
 
 
+class JobApprovalHttpRequest(JobActionHttpRequest):
+    approval_id: str = Field(min_length=1)
+    approved: bool
+
+
 class JobEventsHttpRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -446,6 +451,9 @@ class _ChatHandler(BaseHTTPRequestHandler):
         if job_route is not None and job_route[1] == "interrupt":
             self._handle_interrupt_job(job_route[0])
             return
+        if job_route is not None and job_route[1] == "approval":
+            self._handle_job_approval(job_route[0])
+            return
 
         self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"unknown path: {parsed.path}")
 
@@ -539,6 +547,27 @@ class _ChatHandler(BaseHTTPRequestHandler):
 
         try:
             record = job_registry(request.root).interrupt(job_id)
+        except PaperCopilotError as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, exc.__class__.__name__, str(exc))
+            return
+        self._write_json(HTTPStatus.ACCEPTED, record.model_dump(mode="json"))
+
+    def _handle_job_approval(self, job_id: str) -> None:
+        try:
+            request = JobApprovalHttpRequest.model_validate(self._read_json_body())
+        except ValidationError as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
+            return
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, "invalid_json", str(exc))
+            return
+
+        try:
+            record = job_registry(request.root).resolve_approval(
+                job_id,
+                request.approval_id,
+                approved=request.approved,
+            )
         except PaperCopilotError as exc:
             self._write_error(HTTPStatus.BAD_REQUEST, exc.__class__.__name__, str(exc))
             return
@@ -668,7 +697,7 @@ def _job_route(path: str) -> tuple[str, str | None] | None:
         len(parts) == 3
         and parts[0] == "jobs"
         and parts[2]
-        in {"diagnostics", "events", "stream", "resume", "interrupt"}
+        in {"diagnostics", "events", "stream", "resume", "interrupt", "approval"}
     ):
         return parts[1], parts[2]
     return None

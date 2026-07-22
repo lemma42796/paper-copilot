@@ -55,7 +55,7 @@ def _handle_job_websocket(connection: ServerConnection) -> None:
         if events:
             after = events[-1].seq
 
-        while record.status != "completed":
+        while record.status not in {"completed", "interrupted", "failed"}:
             try:
                 message = connection.recv(timeout=0.25)
             except TimeoutError:
@@ -67,7 +67,7 @@ def _handle_job_websocket(connection: ServerConnection) -> None:
             if events:
                 _send_job_events(connection, record, events, after=after)
                 after = events[-1].seq
-            elif record.status == "completed":
+            elif record.status in {"completed", "interrupted", "failed"}:
                 _send_job_events(connection, record, [], after=after)
                 return
     except ConnectionClosed:
@@ -111,11 +111,23 @@ def _handle_control_message(
         if not isinstance(request_id, str | int):
             raise ValueError("WebSocket control message requires a string or integer id")
         method = request.get("method")
+        params = request.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError("WebSocket control params must be an object")
         match method:
             case "job/interrupt":
                 record = registry.interrupt(job_id)
             case "job/resume":
                 record = registry.resume(job_id)
+            case "job/approve" | "job/deny":
+                approval_id = params.get("approval_id")
+                if not isinstance(approval_id, str):
+                    raise ValueError("approval control requires approval_id")
+                record = registry.resolve_approval(
+                    job_id,
+                    approval_id,
+                    approved=method == "job/approve",
+                )
             case _:
                 raise ValueError(f"unknown WebSocket method: {method}")
         response = {

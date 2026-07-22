@@ -125,6 +125,7 @@ export type ChatSessionStatus =
   | "draft"
   | "queued"
   | "running"
+  | "waiting_for_approval"
   | "completed"
   | "interrupted"
   | "failed";
@@ -175,13 +176,26 @@ export type ChatJobAttempt = {
 export type ChatJobRecord = {
   version: 1;
   id: string;
-  status: "queued" | "running" | "completed" | "interrupted" | "failed";
+  status:
+    | "queued"
+    | "running"
+    | "waiting_for_approval"
+    | "completed"
+    | "interrupted"
+    | "failed";
   created_at: string;
   updated_at: string;
   spec: ChatJobSpec;
   attempts: ChatJobAttempt[];
   result: ChatResponse | null;
   error: string | null;
+  pending_approval: {
+    id: string;
+    tool_name: string;
+    reason: string;
+    effects: string[];
+    tool_input: Record<string, unknown>;
+  } | null;
 };
 
 export type ChatJobsResponse = {
@@ -198,7 +212,9 @@ export type ChatJobEvent = {
     | "completed"
     | "interrupted"
     | "failed"
-    | "resumed";
+    | "resumed"
+    | "approval_required"
+    | "approval_resolved";
   status: ChatJobRecord["status"];
   attempt: number;
   message: string;

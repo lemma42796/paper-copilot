@@ -76,7 +76,14 @@ export function RunMetadata({
   result
 }: {
   jobProgress: string | null;
-  jobStatus: "queued" | "running" | "completed" | "interrupted" | "failed" | null;
+  jobStatus:
+    | "queued"
+    | "running"
+    | "waiting_for_approval"
+    | "completed"
+    | "interrupted"
+    | "failed"
+    | null;
   onCopy: (value: string, label: string) => Promise<void>;
   result: ChatResponse | null;
 }) {
@@ -317,13 +324,22 @@ function formatTraceEntityType(entityType: OperationDiagnostic["entity_type"]): 
 }
 
 function formatJobStatus(
-  status: "queued" | "running" | "completed" | "interrupted" | "failed" | null
+  status:
+    | "queued"
+    | "running"
+    | "waiting_for_approval"
+    | "completed"
+    | "interrupted"
+    | "failed"
+    | null
 ): string {
   switch (status) {
     case "queued":
       return "等待执行";
     case "running":
       return "正在运行";
+    case "waiting_for_approval":
+      return "等待用户确认";
     case "completed":
       return "已完成";
     case "interrupted":

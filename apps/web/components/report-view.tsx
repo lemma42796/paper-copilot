@@ -19,7 +19,14 @@ export function ReportView({
   copyNotice: string | null;
   isRunning: boolean;
   jobError: string | null;
-  jobStatus: "queued" | "running" | "completed" | "interrupted" | "failed" | null;
+  jobStatus:
+    | "queued"
+    | "running"
+    | "waiting_for_approval"
+    | "completed"
+    | "interrupted"
+    | "failed"
+    | null;
   messages: ChatSessionMessage[];
   onCopy: (value: string, label: string) => Promise<void>;
   onEvidenceRefClick: (ref: string) => void | Promise<void>;

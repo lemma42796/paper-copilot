@@ -431,8 +431,9 @@ export default function Home() {
   }
 
   function requestJobWebsocketControl(
-    method: "job/interrupt" | "job/resume",
-    jobId: string
+    method: "job/interrupt" | "job/resume" | "job/approve" | "job/deny",
+    jobId: string,
+    params: Record<string, unknown> = {}
   ): Promise<ChatJobRecord | null> {
     const socket = jobWebsocket.current;
     if (
@@ -451,7 +452,7 @@ export default function Home() {
           JSON.stringify({
             id: requestId,
             method,
-            params: {}
+            params
           })
         );
       } catch (exc) {
@@ -744,6 +745,43 @@ export default function Home() {
     void loadJobEvents(record.id);
   }
 
+  async function resolveToolApproval(approved: boolean): Promise<void> {
+    const pending = activeJob?.pending_approval;
+    if (activeJob === null || pending === null || pending === undefined) {
+      return;
+    }
+    setError(null);
+    const method = approved ? "job/approve" : "job/deny";
+    try {
+      const websocketRecord = await requestJobWebsocketControl(
+        method,
+        activeJob.id,
+        { approval_id: pending.id }
+      );
+      if (websocketRecord !== null) {
+        activateJob(websocketRecord);
+        return;
+      }
+      const response = await fetch(
+        `${normalizedApiUrl}/jobs/${activeJob.id}/approval`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ approval_id: pending.id, approved })
+        }
+      );
+      const raw = (await response.json()) as
+        | ChatJobRecord
+        | { error?: { message?: string } };
+      if (!response.ok) {
+        throw new Error(apiErrorMessage(raw, "工具审批失败。"));
+      }
+      activateJob(raw as ChatJobRecord);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "工具审批失败。");
+    }
+  }
+
   function activateJob(record: ChatJobRecord) {
     setActiveJob(record);
     setResult(record.result);
@@ -927,6 +965,28 @@ export default function Home() {
           <section className="main-pane" aria-label="研究输入">
             {error ? <p className="error-strip">{error}</p> : null}
 
+            {activeJob?.pending_approval ? (
+              <section className="tool-approval" aria-label="工具操作确认">
+                <div>
+                  <strong>需要你的确认</strong>
+                  <p>{activeJob.pending_approval.reason}</p>
+                  <code>{activeJob.pending_approval.tool_name}</code>
+                </div>
+                <div className="tool-approval-actions">
+                  <button onClick={() => void resolveToolApproval(false)} type="button">
+                    拒绝
+                  </button>
+                  <button
+                    className="tool-approval-confirm"
+                    onClick={() => void resolveToolApproval(true)}
+                    type="button"
+                  >
+                    允许本次操作
+                  </button>
+                </div>
+              </section>
+            ) : null}
+
             <ReportView
               copyNotice={copyNotice}
               isRunning={isRunning}
@@ -998,7 +1058,11 @@ function healthLabel(health: HealthState): string {
 }
 
 function isActiveJobStatus(status: ChatJobRecord["status"]): boolean {
-  return status === "queued" || status === "running";
+  return (
+    status === "queued" ||
+    status === "running" ||
+    status === "waiting_for_approval"
+  );
 }
 
 function isResumableJobStatus(status: ChatJobRecord["status"]): boolean {

@@ -20,6 +20,7 @@ from paper_copilot.agents.loop import (
     ToolResult,
     ToolUse,
 )
+from paper_copilot.agents.tool_security import ToolApprovalRequest
 from paper_copilot.chat.runtime import ChatRunResult, handle_chat_request
 from paper_copilot.observability import (
     RolloutDiagnostics,
@@ -32,7 +33,14 @@ from paper_copilot.session import SessionStore, reconstruct_rollout
 from paper_copilot.session.paths import default_root, session_file
 from paper_copilot.shared.errors import JobError, RolloutTimeoutError
 
-JobStatus = Literal["queued", "running", "completed", "interrupted", "failed"]
+JobStatus = Literal[
+    "queued",
+    "running",
+    "waiting_for_approval",
+    "completed",
+    "interrupted",
+    "failed",
+]
 AttemptStatus = Literal["running", "completed", "interrupted", "failed"]
 
 _JOB_ID_RE = re.compile(r"^job-[0-9A-Za-z-]{8,80}$")
@@ -124,6 +132,7 @@ class ChatJobRecord(BaseModel):
     attempts: list[ChatJobAttempt] = Field(default_factory=list)
     result: ChatJobResult | None = None
     error: str | None = None
+    pending_approval: ToolApprovalRequest | None = None
 
 
 class ChatJobEvent(BaseModel):
@@ -139,6 +148,8 @@ class ChatJobEvent(BaseModel):
         "interrupted",
         "failed",
         "resumed",
+        "approval_required",
+        "approval_resolved",
     ]
     status: JobStatus
     attempt: int
@@ -158,6 +169,10 @@ class ChatJobRegistry:
             tuple[asyncio.AbstractEventLoop, asyncio.Task[Any]],
         ] = {}
         self._interrupt_requested: set[str] = set()
+        self._approval_waiters: dict[
+            str,
+            tuple[str, asyncio.AbstractEventLoop, asyncio.Future[bool]],
+        ] = {}
         self._recover_orphaned_jobs()
 
     def create(self, spec: ChatJobSpec) -> ChatJobRecord:
@@ -253,7 +268,11 @@ class ChatJobRegistry:
             events = [
                 event for event in self._read_events(job_id) if event.seq > after
             ][:limit]
-            if not events and record.status in {"queued", "running"}:
+            if not events and record.status in {
+                "queued",
+                "running",
+                "waiting_for_approval",
+            }:
                 self._events_changed.wait(timeout=timeout)
                 record = self._read_record(job_id)
                 events = [
@@ -294,7 +313,7 @@ class ChatJobRegistry:
         _validate_job_id(job_id)
         with self._lock:
             record = self._read_record(job_id)
-            if record.status not in {"queued", "running"}:
+            if record.status not in {"queued", "running", "waiting_for_approval"}:
                 raise JobError(
                     f"job {job_id} cannot interrupt from status {record.status}"
                 )
@@ -314,6 +333,38 @@ class ChatJobRegistry:
             if running is not None:
                 loop, task = running
                 loop.call_soon_threadsafe(task.cancel)
+            return record
+
+    def resolve_approval(
+        self,
+        job_id: str,
+        approval_id: str,
+        *,
+        approved: bool,
+    ) -> ChatJobRecord:
+        _validate_job_id(job_id)
+        with self._lock:
+            record = self._read_record(job_id)
+            pending = record.pending_approval
+            if record.status != "waiting_for_approval" or pending is None:
+                raise JobError(f"job {job_id} is not waiting for approval")
+            if pending.id != approval_id:
+                raise JobError(f"approval {approval_id} is not pending for job {job_id}")
+            waiter = self._approval_waiters.pop(job_id, None)
+            if waiter is None or waiter[0] != approval_id:
+                raise JobError(f"approval waiter is unavailable for job {job_id}")
+            record.status = "running"
+            record.pending_approval = None
+            record.updated_at = _now_ts()
+            self._write_record(record)
+            self._append_event(
+                job_id,
+                event_type="approval_resolved",
+                status="running",
+                attempt=len(record.attempts),
+                message="用户已批准工具操作。" if approved else "用户已拒绝工具操作。",
+            )
+            _approval_future_set_result(waiter[1], waiter[2], approved)
             return record
 
     def _start(self, job_id: str) -> None:
@@ -429,6 +480,32 @@ class ChatJobRegistry:
                     return
                 self._record_progress(job_id, attempt_number, message)
 
+            async def request_tool_approval(
+                approval: ToolApprovalRequest,
+            ) -> bool:
+                loop = asyncio.get_running_loop()
+                future: asyncio.Future[bool] = loop.create_future()
+                with self._lock:
+                    current = self._read_record(job_id)
+                    if current.status != "running":
+                        raise JobError(
+                            f"job {job_id} cannot request approval from status "
+                            f"{current.status}"
+                        )
+                    current.status = "waiting_for_approval"
+                    current.pending_approval = approval
+                    current.updated_at = _now_ts()
+                    self._approval_waiters[job_id] = (approval.id, loop, future)
+                    self._write_record(current)
+                    self._append_event(
+                        job_id,
+                        event_type="approval_required",
+                        status="waiting_for_approval",
+                        attempt=attempt_number,
+                        message=approval.reason,
+                    )
+                return await future
+
             async def execute_request() -> ChatRunResult:
                 with recorder.activate():
                     return await handle_chat_request(
@@ -451,6 +528,7 @@ class ChatJobRegistry:
                         resume_history=resume_history,
                         resume_runtime_state=resume_runtime_state,
                         recovery_source_session=recovery_source_session,
+                        request_tool_approval=request_tool_approval,
                     )
 
             async def run_request() -> ChatRunResult:
@@ -575,6 +653,7 @@ class ChatJobRegistry:
             record.updated_at = now
             record.result = ChatJobResult.from_run(result)
             record.error = None
+            record.pending_approval = None
             self._write_record(record)
             self._append_event(
                 job_id,
@@ -600,6 +679,7 @@ class ChatJobRegistry:
             record.status = "failed"
             record.updated_at = now
             record.error = error
+            record.pending_approval = None
             self._write_record(record)
             self._append_event(
                 job_id,
@@ -631,6 +711,7 @@ class ChatJobRegistry:
             record.status = "interrupted"
             record.updated_at = now
             record.error = reason
+            record.pending_approval = None
             self._write_record(record)
             self._append_event(
                 job_id,
@@ -649,6 +730,7 @@ class ChatJobRegistry:
         self._threads.pop(job_id, None)
         self._async_tasks.pop(job_id, None)
         self._interrupt_requested.discard(job_id)
+        self._approval_waiters.pop(job_id, None)
 
     def _record_progress(self, job_id: str, attempt_number: int, message: str) -> None:
         with self._lock:
@@ -669,7 +751,7 @@ class ChatJobRegistry:
         with self._lock:
             for path in self._job_files():
                 record = self._read_record(path.parent.name)
-                if record.status not in {"queued", "running"}:
+                if record.status not in {"queued", "running", "waiting_for_approval"}:
                     continue
                 now = _now_ts()
                 if record.attempts and record.attempts[-1].status == "running":
@@ -685,6 +767,7 @@ class ChatJobRegistry:
                 record.status = "interrupted"
                 record.updated_at = now
                 record.error = "本地服务在任务完成前停止, 可从持久化 rollout 恢复。"
+                record.pending_approval = None
                 self._write_record(record)
                 self._append_event(
                     record.id,
@@ -806,6 +889,8 @@ class ChatJobRegistry:
             "interrupted",
             "failed",
             "resumed",
+            "approval_required",
+            "approval_resolved",
         ],
         status: JobStatus,
         attempt: int,
@@ -877,3 +962,15 @@ def _validate_job_id(job_id: str) -> None:
 
 def _now_ts() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _approval_future_set_result(
+    loop: asyncio.AbstractEventLoop,
+    future: asyncio.Future[bool],
+    approved: bool,
+) -> None:
+    def resolve() -> None:
+        if not future.done():
+            future.set_result(approved)
+
+    loop.call_soon_threadsafe(resolve)

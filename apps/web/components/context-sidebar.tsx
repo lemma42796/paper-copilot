@@ -51,7 +51,14 @@ export function ContextSidebar({
   isSelectingLibraryDir: boolean;
   jobId: string | null;
   jobProgress: string | null;
-  jobStatus: "queued" | "running" | "completed" | "interrupted" | "failed" | null;
+  jobStatus:
+    | "queued"
+    | "running"
+    | "waiting_for_approval"
+    | "completed"
+    | "interrupted"
+    | "failed"
+    | null;
   libraryStatus: ComposerLibraryResponse | null;
   libraryStatusError: string | null;
   onApiUrlChange: (value: string) => void;

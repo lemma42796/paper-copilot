@@ -78,6 +78,8 @@ function sessionStatusLabel(session: ChatSession): string {
       return "等待执行";
     case "running":
       return "正在运行";
+    case "waiting_for_approval":
+      return "等待确认";
     case "interrupted":
       return "已中断";
     case "failed":
