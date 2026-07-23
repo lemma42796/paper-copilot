@@ -54,7 +54,7 @@ Python Paper Core ─────┤
 现有 Next.js Web UI 是迁移期实现。SwiftUI 达到功能对等且经过人工确认前，不删除
 `apps/web/`，也不删除现有本地 HTTP API。
 
-## Active Milestone: M20 macOS Client Foundation
+## Completed Milestone: M20 macOS Client Foundation
 
 目标：建立可运行的 SwiftUI macOS 客户端骨架，并复用现有 Python Runtime 完成一条
 真实本地任务链路。
@@ -100,8 +100,10 @@ Python Paper Core ─────┤
   发送/停止按钮；论文目录继续通过工具栏或设置页选择。
 - 最新 Thinking、activity timeline、模型思考设置和输入区改动已在 Xcode
   成功构建并启动，用户已通过实际 App 截图完成界面检查；模型 API Key 已配置。
-- 尚未完成最终真实任务、停止操作、报告显示及 App 重启恢复的整条人工验收，
-  因此 M20 仍保持 Active，不进入 M21。
+- 已完成人工验收：真实论文任务正常完成并显示 Markdown 报告，运行中任务可停止
+  并持久化为中断状态；App 重启后论文目录、job、conversation、报告和中断状态
+  均正常恢复。
+- M20 已完成。按里程碑边界在此停止，不自动进入 M21。
 
 ### Not in M20
 
