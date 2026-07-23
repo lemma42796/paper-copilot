@@ -5,7 +5,7 @@
 
 ## Current Direction
 
-更新于 2026-07-23。
+更新于 2026-07-24。
 
 Paper Copilot 重构为两个开源、本地优先的产品入口：
 
@@ -49,10 +49,7 @@ Python Paper Core ─────┤
 - 多轮 conversation、上下文压缩、费用与论文预算。
 - Research Idea Composer、deterministic plan 和 proposal checker。
 - rollout trace、payload 脱敏、reducer 和 diagnostics。
-- WebSocket → SSE → polling 的现有本地 job 事件协议，直到原生客户端不再需要它。
-
-现有 Next.js Web UI 是迁移期实现。SwiftUI 达到功能对等且经过人工确认前，不删除
-`apps/web/`，也不删除现有本地 HTTP API。
+- SSE → polling 的本地 job 事件协议。
 
 ## Completed Milestone: M20 macOS Client Foundation
 
@@ -225,7 +222,7 @@ Python Paper Core ─────┤
 - M23 已完成。Developer ID 与 Notarization 留到正式公开发布阶段；按里程碑边界在此
   停止，不自动进入 M24。
 
-## M24 Legacy Web Retirement
+## Completed Milestone: M24 Legacy Web Retirement
 
 只有 SwiftUI 客户端达到功能对等并获得用户明确确认后才开始：
 
@@ -233,6 +230,17 @@ Python Paper Core ─────┤
 - 收窄仅为旧 Web UI 服务的 HTTP API。
 - 保留 macOS 客户端、MCP 和 Python Core 共同需要的 job、history、report 和
   diagnostics 能力。
+
+### Progress (2026-07-24)
+
+- 用户确认 SwiftUI 客户端达到退役旧 Web 的前置条件后，已删除 `apps/web/` 和只用于
+  旧界面的截图资源。
+- 本地 Runtime HTTP 边界已删除同步 chat、旧 reports、evidence lookup、Composer
+  library preview、桌面目录选择和独立 WebSocket 通道。
+- 保留 health、job 创建/列表/详情、增量事件、SSE、interrupt、resume、approval 和
+  diagnostics；job 持久化、conversation history、Markdown report、MCP 服务和
+  Python Core 未改变。
+- M24 已完成。当前没有自动开始新的里程碑。
 
 ## Deferred
 

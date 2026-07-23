@@ -45,7 +45,6 @@ def main() -> int:
     serve_http_api(
         host=_HOST,
         port=0,
-        websocket_port=0,
         shutdown_event=shutdown_event,
         ready_callback=announce_ready,
     )

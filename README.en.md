@@ -27,7 +27,6 @@ paper content ever leaves the device.
 
 ## Contents
 
-- [Frontend Preview](#frontend-preview)
 - [Project Status](#project-status)
 - [Core Capabilities](#core-capabilities)
 - [Quick Start](#quick-start)
@@ -41,33 +40,9 @@ paper content ever leaves the device.
 - [Known Limitations](#known-limitations)
 - [Contributing](#contributing)
 
-## Frontend Preview
-
-These screenshots show the migration-period Next.js UI: natural-language
-research input, local-library status, report history, Research Idea Composer,
-evidence inspection, and knowledge-Q&A reports. The active milestone is
-building a native SwiftUI macOS client. The Web UI remains until the native
-client reaches feature parity and is manually accepted.
-
-### Research Workbench and Local Library
-
-![Paper Copilot research workbench: natural-language input, report history, local-library status, and API connection status](docs/assets/paper-copilot-workbench.png)
-
-### Research Idea Composer
-
-![Paper Copilot Composer: Chinese research proposal, candidate-module table, and structured Composer summary](docs/assets/paper-copilot-composer.png)
-
-### Evidence Reference Lookup
-
-![Paper Copilot evidence panel: clicking an evidence ref opens the corresponding field or chunk evidence](docs/assets/paper-copilot-evidence.png)
-
-### Knowledge-Q&A Report
-
-![Paper Copilot knowledge-Q&A report: cross-paper answer, run metadata, and report history](docs/assets/paper-copilot-qa-report.png)
-
 ## Project Status
 
-This section follows `TASKS.md`, updated on 2026-07-23.
+This section follows `TASKS.md`, updated on 2026-07-24.
 
 Paper Copilot is being reorganized around two local product surfaces that share
 the same Python Core:
@@ -75,19 +50,15 @@ the same Python Core:
 - **SwiftUI macOS client:** M20 is complete. It owns native windows,
   folder authorization, Keychain storage, task and report presentation, and
   Python Runtime lifecycle.
-- **Local MCP Server:** M21 is complete. It exposes six read-only paper tools
-  over local `stdio` and has passed real Codex Agent tool discovery and query
-  acceptance.
+- **Local MCP Server:** M21/M22 are complete. It exposes six read-only paper
+  tools and four long-running job tools over local `stdio`.
+- **Distribution:** M23 produced a self-contained arm64 app and development
+  preview DMG. M24 retired the migration-period Next.js UI.
 
-Existing Python and Web baseline:
+Existing Python Core:
 
-- A host process exposes `paper_copilot.api.http.serve_http_api()`. The Web
-  frontend uses persistent jobs, preferring WebSocket events and falling back
-  to SSE and incremental polling. `POST /chat` remains a synchronous
-  compatibility endpoint.
-- `apps/web/` is the migration-period Next.js chat shell. It supports the local
-  library, multi-turn conversations, task progress, costs, Composer summaries,
-  and evidence inspection.
+- The macOS Runtime uses a narrowed local HTTP job API. Progress uses SSE with
+  incremental polling as fallback.
 - Retrieval uses DashScope `text-embedding-v4`, SQLite FTS5/BM25, sqlite-vec,
   reciprocal-rank fusion, and multi-chunk evidence selection. Previously
   computed embeddings are cached locally.
@@ -176,29 +147,17 @@ DASHSCOPE_API_KEY=sk-your-key-here
 PAPER_COPILOT_PDF_DIR=/path/to/your/papers
 ```
 
-### 3. Start the existing API and migration-period Web UI
+### 3. Start the macOS client
 
-The repository does not expose a terminal product command. A desktop host or
-another Python process can start the current local API:
-
-```python
-from paper_copilot.api.http import serve_http_api
-
-serve_http_api(host="127.0.0.1", port=8765)
-```
-
-The HTTP server listens on `8765` by default, with the job WebSocket on `8766`.
-The frontend discovers the WebSocket URL through `/health`.
-
-For Web frontend development:
+Open the project in Xcode for source development:
 
 ```bash
-cd apps/web
-npm ci
-npm run dev
+open apps/macos/PaperCopilot.xcodeproj
 ```
 
-Open `http://127.0.0.1:3000`.
+The client launches the local Python Runtime on a dynamic port and discovers it
+through the ready handshake. Distribution builds bundle Python Core inside the
+app.
 
 ## Configuration
 
@@ -229,16 +188,8 @@ LLM_MODEL=deepseek-v4-flash
 
 ## Running
 
-The migration-period Web UI remains available for developing and exercising
-the existing product flow:
-
-```bash
-cd apps/web
-npm ci
-npm run dev
-```
-
-Example request:
+Choose a local paper directory and model in the macOS client, then enter a
+request such as:
 
 ```text
 For person re-identification, choose a strong baseline, find recent compatible
@@ -290,32 +241,21 @@ that may leave the device when using a cloud client.
 
 ## Local HTTP API
 
-The local API deliberately uses Python's standard-library HTTP server plus
-`websockets`; it does not add FastAPI.
+The local API is an internal macOS Runtime boundary built on Python's
+standard-library HTTP server; it does not add FastAPI.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/health` | Health check and WebSocket discovery |
+| `GET` | `/health` | Runtime health check |
 | `POST` | `/jobs` | Create a persistent background job |
 | `GET` | `/jobs` | List recent jobs |
 | `GET` | `/jobs/<id>` | Read job status and result |
 | `GET` | `/jobs/<id>/events?after=N` | Read incremental progress events |
-| `GET` | `/jobs/<id>/stream?after=N` | SSE event fallback |
+| `GET` | `/jobs/<id>/stream?after=N` | SSE event stream |
 | `GET` | `/jobs/<id>/diagnostics` | Read local rollout diagnostics |
 | `POST` | `/jobs/<id>/interrupt` | Stop the running attempt |
 | `POST` | `/jobs/<id>/resume` | Create a new attempt using rollout replay |
 | `POST` | `/jobs/<id>/approval` | Approve or reject a pending tool action |
-| `POST` | `/chat` | Synchronous compatibility endpoint |
-| `GET` | `/reports` | List legacy chat/research reports |
-| `GET` | `/evidence?ref=...` | Resolve an evidence reference |
-| `GET` | `/composer/library` | Preview the Composer library |
-| `POST` | `/library/select-directory` | Directory picker used by the Web UI |
-
-The WebSocket endpoint is
-`ws://127.0.0.1:8766/jobs/<id>/stream?after=N`. It carries `job/events`
-notifications and request/response controls for interrupt, resume, and approval.
-If WebSocket is unavailable, controls fall back to HTTP and events fall back to
-SSE, then polling. All transports share the same event sequence cursor.
 
 Create a job:
 
@@ -348,9 +288,10 @@ Failed or interrupted output is not added to conversation memory.
 ## Architecture
 
 ```text
-SwiftUI macOS Client ─┐
-Legacy Next.js Web UI ├─> local HTTP/job API ─> Python Paper Core
-Local MCP Server ────────> read-only MCP tools ─┘
+SwiftUI macOS Client ──> local HTTP/job API ──┐
+Local MCP Server ──────> MCP tools ───────────┤
+                                              v
+                                      Python Paper Core
 
 Python Paper Core
   -> persistent chat.jobs lifecycle
@@ -372,7 +313,6 @@ Python Paper Core
 | `src/paper_copilot/session/` | Append-only JSONL session storage |
 | `src/paper_copilot/observability/` | Local rollout traces and diagnostics |
 | `apps/macos/` | M20 SwiftUI client |
-| `apps/web/` | Migration-period Next.js frontend |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for current technical structure and
 [TASKS.md](TASKS.md) for the active milestone.

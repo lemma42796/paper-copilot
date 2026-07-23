@@ -16,13 +16,6 @@ eval/report.html
 .env
 .env.local
 
-# Frontend
-node_modules/
-.next/
-*.tsbuildinfo
-apps/web/.env.local
-apps/web/out/
-
 # macOS
 .DS_Store
 xcuserdata/
