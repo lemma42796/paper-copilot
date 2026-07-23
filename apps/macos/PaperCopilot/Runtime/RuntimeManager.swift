@@ -14,8 +14,7 @@ final class RuntimeManager {
 
     private enum LaunchError: LocalizedError {
         case runtimeAlreadyRunning
-        case sourceRootUnavailable
-        case uvUnavailable
+        case runtimeUnavailable
         case handshakeEnded
         case invalidHandshake
 
@@ -23,10 +22,8 @@ final class RuntimeManager {
             switch self {
             case .runtimeAlreadyRunning:
                 return "Python Runtime 已在运行。"
-            case .sourceRootUnavailable:
-                return "找不到 Paper Copilot 源码目录。"
-            case .uvUnavailable:
-                return "找不到 uv。请安装 uv 或设置 PAPER_COPILOT_UV_PATH。"
+            case .runtimeUnavailable:
+                return "找不到应用内 Python Runtime，源码开发模式也无法使用 uv。"
             case .handshakeEnded:
                 return "Python Runtime 在发送 ready 握手前退出。"
             case .invalidHandshake:
@@ -52,12 +49,8 @@ final class RuntimeManager {
             onFailure(LaunchError.runtimeAlreadyRunning.localizedDescription)
             return
         }
-        guard let sourceRoot = sourceRootURL() else {
-            onFailure(LaunchError.sourceRootUnavailable.localizedDescription)
-            return
-        }
-        guard let uvURL = uvExecutableURL() else {
-            onFailure(LaunchError.uvUnavailable.localizedDescription)
+        guard let launch = launchConfiguration() else {
+            onFailure(LaunchError.runtimeUnavailable.localizedDescription)
             return
         }
 
@@ -65,13 +58,9 @@ final class RuntimeManager {
         let runtimeStdin = Pipe()
         let runtimeStdout = Pipe()
         let runtimeStderr = Pipe()
-        runtimeProcess.executableURL = uvURL
-        runtimeProcess.arguments = [
-            "run",
-            "paper-copilot-runtime",
-            "--exit-on-stdin-eof",
-        ]
-        runtimeProcess.currentDirectoryURL = sourceRoot
+        runtimeProcess.executableURL = launch.executableURL
+        runtimeProcess.arguments = launch.arguments
+        runtimeProcess.currentDirectoryURL = launch.currentDirectoryURL
         runtimeProcess.environment = ProcessInfo.processInfo.environment.merging(
             environmentOverrides
         ) { _, configuredValue in
@@ -148,6 +137,39 @@ final class RuntimeManager {
         stderrPipe = nil
         stopRequested = false
         stopCompletion = nil
+    }
+
+    private func launchConfiguration() -> (
+        executableURL: URL,
+        arguments: [String],
+        currentDirectoryURL: URL?
+    )? {
+        if let executableURL = bundledRuntimeExecutableURL() {
+            return (
+                executableURL,
+                ["--exit-on-stdin-eof"],
+                executableURL.deletingLastPathComponent()
+            )
+        }
+        guard let sourceRoot = sourceRootURL(), let uvURL = uvExecutableURL() else {
+            return nil
+        }
+        return (
+            uvURL,
+            ["run", "paper-copilot-runtime", "--exit-on-stdin-eof"],
+            sourceRoot
+        )
+    }
+
+    private func bundledRuntimeExecutableURL() -> URL? {
+        let executableURL = Bundle.main.bundleURL
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Resources", isDirectory: true)
+            .appendingPathComponent("PaperCopilotRuntime", isDirectory: true)
+            .appendingPathComponent("PaperCopilotRuntime")
+        return FileManager.default.isExecutableFile(atPath: executableURL.path)
+            ? executableURL
+            : nil
     }
 
     private func sourceRootURL() -> URL? {

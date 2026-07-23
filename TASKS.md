@@ -204,6 +204,19 @@ Python Paper Core ─────┤
 - 正式公开发布前再加入 Apple Developer Program；开发阶段不提前支付会员费。
 - Mac App Store 和 App Sandbox 适配另行决策，不作为首个公开版本的前置条件。
 
+### Progress (2026-07-24)
+
+- 已使用 PyInstaller 将 Python 3.12 Runtime、Python Core 和 `sqlite-vec` 原生库打包为
+  arm64 onedir helper；终端用户运行应用不再需要安装 Python、uv 或 Node.js。
+- 新增 `scripts/build_macos_app.sh`，一次生成 Swift Release、嵌入 helper、执行本地
+  ad-hoc 签名，并输出 `dist/macos/PaperCopilot.app`。
+- macOS 客户端优先启动应用资源内的 helper，源码开发构建在未包含 helper 时仍可回退
+  到现有 uv 启动路径。
+- 已确认最终 `.app` 签名有效，Swift 和 Python 可执行文件均为 arm64；内嵌 Runtime
+  完成真实 ready/health 握手、空论文库查询和正常关闭。当前应用大小约 102 MB。
+- 开发用 `.app` 阶段已完成；Developer ID、Notarization 和 DMG 尚未决定，不进入
+  M24。
+
 ## M24 Legacy Web Retirement
 
 只有 SwiftUI 客户端达到功能对等并获得用户明确确认后才开始：

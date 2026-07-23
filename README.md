@@ -53,13 +53,15 @@ PDF、索引、session、报告和 trace 默认保存在用户设备。本地检
 
 ## 项目状态
 
-当前状态同步自 `TASKS.md`，更新时间为 2026-07-23。
+当前状态同步自 `TASKS.md`，更新时间为 2026-07-24。
 
 Paper Copilot 正在重构为两个复用同一 Python Core 的本地产品入口：
 
 - SwiftUI macOS 客户端：M20 已完成，负责原生窗口、目录授权、Keychain、任务与报告界面，以及 Python Runtime 生命周期。
-- Local MCP Server：M21 已完成，提供本地 `stdio` transport 和六个只读论文工具，
-  并已通过真实 Codex Agent 工具发现与查询验收。
+- Local MCP Server：M21/M22 已完成，提供本地 `stdio` transport、六个只读论文工具
+  和四个长任务工具，并已通过真实 Codex Agent 工具发现与查询验收。
+- M23 已生成首个内嵌 Python Runtime 的 arm64 开发版 `.app`；终端用户运行它不需要
+  安装 Python、uv 或 Node.js。Developer ID、公证和 DMG 仍待决定。
 
 现有 Python 与 Web 基线：
 
@@ -184,6 +186,16 @@ git clone https://github.com/lemma42796/paper-copilot.git
 cd paper-copilot
 uv sync --dev
 ```
+
+开发用 Apple Silicon 应用：
+
+```bash
+./scripts/build_macos_app.sh
+open dist/macos/PaperCopilot.app
+```
+
+构建脚本输出包含 Python Runtime 的 `dist/macos/PaperCopilot.app`，并使用本地 ad-hoc
+签名，仅适合开发和本机验收。公开分发前仍需决定 Developer ID、Notarization 和 DMG。
 
 ## 配置
 
@@ -445,12 +457,13 @@ git diff --check -- README.md README.en.md
 
 1. M20 SwiftUI macOS Client Foundation 已完成。
 2. M21 Local Read-only MCP 已完成。
-3. 当前停止；只有用户明确要求才进入 M22 MCP Long-running Jobs。
+3. M22 MCP Long-running Jobs 已完成。
+4. M23 已完成开发用 arm64 `.app` 阶段；当前停止在 Developer ID、公证和 DMG 决策前。
 
 ## 已知限制
 
 - 不支持云同步、账号、多用户 ACL 或托管部署。
-- M20 开发阶段尚未把 Python Runtime 打包进 `.app`；免安装分发属于 M23。
+- 当前开发版 `.app` 仅支持 Apple Silicon，使用 ad-hoc 签名，尚未公证或制作 DMG。
 - 核心运行时不联网发现论文，只基于本地 PDF 和本地索引。
 - active retrieval path 没有 cross-encoder 或 LLM reranker。
 - evidence chunk grounding 仍是已知风险，不能把每条生成 claim 都视为完全 grounded。

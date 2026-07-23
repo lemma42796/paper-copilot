@@ -30,6 +30,7 @@ packages = ["src/paper_copilot"]
 
 [dependency-groups]
 dev = [
+    "pyinstaller>=6.0",
     "ruff>=0.15.11",
     "mypy>=1.20.1",
     "pytest>=9.0.3",
