@@ -19,6 +19,7 @@
 		01000000000000000000000A /* ConversationSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000C /* ConversationSidebar.swift */; };
 		01000000000000000000000B /* ConversationDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000D /* ConversationDetailView.swift */; };
 		01000000000000000000000C /* ModelConfigurationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000E /* ModelConfigurationStore.swift */; };
+		01000000000000000000000D /* MarkdownReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000F /* MarkdownReportView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +37,7 @@
 		02000000000000000000000C /* ConversationSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSidebar.swift; sourceTree = "<group>"; };
 		02000000000000000000000D /* ConversationDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDetailView.swift; sourceTree = "<group>"; };
 		02000000000000000000000E /* ModelConfigurationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelConfigurationStore.swift; sourceTree = "<group>"; };
+		02000000000000000000000F /* MarkdownReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownReportView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -86,6 +88,7 @@
 				020000000000000000000009 /* SettingsView.swift */,
 				02000000000000000000000C /* ConversationSidebar.swift */,
 				02000000000000000000000D /* ConversationDetailView.swift */,
+				02000000000000000000000F /* MarkdownReportView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -200,6 +203,7 @@
 				01000000000000000000000A /* ConversationSidebar.swift in Sources */,
 				01000000000000000000000B /* ConversationDetailView.swift in Sources */,
 				01000000000000000000000C /* ModelConfigurationStore.swift in Sources */,
+				01000000000000000000000D /* MarkdownReportView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

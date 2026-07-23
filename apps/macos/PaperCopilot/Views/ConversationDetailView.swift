@@ -30,14 +30,14 @@ struct ConversationDetailView: View {
     }
 
     private var composer: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             TextField("询问你的论文库…", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.body)
                 .lineLimit(1...3)
                 .frame(
-                    minHeight: 28,
-                    maxHeight: 64,
+                    minHeight: 22,
+                    maxHeight: 52,
                     alignment: .topLeading
                 )
                 .onSubmit {
@@ -52,8 +52,8 @@ struct ConversationDetailView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.top, 10)
-        .padding(.bottom, 8)
+        .padding(.top, 7)
+        .padding(.bottom, 6)
         .background(.background)
         .clipShape(RoundedRectangle(cornerRadius: 20))
         .overlay {
@@ -82,7 +82,7 @@ struct ConversationDetailView: View {
             } label: {
                 Image(systemName: "stop.fill")
                     .font(.system(size: 13, weight: .semibold))
-                    .frame(width: 36, height: 36)
+                    .frame(width: 32, height: 32)
                     .background(.red)
                     .foregroundStyle(.white)
                     .clipShape(Circle())
@@ -102,7 +102,7 @@ struct ConversationDetailView: View {
                             .font(.system(size: 17, weight: .semibold))
                     }
                 }
-                .frame(width: 36, height: 36)
+                .frame(width: 32, height: 32)
                 .background(canSend ? Color.accentColor : Color.secondary)
                 .foregroundStyle(.white)
                 .clipShape(Circle())
@@ -922,38 +922,6 @@ private struct ActivityRow: View {
             return .green
         case .started, .delta:
             return .secondary
-        }
-    }
-}
-
-private struct MarkdownReportView: View {
-    let markdown: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("报告", systemImage: "doc.richtext")
-                .font(.headline)
-            Text(attributedMarkdown)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(18)
-        .background(.background)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(.separator, lineWidth: 1)
-        }
-    }
-
-    private var attributedMarkdown: AttributedString {
-        do {
-            return try AttributedString(
-                markdown: markdown,
-                options: .init(interpretedSyntax: .full)
-            )
-        } catch {
-            return AttributedString(markdown)
         }
     }
 }
