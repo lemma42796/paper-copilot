@@ -195,7 +195,7 @@ Python Paper Core ─────┤
   新任务的启动、增量状态查询、取消请求、interrupted 终态和无结果查询。
 - M22 已完成。按里程碑边界在此停止，不自动进入 M23。
 
-## M23 Distribution
+## Completed Milestone: M23 Distribution
 
 只有客户端核心流程稳定后才开始：
 
@@ -214,8 +214,16 @@ Python Paper Core ─────┤
   到现有 uv 启动路径。
 - 已确认最终 `.app` 签名有效，Swift 和 Python 可执行文件均为 arm64；内嵌 Runtime
   完成真实 ready/health 握手、空论文库查询和正常关闭。当前应用大小约 102 MB。
-- 开发用 `.app` 阶段已完成；Developer ID、Notarization 和 DMG 尚未决定，不进入
-  M24。
+- 已新增开发预览用 arm64 DMG 构建入口，默认沿用 ad-hoc 签名，并在 README 说明
+  Gatekeeper 的单 App 放行步骤；构建脚本预留 Developer ID 和 Keychain notarytool
+  profile 参数，不在仓库保存证书或 Apple 凭据。
+- 已完成一次真实 DMG 构建：输出 53 MB `PaperCopilot-arm64.dmg`，镜像校验和有效，
+  包含 App 与 Applications 链接；App 和内嵌 Runtime 均为 arm64，深度签名完整且
+  Gatekeeper 按预期拒绝未公证的 ad-hoc 版本。
+- 已从 DMG 内直接启动内嵌 Runtime，完成真实 ready/health 握手和正常关闭；用户已在
+  图形界面完成 DMG 安装、App 启动和一次真实论文任务，结果正常。
+- M23 已完成。Developer ID 与 Notarization 留到正式公开发布阶段；按里程碑边界在此
+  停止，不自动进入 M24。
 
 ## M24 Legacy Web Retirement
 

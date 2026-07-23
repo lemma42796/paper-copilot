@@ -9,6 +9,7 @@ HELPER_NAME="PaperCopilotRuntime"
 HELPER_DIST="$BUILD_ROOT/helper/$HELPER_NAME"
 DERIVED_DATA="$BUILD_ROOT/DerivedData"
 BUILT_APP="$DERIVED_DATA/Build/Products/Release/PaperCopilot.app"
+SIGN_IDENTITY="${PAPER_COPILOT_SIGN_IDENTITY:--}"
 
 rm -rf "$BUILD_ROOT" "$FINAL_APP"
 mkdir -p "$BUILD_ROOT/spec" "$(dirname -- "$FINAL_APP")"
@@ -42,7 +43,18 @@ xcodebuild \
 
 mkdir -p "$BUILT_APP/Contents/Resources"
 ditto "$HELPER_DIST" "$BUILT_APP/Contents/Resources/$HELPER_NAME"
-codesign --force --sign - "$BUILT_APP"
+if [ "$SIGN_IDENTITY" = "-" ]; then
+    codesign --force --sign - "$BUILT_APP"
+else
+    codesign \
+        --force \
+        --deep \
+        --options runtime \
+        --timestamp \
+        --sign "$SIGN_IDENTITY" \
+        "$BUILT_APP"
+fi
+codesign --verify --deep --strict "$BUILT_APP"
 ditto "$BUILT_APP" "$FINAL_APP"
 
 echo "$FINAL_APP"
