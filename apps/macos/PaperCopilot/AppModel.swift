@@ -53,7 +53,7 @@ final class AppModel: ObservableObject {
     @Published var selectedConversationID: String?
 
     private let bookmarkStore = LibraryBookmarkStore()
-    private let keychain = KeychainStore()
+    private let credentialStore = CredentialStore()
     private let modelStore = ModelConfigurationStore()
     private let runtimeManager = RuntimeManager()
     private var api: PaperCopilotAPI?
@@ -69,13 +69,13 @@ final class AppModel: ObservableObject {
     private func initializeModelRuntime() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
-                let keychain = KeychainStore()
+                let credentialStore = CredentialStore()
                 let modelStore = ModelConfigurationStore()
                 try Self.migrateLegacyModelConfiguration(
                     modelStore: modelStore
                 )
                 let snapshot = try Self.modelConfigurationSnapshot(
-                    keychain: keychain,
+                    credentialStore: credentialStore,
                     modelStore: modelStore
                 )
                 DispatchQueue.main.async {
@@ -236,7 +236,7 @@ final class AppModel: ObservableObject {
     }
 
     func modelAPIKey(for configuration: ModelConfiguration) throws -> String {
-        try keychain.readModelKey(configuration.id)
+        try credentialStore.readModelKey(configuration.id)
     }
 
     func saveModelConfiguration(
@@ -253,7 +253,7 @@ final class AppModel: ObservableObject {
             throw ModelConfigurationError.invalidConfiguration
         }
 
-        try keychain.saveModelKey(apiKey, modelID: configuration.id)
+        try credentialStore.saveModelKey(apiKey, modelID: configuration.id)
         var configurations = modelConfigurations
         if let index = configurations.firstIndex(
             where: { $0.id == configuration.id }
@@ -292,7 +292,7 @@ final class AppModel: ObservableObject {
             $0.id != configuration.id
         }
         try modelStore.save(configurations)
-        try keychain.deleteModelKey(configuration.id)
+        try credentialStore.deleteModelKey(configuration.id)
         reloadModelConfigurations()
     }
 
@@ -527,7 +527,7 @@ final class AppModel: ObservableObject {
         else {
             throw ModelConfigurationError.invalidConfiguration
         }
-        let providerKey = try keychain.readModelKey(selectedModel.id)
+        let providerKey = try credentialStore.readModelKey(selectedModel.id)
         guard !providerKey.trimmingCharacters(
             in: .whitespacesAndNewlines
         ).isEmpty else {
@@ -558,7 +558,7 @@ final class AppModel: ObservableObject {
         let selectedHost = URL(string: selectedModel.baseURL)?.host ?? ""
         let dashscopeAPIKey = selectedHost.contains("dashscope.aliyuncs.com")
             ? providerKey
-            : try keychain.read(.dashscopeAPIKey)
+            : try credentialStore.read(.dashscopeAPIKey)
         if !dashscopeAPIKey.isEmpty {
             environment["DASHSCOPE_API_KEY"] = dashscopeAPIKey
         }
@@ -592,14 +592,14 @@ final class AppModel: ObservableObject {
     }
 
     nonisolated private static func modelConfigurationSnapshot(
-        keychain: KeychainStore,
+        credentialStore: CredentialStore,
         modelStore: ModelConfigurationStore
     ) throws -> ModelConfigurationSnapshot {
         let configurations = try modelStore.load()
         var available: [ModelConfiguration] = []
         for configuration in configurations
         where configuration.isEnabled && configuration.hasCompleteMetadata {
-            let apiKey = try keychain.readModelKey(configuration.id)
+            let apiKey = try credentialStore.readModelKey(configuration.id)
             if !apiKey.trimmingCharacters(
                 in: .whitespacesAndNewlines
             ).isEmpty {
@@ -628,7 +628,7 @@ final class AppModel: ObservableObject {
     private func loadModelConfigurations() throws {
         apply(
             try Self.modelConfigurationSnapshot(
-                keychain: keychain,
+                credentialStore: credentialStore,
                 modelStore: modelStore
             )
         )

@@ -78,7 +78,7 @@ struct SettingsView: View {
         .alert(item: $pendingDeletion) { configuration in
             Alert(
                 title: Text("删除“\(configuration.displayName)”？"),
-                message: Text("模型配置及其 Keychain API Key 将被删除。"),
+                message: Text("模型配置及其本地 API Key 将被删除。"),
                 primaryButton: .destructive(Text("删除")) {
                     delete(configuration)
                 },

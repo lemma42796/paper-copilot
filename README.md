@@ -104,7 +104,10 @@ notarytool profile 必须预先保存到 Keychain；仓库不保存证书或 App
 | `PAPER_COPILOT_HOME` | 数据根目录，默认 `~/.paper-copilot` |
 | `PAPER_COPILOT_PDF_DIR` | 本地 PDF 目录 |
 
-macOS 客户端将 LLM Key 保存到 Keychain。embedding 模型或维度变化后必须重建索引。
+macOS 客户端将 LLM Key 保存到
+`~/Library/Application Support/PaperCopilot/auth.json`，文件权限为 `0600`。
+旧版 Keychain 密钥不会自动迁移，升级后需在模型设置中重新输入一次 API Key。
+embedding 模型或维度变化后必须重建索引。
 
 使用 DeepSeek 官方 API 时只需替换前三个 LLM 变量；embedding 仍使用独立的
 `DASHSCOPE_API_KEY`。

@@ -120,7 +120,10 @@ credentials are never stored in the repository.
 | `PAPER_COPILOT_HOME` | Data root; defaults to `~/.paper-copilot` |
 | `PAPER_COPILOT_PDF_DIR` | Local PDF directory |
 
-The macOS client stores LLM keys in Keychain. Changing the embedding model or
+The macOS client stores LLM keys in
+`~/Library/Application Support/PaperCopilot/auth.json` with `0600` file
+permissions. Existing Keychain credentials are not migrated; enter each API key
+once in model settings after upgrading. Changing the embedding model or
 dimension requires rebuilding the index.
 
 To use the official DeepSeek API, replace the three LLM variables. Embeddings

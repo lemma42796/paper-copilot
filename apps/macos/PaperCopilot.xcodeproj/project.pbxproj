@@ -12,7 +12,7 @@
 		010000000000000000000003 /* RuntimeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000003 /* RuntimeManager.swift */; };
 		010000000000000000000004 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000004 /* ContentView.swift */; };
 		010000000000000000000005 /* LibraryBookmarkStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000007 /* LibraryBookmarkStore.swift */; };
-		010000000000000000000006 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000008 /* KeychainStore.swift */; };
+		010000000000000000000006 /* CredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000008 /* CredentialStore.swift */; };
 		010000000000000000000007 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000009 /* SettingsView.swift */; };
 		010000000000000000000008 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000A /* Models.swift */; };
 		010000000000000000000009 /* PaperCopilotAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000B /* PaperCopilotAPI.swift */; };
@@ -30,7 +30,7 @@
 		020000000000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		020000000000000000000006 /* PaperCopilot.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PaperCopilot.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		020000000000000000000007 /* LibraryBookmarkStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryBookmarkStore.swift; sourceTree = "<group>"; };
-		020000000000000000000008 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		020000000000000000000008 /* CredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CredentialStore.swift; sourceTree = "<group>"; };
 		020000000000000000000009 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		02000000000000000000000A /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		02000000000000000000000B /* PaperCopilotAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaperCopilotAPI.swift; sourceTree = "<group>"; };
@@ -97,7 +97,7 @@
 			isa = PBXGroup;
 			children = (
 				020000000000000000000007 /* LibraryBookmarkStore.swift */,
-				020000000000000000000008 /* KeychainStore.swift */,
+				020000000000000000000008 /* CredentialStore.swift */,
 				02000000000000000000000E /* ModelConfigurationStore.swift */,
 			);
 			path = Storage;
@@ -196,7 +196,7 @@
 				010000000000000000000003 /* RuntimeManager.swift in Sources */,
 				010000000000000000000004 /* ContentView.swift in Sources */,
 				010000000000000000000005 /* LibraryBookmarkStore.swift in Sources */,
-				010000000000000000000006 /* KeychainStore.swift in Sources */,
+				010000000000000000000006 /* CredentialStore.swift in Sources */,
 				010000000000000000000007 /* SettingsView.swift in Sources */,
 				010000000000000000000008 /* Models.swift in Sources */,
 				010000000000000000000009 /* PaperCopilotAPI.swift in Sources */,
