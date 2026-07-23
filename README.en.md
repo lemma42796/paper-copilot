@@ -1,7 +1,7 @@
 # Paper Copilot
 
-> Local-first research copilot for reading PDFs, searching a personal paper
-> library, and composing evidence-grounded research notes and model-framework
+> A local-first research assistant for reading PDFs, searching a personal paper
+> library, and producing evidence-grounded research notes and model-framework
 > drafts.
 
 ![Python](https://img.shields.io/badge/python-3.12+-blue)
@@ -11,36 +11,43 @@
 
 [简体中文](README.md) | English
 
-Paper Copilot is built for a small local library of research PDFs. It reads
-papers into structured reports, builds local SQLite / sqlite-vec indexes,
-answers questions over the library, compares papers, and helps turn a research
-direction into a verifiable baseline + module model-framework draft.
+Paper Copilot is designed for a small personal library of research PDFs. It
+turns papers into structured reports, builds local SQLite and sqlite-vec
+indexes, and uses one natural-language input for paper Q&A, cross-paper search,
+comparison, and verifiable baseline-plus-module research proposals.
 
-It is not meant to invent results or write a paper for you. The goal is to keep
-evidence, sources, costs, traces, and failure boundaries visible so research
-ideas are easier to verify.
+It is not intended to invent results or write papers on a researcher's behalf.
+Its purpose is to keep evidence, sources, costs, traces, and failure boundaries
+visible so that research ideas are easier to verify.
+
+PDFs, indexes, sessions, reports, and traces remain on the user's device by
+default. Necessary text fragments selected by local retrieval may be sent to a
+user-configured cloud model. "The PDF is not uploaded" does not mean that no
+paper content ever leaves the device.
 
 ## Contents
 
-- [Frontend Demo](#frontend-demo)
-- [Status](#status)
-- [Features](#features)
+- [Frontend Preview](#frontend-preview)
+- [Project Status](#project-status)
+- [Core Capabilities](#core-capabilities)
 - [Quick Start](#quick-start)
-- [Installation](#installation)
 - [Configuration](#configuration)
 - [Running](#running)
 - [Local HTTP API](#local-http-api)
+- [Architecture](#architecture)
 - [Data Layout](#data-layout)
 - [Development](#development)
 - [Roadmap](#roadmap)
 - [Known Limitations](#known-limitations)
 - [Contributing](#contributing)
 
-## Frontend Demo
+## Frontend Preview
 
-The screenshots below cover the main frontend surface: natural-language
+These screenshots show the migration-period Next.js UI: natural-language
 research input, local-library status, report history, Research Idea Composer,
-evidence lookup, and knowledge-QA reports.
+evidence inspection, and knowledge-Q&A reports. The active milestone is
+building a native SwiftUI macOS client. The Web UI remains until the native
+client reaches feature parity and is manually accepted.
 
 ### Research Workbench and Local Library
 
@@ -52,107 +59,99 @@ evidence lookup, and knowledge-QA reports.
 
 ### Evidence Reference Lookup
 
-![Paper Copilot evidence panel: clicking an evidence ref in the report opens field evidence details](docs/assets/paper-copilot-evidence.png)
+![Paper Copilot evidence panel: clicking an evidence ref opens the corresponding field or chunk evidence](docs/assets/paper-copilot-evidence.png)
 
-### Knowledge-QA Report
+### Knowledge-Q&A Report
 
-![Paper Copilot knowledge-QA report: cross-paper answer, run metadata, and report history](docs/assets/paper-copilot-qa-report.png)
+![Paper Copilot knowledge-Q&A report: cross-paper answer, run metadata, and report history](docs/assets/paper-copilot-qa-report.png)
 
-## Status
+## Project Status
 
-Current status is synced from `TASKS.md`, last updated on 2026-07-20.
+This section follows `TASKS.md`, updated on 2026-07-23.
 
-Paper Copilot has moved toward a local chat-first research assistant:
+Paper Copilot is being reorganized around two local product surfaces that share
+the same Python Core:
 
-- The terminal command interface has been removed. A host process exposes the
-  local API by calling `paper_copilot.api.http.serve_http_api()`; the main
-  runtime endpoint is `POST /chat`.
-- `apps/web/` contains a Next.js macOS-style chat shell with library selection,
-  report history, run status, cost display, Composer summaries, and
-  evidence inspection.
-- Retrieval now uses DashScope `text-embedding-v4` with FTS5/BM25 + vector RRF +
-  multi-chunk evidence; previously computed text embeddings are reused from a
-  local cache to avoid repeated model calls.
-- The current local test library contains 34 papers / 2066 chunks.
-- M19 Research Idea Composer now includes local-library-first tool constraints,
-  deterministic plan/state, a proposal checker, field/chunk evidence lookup, and
-  Markdown table rendering in reports.
-- Current validation boundary: the VI-ReID single-case demo passes the quality
-  gate cleanly; the 2-3 fixed-task cross-task acceptance suite was intentionally
-  skipped, so this is not claimed as stable across tasks yet.
+- **SwiftUI macOS client:** the active M20 milestone. It owns native windows,
+  folder authorization, Keychain storage, task and report presentation, and
+  Python Runtime lifecycle.
+- **Local MCP Server:** begins only after M20 and explicit user approval. Its
+  first version uses local `stdio` transport and read-only paper tools.
 
-Current retrieval gate:
+Existing Python and Web baseline:
 
-| Metric | Result | Notes |
-| --- | ---: | --- |
-| paper `recall@5` | 98.4% | Mean over 36 seed queries |
-| paper `recall@10` | 100.0% | Paper-level recall is good enough for now |
-| paper `precision@5` | 32.8% | Relevant papers among topK |
-| paper `precision@10` | 16.9% | Expected to drop as topK expands |
-| evidence `recall@5` | 87.2% | Mean over 13 anchor-labeled queries; exact + semantic window match |
-| evidence `recall@10` | 89.7% | Evidence chunk coverage remains a known grounding risk |
-| evidence anchor `precision@5` | 44.9% | Anchor/semantic-window hit metric, not full relevance |
-| evidence anchor `precision@10` | 45.3% | Same metric boundary; unlabeled chunks are not full relevance judgments |
+- A host process exposes `paper_copilot.api.http.serve_http_api()`. The Web
+  frontend uses persistent jobs, preferring WebSocket events and falling back
+  to SSE and incremental polling. `POST /chat` remains a synchronous
+  compatibility endpoint.
+- `apps/web/` is the migration-period Next.js chat shell. It supports the local
+  library, multi-turn conversations, task progress, costs, Composer summaries,
+  and evidence inspection.
+- Retrieval uses DashScope `text-embedding-v4`, SQLite FTS5/BM25, sqlite-vec,
+  reciprocal-rank fusion, and multi-chunk evidence selection. Previously
+  computed embeddings are cached locally.
+- Persistent jobs support attempts, interruption, rollout replay, conversation
+  history, context compaction, and local rollout diagnostics.
+- Research Idea Composer has deterministic plan state, a proposal checker,
+  field/chunk evidence lookup, and Markdown report rendering.
 
-This is still an experimental, local-first, personal-library tool. The intended
-scale is roughly 50-100 papers, not a hosted SaaS, multi-user platform, or
-open-ended autonomous literature reviewer.
+The intended scale is about 50-100 papers in a personal library. This is not a
+hosted SaaS, multi-user platform, or open-ended autonomous literature-review
+system.
 
-## Features
+## Core Capabilities
 
 ### Paper Reading
 
 - Read a PDF into a structured Markdown report.
 - Extract contributions, methods, experiments, limitations, and cross-paper
-  links.
-- Preserve `session.jsonl` for LLM calls, schema outputs, traces, and costs.
+  relationships.
+- Preserve an append-only `session.jsonl` for model history and recovery.
 
 ### Local Library Retrieval
 
 - Store structured fields in `fields.db`.
-- Store cross-paper chunks in `embeddings.db` with `sqlite-vec`.
-- Return relevant papers and evidence chunks with FTS5/BM25 + dense retrieval +
-  RRF fusion.
-- Avoid external vector databases for the intended personal-library scale.
+- Store cross-paper chunks and vectors in `embeddings.db` with sqlite-vec.
+- Combine FTS5/BM25 and dense retrieval with RRF.
+- Return stable evidence references that can be inspected after generation.
+- Avoid an external vector database at personal-library scale.
 
 ### Chat-first Research Entry
 
-- Accept a natural-language request.
-- Let Paper Copilot decide whether to answer directly or call one or more tools.
-- Casual conversation uses no paper tools; the model selects tools when local
-  evidence, PDF reading, comparison, or proposal generation is needed.
-- Return Markdown, session/report paths, cost, termination reason, and
-  paper budget.
+- Accept a plain natural-language request.
+- Let the single Paper Copilot Agent decide whether to answer directly or call
+  one or more bounded tools.
+- Return Markdown, session/report paths, cost, termination reason, and paper
+  budget.
+- Persist jobs independently of the client connection.
 
 ### Model-framework Drafts From Research Directions
 
 Given a research direction, Paper Copilot can:
 
-1. Select a strong baseline.
-2. Search candidate modules with a CCF A -> CCF B -> Other local-library-first
-   priority.
-3. Use deterministic Composer plan/state to constrain baseline selection, module
+1. Select one strong baseline.
+2. Search candidate modules in local-library priority order.
+3. Use deterministic plan state to constrain baseline selection, module
    selection, and fallback order.
 4. Analyze compatibility, attachment points, and risks.
-5. Compose a baseline + modules model-framework draft with ablations and
-   evidence citations.
-6. Use a proposal checker to catch unsupported metric gains, training
-   hyperparameters, complexity changes, and similar claims, then downgrade
-   uncertain content into hypotheses.
+5. Produce a baseline-plus-modules proposal with ablations and evidence.
+6. Downgrade unsupported implementation details and expected gains to explicit
+   hypotheses.
 
-The output is a verifiable research draft, not a finished paper and not proof of
-effectiveness.
+The result is a testable proposal, not a finished paper and not proof that the
+combination will work.
 
 ### Eval and Observability
 
 - Field-level golden regression.
 - Retrieval query suites.
-- Run history and static HTML trend reports.
-- Cache-hit, latency, token, and CNY cost diagnostics.
+- Run history and a static HTML trend report.
+- Local rollout traces and diagnostics.
+- Cache-hit, latency, token, and CNY cost tracking.
 
 ## Quick Start
 
-### 1. Prepare the local backend development environment
+### 1. Prepare the Python development environment
 
 ```bash
 git clone https://github.com/lemma42796/paper-copilot.git
@@ -160,7 +159,7 @@ cd paper-copilot
 uv sync --dev
 ```
 
-### 2. Configure models and your paper folder
+### 2. Configure the model and paper library
 
 ```bash
 cp .env.example .env
@@ -169,16 +168,17 @@ cp .env.example .env
 Edit `.env`:
 
 ```bash
-ANTHROPIC_BASE_URL=https://dashscope.aliyuncs.com/apps/anthropic
-ANTHROPIC_API_KEY=sk-your-key-here
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_API_KEY=sk-your-key-here
+LLM_MODEL=qwen3.6-flash
 DASHSCOPE_API_KEY=sk-your-key-here
 PAPER_COPILOT_PDF_DIR=/path/to/your/papers
 ```
 
-### 3. Integrate the local API and web UI
+### 3. Start the existing API and migration-period Web UI
 
-The repository no longer exposes a terminal command interface. A desktop host
-or another Python process can call:
+The repository does not expose a terminal product command. A desktop host or
+another Python process can start the current local API:
 
 ```python
 from paper_copilot.api.http import serve_http_api
@@ -186,7 +186,10 @@ from paper_copilot.api.http import serve_http_api
 serve_http_api(host="127.0.0.1", port=8765)
 ```
 
-For web frontend development:
+The HTTP server listens on `8765` by default, with the job WebSocket on `8766`.
+The frontend discovers the WebSocket URL through `/health`.
+
+For Web frontend development:
 
 ```bash
 cd apps/web
@@ -196,46 +199,37 @@ npm run dev
 
 Open `http://127.0.0.1:3000`.
 
-## Installation
-
-Requirements:
-
-- Python 3.12+
-- [`uv`](https://docs.astral.sh/uv/)
-- Node.js 20+ for the web UI
-- DashScope / Bailian API keys
-
-Development environment:
-
-```bash
-git clone https://github.com/lemma42796/paper-copilot.git
-cd paper-copilot
-uv sync --dev
-```
-
 ## Configuration
 
-`.env.example` defaults to Alibaba Cloud Bailian / DashScope's
-Anthropic-compatible LLM endpoint and OpenAI-compatible embedding endpoint.
+`.env.example` defaults to Alibaba Cloud Bailian/DashScope's OpenAI-compatible
+Chat Completions endpoint and DashScope's embedding endpoint. The LLM client can
+also use DeepSeek's OpenAI-compatible endpoint.
 
 | Variable | Purpose |
 | --- | --- |
-| `ANTHROPIC_BASE_URL` | LLM endpoint; defaults to Bailian's Anthropic-compatible API |
-| `ANTHROPIC_API_KEY` | LLM API key |
+| `LLM_BASE_URL` | OpenAI-compatible LLM base URL |
+| `LLM_API_KEY` | API key for the configured LLM endpoint |
+| `LLM_MODEL` | Model ID; defaults to `qwen3.6-flash` |
 | `DASHSCOPE_API_KEY` | Embedding key for `text-embedding-v4` |
 | `PAPER_COPILOT_HOME` | Runtime data root; defaults to `~/.paper-copilot` |
-| `PAPER_COPILOT_PDF_DIR` | Default local PDF folder for chat/research |
+| `PAPER_COPILOT_PDF_DIR` | Default local PDF library |
 
-For a new environment, point `PAPER_COPILOT_PDF_DIR` at your paper folder.
-Indexes are synchronized when the product reads papers. After changing the
-embedding model or dimension, the host application must rebuild the indexes
-before querying them again.
+Indexes are synchronized when the product reads papers. Changing the embedding
+model or dimension requires rebuilding the index before querying it again.
+
+For the official DeepSeek API, change the LLM variables while keeping a
+separate DashScope embedding key:
+
+```bash
+LLM_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=sk-your-deepseek-key
+LLM_MODEL=deepseek-v4-flash
+```
 
 ## Running
 
-The web UI is the current product entry. It expects a host process to expose the
-local HTTP API; the repository no longer provides a terminal startup command.
-Frontend development remains in `apps/web/`:
+Until the M20 native client is complete, the Web UI remains available for
+developing and exercising the existing product flow:
 
 ```bash
 cd apps/web
@@ -243,34 +237,50 @@ npm ci
 npm run dev
 ```
 
-Example prompt:
+Example request:
 
 ```text
-For person re-identification, choose a strong baseline, find recent pluggable
-modules, compose a verifiable new model framework, and include ablations and
-evidence citations.
+For person re-identification, choose a strong baseline, find recent compatible
+modules, compose a verifiable model framework, and include ablations and
+evidence references.
 ```
 
 ## Local HTTP API
 
-The local API intentionally stays lightweight. It uses Python's stdlib HTTP
-server and does not add FastAPI.
+The local API deliberately uses Python's standard-library HTTP server plus
+`websockets`; it does not add FastAPI.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/health` | Health check |
-| `POST` | `/chat` | Run a natural-language request |
-| `GET` | `/reports` | List recent chat/research reports |
-| `GET` | `/evidence?ref=...` | Resolve an evidence ref to chunk text |
-| `POST` | `/library/select-directory` | Desktop directory picker for the web UI |
+| `GET` | `/health` | Health check and WebSocket discovery |
+| `POST` | `/jobs` | Create a persistent background job |
+| `GET` | `/jobs` | List recent jobs |
+| `GET` | `/jobs/<id>` | Read job status and result |
+| `GET` | `/jobs/<id>/events?after=N` | Read incremental progress events |
+| `GET` | `/jobs/<id>/stream?after=N` | SSE event fallback |
+| `GET` | `/jobs/<id>/diagnostics` | Read local rollout diagnostics |
+| `POST` | `/jobs/<id>/interrupt` | Stop the running attempt |
+| `POST` | `/jobs/<id>/resume` | Create a new attempt using rollout replay |
+| `POST` | `/jobs/<id>/approval` | Approve or reject a pending tool action |
+| `POST` | `/chat` | Synchronous compatibility endpoint |
+| `GET` | `/reports` | List legacy chat/research reports |
+| `GET` | `/evidence?ref=...` | Resolve an evidence reference |
+| `GET` | `/composer/library` | Preview the Composer library |
+| `POST` | `/library/select-directory` | Directory picker used by the Web UI |
 
-`POST /chat` example:
+The WebSocket endpoint is
+`ws://127.0.0.1:8766/jobs/<id>/stream?after=N`. It carries `job/events`
+notifications and request/response controls for interrupt, resume, and approval.
+If WebSocket is unavailable, controls fall back to HTTP and events fall back to
+SSE, then polling. All transports share the same event sequence cursor.
+
+Create a job:
 
 ```bash
-curl -sS -X POST http://127.0.0.1:8765/chat \
+curl -sS -X POST http://127.0.0.1:8765/jobs \
   -H 'Content-Type: application/json' \
   -d '{
-    "message": "find a ReID strong baseline, then 2-3 compatible modules and an experiment plan",
+    "message": "Find a strong ReID baseline and 2-3 compatible modules",
     "pdf_dir": "/path/to/your/papers",
     "max_turns": 16,
     "budget_cny": 2.0,
@@ -278,43 +288,50 @@ curl -sS -X POST http://127.0.0.1:8765/chat \
   }'
 ```
 
-The response includes:
+The endpoint returns immediately with a persistent job record. The final job
+result includes:
 
 - Markdown report
-- session path / report path
-- quality run path / eval report path
+- session and report paths
+- quality-run and eval-report paths
 - termination reason
-- cost
-- events count
+- cost and event count
 - paper budget
+
+For a follow-up turn, pass the previous job's `spec.conversation_id` in a new
+job request. Completed prior turns become controlled conversation context.
+Failed or interrupted output is not added to conversation memory.
 
 ## Architecture
 
 ```text
-apps/web
-  -> local HTTP API
-  -> chat.runtime.handle_chat_request()
-  -> Paper Copilot bounded tool loop
-  -> local knowledge stores
-  -> Markdown reports + JSONL traces + eval rows
-```
+SwiftUI macOS Client ─┐
+Legacy Next.js Web UI ├─> local HTTP/job API ─> Python Paper Core
+Local MCP Server ─────┘                         (M21, planned)
 
-Main modules:
+Python Paper Core
+  -> persistent chat.jobs lifecycle
+  -> chat.runtime.handle_chat_request()
+  -> single bounded Paper Copilot loop
+  -> local knowledge stores
+  -> Markdown reports, JSONL traces, and eval rows
+```
 
 | Path | Responsibility |
 | --- | --- |
-| `src/paper_copilot/api/` | Local HTTP API |
-| `src/paper_copilot/chat/` | Single-input runtime and report history |
-| `src/paper_copilot/agents/` | Single Paper Copilot, tool loop, and paper-reading tools |
+| `src/paper_copilot/api/` | Local HTTP transport |
+| `src/paper_copilot/chat/` | Chat runtime, jobs, and history |
+| `src/paper_copilot/agents/` | Paper Copilot loop and bounded tools |
 | `src/paper_copilot/knowledge/` | Cross-paper indexes and hybrid search |
-| `src/paper_copilot/retrieval/` | Single-paper chunk / section utilities |
+| `src/paper_copilot/retrieval/` | Single-paper section extraction |
 | `src/paper_copilot/eval/` | Regression, retrieval eval, and reports |
-| `src/paper_copilot/session/` | JSONL session storage |
-| `apps/web/` | Next.js local frontend |
+| `src/paper_copilot/session/` | Append-only JSONL session storage |
+| `src/paper_copilot/observability/` | Local rollout traces and diagnostics |
+| `apps/macos/` | M20 SwiftUI client under development |
+| `apps/web/` | Migration-period Next.js frontend |
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) and the
-[chat-first roadmap](docs/design/chat_first_research_copilot_plan.md) for more
-detail.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for current technical structure and
+[TASKS.md](TASKS.md) for the active milestone.
 
 ## Data Layout
 
@@ -332,15 +349,21 @@ Runtime data lives outside the repository by default:
 ├── embeddings_meta.json
 ├── embedding_cache.sqlite
 ├── graph/cross-paper-links.jsonl
+├── jobs/<job_id>/
+│   ├── job.json
+│   ├── events.jsonl
+│   └── attempts/<n>/
+│       ├── manifest.json
+│       ├── trace.jsonl
+│       ├── state.json
+│       └── payloads/
 └── eval/
     ├── runs/<run_id>.jsonl
     └── report.html
 ```
 
 `paper_id = SHA1(PDF bytes)[:12]`, so renaming or moving a PDF does not change
-its ID. `embeddings.db` stores paper-library chunk vectors; `embedding_cache.sqlite`
-stores reusable vectors for queries, evidence anchors, semantic windows, and
-similar text keyed by model and dimension.
+its ID.
 
 Repository eval assets:
 
@@ -360,53 +383,49 @@ make typecheck
 make test
 ```
 
-For docs-only changes:
+Run validation only when it is appropriate for the current task. Project
+conventions do not require proactively running every check for documentation or
+small scoped changes.
 
-```bash
-git diff --check -- README.md README.en.md
-```
-
-Before changing the default model tier, run the smoke eval and compare both
-quality and cost/latency. The previous plus-tier trial passed regression, but
-cost was about 2.03x and latency about 2.22x with no measured quality gain, so
-the default remains the flash tier.
+Before changing the default model tier, run the smoke eval and compare quality,
+cost, and latency. A previous plus-tier trial passed regression but cost 2.03x
+and took 2.22x as long without a measurable quality gain, so the default remains
+the flash tier.
 
 ## Roadmap
 
-Near-term work is tracked in [TASKS.md](TASKS.md).
+The active roadmap lives in [TASKS.md](TASKS.md).
 
-Current priorities:
-
-1. Freeze the current feature surface and focus on README, demo screenshots, and
-   resume-ready project framing.
-2. Keep the local-library-first Composer ReID demo easy to show, while naming the
-   cross-task generalization boundary clearly.
-3. If development continues, add fixed Composer task acceptance, frontend
-   retrieval miss/top-k diagnostics, and manual unsupported-claim sampling.
+1. Complete the M20 SwiftUI macOS client foundation and one real local task
+   flow.
+2. Implement native folder authorization, Keychain storage, Runtime lifecycle,
+   progress, interruption, and Markdown reports.
+3. Stop after one real manual run. Begin M21 Local Read-only MCP only after
+   explicit user approval.
 
 ## Known Limitations
 
-- No cloud sync, accounts, multi-user ACL, or hosted deployment.
-- No internet paper discovery in the core runtime; it works from local PDFs and
-  local indexes.
-- No cross-encoder or LLM reranker in the active retrieval path.
-- Evidence grounding is still a known risk; generated claims are not all fully
-  grounded yet.
-- Research Idea Composer currently has one clean VI-ReID demo, but no multi-task
-  stability acceptance suite.
-- Some eval suites depend on local PDFs that are not shipped with the repository.
+- No cloud sync, accounts, multi-user ACLs, or hosted deployment.
+- During M20 development, the Python Runtime is not yet bundled into the
+  `.app`; dependency-free distribution belongs to M23.
+- The core runtime does not discover papers on the internet.
+- Local retrieval may send selected paper fragments to the configured cloud
+  model.
+- The active retrieval path has no cross-encoder or LLM reranker.
+- Evidence grounding remains imperfect; not every generated statement should
+  be treated as fully verified.
+- Some eval suites require local PDFs that are not distributed with the
+  repository.
 
 ## Contributing
 
-This is an experimental local-first research tool. Please read
+This is an experimental local-first research tool. Read
 [AGENTS.md](AGENTS.md) before opening a pull request.
-
-Basic principles:
 
 - Keep changes narrow.
 - Explain user-visible behavior.
 - Do not add dependencies without discussing the tradeoff first.
-- Prefer traceable, evaluable harness improvements over prompt-only fixes.
+- Prefer traceable, evaluable harness changes over prompt-only fixes.
 
 ## License
 

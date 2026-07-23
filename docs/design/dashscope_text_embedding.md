@@ -1,7 +1,8 @@
 # DashScope Text Embedding Notes
 
-Snapshot date: 2026-05-19. Source: user-provided Aliyun Bailian embedding
-documentation excerpt.
+Runtime contract checked against the implementation on 2026-07-23. Vendor
+limits and pricing were originally recorded from an Aliyun Bailian
+documentation excerpt dated 2026-05-19.
 
 This repo uses DashScope's OpenAI-compatible embedding endpoint for the
 cross-paper index. The current locked model is `text-embedding-v4`.
@@ -84,14 +85,16 @@ Documented language coverage is 100+ mainstream languages plus programming
 languages. This matters because the product path often uses Chinese questions
 against English paper chunks.
 
-## Pricing Notes
+## Historical Pricing Snapshot
+
+The following values are retained only as the 2026-05-19 costing input. They
+are not a current quote; check the vendor pricing page before making a new
+cost or model decision.
 
 Documented synchronous price:
 
 - `0.0005` RMB per 1k input tokens
 - Batch calling price: `0.00025` RMB per 1k input tokens
-- Free quota: 1M tokens, valid for 90 days after Bailian activation
-
 Current implementation uses the synchronous OpenAI-compatible endpoint, not
 the batch interface.
 
@@ -105,7 +108,7 @@ the batch interface.
   `tongyi-embedding-vision` are documented as not supported by the
   OpenAI-compatible endpoint. This repo only uses text embeddings here.
 - `DASHSCOPE_API_KEY` is the preferred env var. The current implementation can
-  fall back to `ANTHROPIC_API_KEY` for local development convenience.
+  fall back to `LLM_API_KEY` when the LLM also uses DashScope.
 - The endpoint's max input rows is 10, so `Embedder.encode()` batches requests
   at most 10 rows at a time even if callers pass a larger batch size.
 
