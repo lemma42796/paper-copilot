@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from paper_copilot.agents.llm_client import LLMClient
-from paper_copilot.agents.loop import Event, LLMClientProtocol
+from paper_copilot.agents.loop import (
+    Event,
+    LLMClientProtocol,
+    LLMStreamEventCallback,
+)
 from paper_copilot.agents.paper_copilot import (
     PaperCopilotContext,
     PaperCopilotRun,
@@ -60,6 +64,7 @@ async def handle_chat_request(
     read_llm: LLMClient | None = None,
     session_id: str | None = None,
     event_callback: Callable[[Event], None] | None = None,
+    stream_event_callback: LLMStreamEventCallback | None = None,
     conversation_context: str | None = None,
     previous_compaction_summary: CompactionSummary | None = None,
     resume_history: list[dict[str, Any]] | None = None,
@@ -132,6 +137,7 @@ async def handle_chat_request(
             max_budget_cny=budget_cny,
             session_id=session_id,
             event_callback=event_callback,
+            stream_event_callback=stream_event_callback,
             conversation_context=conversation_context,
             previous_compaction_summary=previous_compaction_summary,
             resume_history=resume_history,

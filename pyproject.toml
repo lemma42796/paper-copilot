@@ -20,6 +20,9 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.scripts]
+paper-copilot-runtime = "paper_copilot.api.runtime:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/paper_copilot"]
 

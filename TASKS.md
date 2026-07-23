@@ -79,6 +79,30 @@ Python Paper Core ─────┤
 - PDF、索引和 session 保持本地，没有新增论文上传接口。
 - 完成一次真实手动运行后停止，总结仍缺少的客户端能力；不自动进入 M21。
 
+### Progress (2026-07-23)
+
+- 已实现 Python Runtime CLI、动态本地端口 ready 握手和正常关闭。
+- 已建立 SwiftUI 原生窗口、conversation 侧栏、聊天区、任务事件、停止操作、
+  Markdown 报告和设置入口。
+- 已实现论文目录 security-scoped bookmark 恢复，以及按模型独立保存到 Keychain
+  的 API Key。
+- 已实现通用模型配置列表：添加、编辑、启用、删除、OpenAI-compatible 端点、
+  Model ID 和自定义价格；聊天区只显示配置完整的已启用模型。
+- 已接入现有 job API、SSE 事件流及 polling fallback；沿用现有本地 job、
+  session 和索引目录。
+- 已将 Agent 的 Qwen/DeepSeek 模型调用强制切换到 Thinking + SSE；推理内容、
+  回答增量和工具开始/完成/失败状态写入可恢复的结构化 activity events。
+- 已实现 Codex 风格活动时间线：实时思考、增量回答、工具卡片及中断/失败终态。
+- 已为每条 Qwen/DeepSeek 模型配置增加持久化思考设置，并在聊天区提供 Codex
+  风格菜单；Qwen 显示产品预设及对应思考 Token 上限，DeepSeek 显示其原生
+  推理强度，切换后自动重启本地 Runtime。
+- 已把聊天输入区收敛为单张紧凑圆角卡片，只保留多行输入、模型/思考设置和
+  发送/停止按钮；论文目录继续通过工具栏或设置页选择。
+- 最新 Thinking、activity timeline、模型思考设置和输入区改动已在 Xcode
+  成功构建并启动，用户已通过实际 App 截图完成界面检查；模型 API Key 已配置。
+- 尚未完成最终真实任务、停止操作、报告显示及 App 重启恢复的整条人工验收，
+  因此 M20 仍保持 Active，不进入 M21。
+
 ### Not in M20
 
 - 不删除 Next.js Web UI。

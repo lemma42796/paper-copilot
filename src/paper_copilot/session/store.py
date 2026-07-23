@@ -19,6 +19,7 @@ from .types import (
     FinalOutput,
     LLMCall,
     Message,
+    Reasoning,
     RecoveryBase,
     RuntimeState,
     SchemaValidation,
@@ -128,6 +129,16 @@ class SessionStore:
             ts=_now_ts(),
             parent_id=self._last_id,
             role=role,  # type: ignore[arg-type]
+            text=text,
+        )
+        self._write(entry)
+        return entry.id
+
+    def append_reasoning(self, text: str) -> str:
+        entry = Reasoning(
+            id=_new_id(),
+            ts=_now_ts(),
+            parent_id=self._last_id,
             text=text,
         )
         self._write(entry)

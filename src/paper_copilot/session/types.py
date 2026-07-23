@@ -7,6 +7,7 @@ EntryType = Literal[
     "session_header",
     "system_message",
     "message",
+    "reasoning",
     "tool_use",
     "tool_result",
     "schema_validation",
@@ -47,6 +48,15 @@ class Message(BaseModel):
     type: Literal["message"] = "message"
     parent_id: str | None
     role: Literal["user", "assistant"]
+    text: str
+
+
+class Reasoning(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    ts: str
+    type: Literal["reasoning"] = "reasoning"
+    parent_id: str | None
     text: str
 
 
@@ -162,6 +172,7 @@ SessionEntry = Annotated[
     SessionHeader
     | SystemMessage
     | Message
+    | Reasoning
     | ToolUse
     | ToolResult
     | SchemaValidation

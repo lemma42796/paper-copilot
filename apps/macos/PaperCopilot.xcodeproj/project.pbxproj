@@ -1,0 +1,319 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		010000000000000000000001 /* PaperCopilotApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000001 /* PaperCopilotApp.swift */; };
+		010000000000000000000002 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000002 /* AppModel.swift */; };
+		010000000000000000000003 /* RuntimeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000003 /* RuntimeManager.swift */; };
+		010000000000000000000004 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000004 /* ContentView.swift */; };
+		010000000000000000000005 /* LibraryBookmarkStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000007 /* LibraryBookmarkStore.swift */; };
+		010000000000000000000006 /* KeychainStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000008 /* KeychainStore.swift */; };
+		010000000000000000000007 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000009 /* SettingsView.swift */; };
+		010000000000000000000008 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000A /* Models.swift */; };
+		010000000000000000000009 /* PaperCopilotAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000B /* PaperCopilotAPI.swift */; };
+		01000000000000000000000A /* ConversationSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000C /* ConversationSidebar.swift */; };
+		01000000000000000000000B /* ConversationDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000D /* ConversationDetailView.swift */; };
+		01000000000000000000000C /* ModelConfigurationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000E /* ModelConfigurationStore.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		020000000000000000000001 /* PaperCopilotApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaperCopilotApp.swift; sourceTree = "<group>"; };
+		020000000000000000000002 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		020000000000000000000003 /* RuntimeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RuntimeManager.swift; sourceTree = "<group>"; };
+		020000000000000000000004 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		020000000000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		020000000000000000000006 /* PaperCopilot.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PaperCopilot.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		020000000000000000000007 /* LibraryBookmarkStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryBookmarkStore.swift; sourceTree = "<group>"; };
+		020000000000000000000008 /* KeychainStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainStore.swift; sourceTree = "<group>"; };
+		020000000000000000000009 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		02000000000000000000000A /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		02000000000000000000000B /* PaperCopilotAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaperCopilotAPI.swift; sourceTree = "<group>"; };
+		02000000000000000000000C /* ConversationSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationSidebar.swift; sourceTree = "<group>"; };
+		02000000000000000000000D /* ConversationDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDetailView.swift; sourceTree = "<group>"; };
+		02000000000000000000000E /* ModelConfigurationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelConfigurationStore.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		030000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		040000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				040000000000000000000002 /* PaperCopilot */,
+				040000000000000000000005 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		040000000000000000000002 /* PaperCopilot */ = {
+			isa = PBXGroup;
+			children = (
+				020000000000000000000001 /* PaperCopilotApp.swift */,
+				020000000000000000000002 /* AppModel.swift */,
+				040000000000000000000007 /* API */,
+				040000000000000000000003 /* Runtime */,
+				040000000000000000000006 /* Storage */,
+				040000000000000000000004 /* Views */,
+				020000000000000000000005 /* Info.plist */,
+			);
+			path = PaperCopilot;
+			sourceTree = "<group>";
+		};
+		040000000000000000000003 /* Runtime */ = {
+			isa = PBXGroup;
+			children = (
+				020000000000000000000003 /* RuntimeManager.swift */,
+			);
+			path = Runtime;
+			sourceTree = "<group>";
+		};
+		040000000000000000000004 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				020000000000000000000004 /* ContentView.swift */,
+				020000000000000000000009 /* SettingsView.swift */,
+				02000000000000000000000C /* ConversationSidebar.swift */,
+				02000000000000000000000D /* ConversationDetailView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		040000000000000000000006 /* Storage */ = {
+			isa = PBXGroup;
+			children = (
+				020000000000000000000007 /* LibraryBookmarkStore.swift */,
+				020000000000000000000008 /* KeychainStore.swift */,
+				02000000000000000000000E /* ModelConfigurationStore.swift */,
+			);
+			path = Storage;
+			sourceTree = "<group>";
+		};
+		040000000000000000000007 /* API */ = {
+			isa = PBXGroup;
+			children = (
+				02000000000000000000000A /* Models.swift */,
+				02000000000000000000000B /* PaperCopilotAPI.swift */,
+			);
+			path = API;
+			sourceTree = "<group>";
+		};
+		040000000000000000000005 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				020000000000000000000006 /* PaperCopilot.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		050000000000000000000001 /* PaperCopilot */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0C0000000000000000000002 /* Build configuration list for PBXNativeTarget "PaperCopilot" */;
+			buildPhases = (
+				080000000000000000000001 /* Sources */,
+				030000000000000000000001 /* Frameworks */,
+				070000000000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PaperCopilot;
+			packageProductDependencies = (
+			);
+			productName = PaperCopilot;
+			productReference = 020000000000000000000006 /* PaperCopilot.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		060000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2660;
+				LastUpgradeCheck = 2660;
+				TargetAttributes = {
+					050000000000000000000001 = {
+						CreatedOnToolsVersion = 26.6;
+					};
+				};
+			};
+			buildConfigurationList = 0C0000000000000000000001 /* Build configuration list for PBXProject "PaperCopilot" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 040000000000000000000001;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 040000000000000000000005 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				050000000000000000000001 /* PaperCopilot */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		070000000000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		080000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				010000000000000000000001 /* PaperCopilotApp.swift in Sources */,
+				010000000000000000000002 /* AppModel.swift in Sources */,
+				010000000000000000000003 /* RuntimeManager.swift in Sources */,
+				010000000000000000000004 /* ContentView.swift in Sources */,
+				010000000000000000000005 /* LibraryBookmarkStore.swift in Sources */,
+				010000000000000000000006 /* KeychainStore.swift in Sources */,
+				010000000000000000000007 /* SettingsView.swift in Sources */,
+				010000000000000000000008 /* Models.swift in Sources */,
+				010000000000000000000009 /* PaperCopilotAPI.swift in Sources */,
+				01000000000000000000000A /* ConversationSidebar.swift in Sources */,
+				01000000000000000000000B /* ConversationDetailView.swift in Sources */,
+				01000000000000000000000C /* ModelConfigurationStore.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		0A0000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		0A0000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		0B0000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = PaperCopilot/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = local.paper-copilot;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		0B0000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = PaperCopilot/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = local.paper-copilot;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0C0000000000000000000001 /* Build configuration list for PBXProject "PaperCopilot" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0A0000000000000000000001 /* Debug */,
+				0A0000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0C0000000000000000000002 /* Build configuration list for PBXNativeTarget "PaperCopilot" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0B0000000000000000000001 /* Debug */,
+				0B0000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 060000000000000000000001 /* Project object */;
+}

@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from paper_copilot.agents.loop import (
     AssistantMessage,
     Event,
+    LLMStreamEvent,
     Terminated,
     ToolResult,
     ToolUse,
@@ -42,6 +43,8 @@ JobStatus = Literal[
     "failed",
 ]
 AttemptStatus = Literal["running", "completed", "interrupted", "failed"]
+ActivityKind = Literal["reasoning", "assistant", "tool"]
+ActivityPhase = Literal["started", "delta", "completed", "failed", "cancelled"]
 
 _JOB_ID_RE = re.compile(r"^job-[0-9A-Za-z-]{8,80}$")
 _CONVERSATION_ID_RE = re.compile(r"^conversation-[0-9A-Za-z-]{8,80}$")
@@ -154,6 +157,12 @@ class ChatJobEvent(BaseModel):
     status: JobStatus
     attempt: int
     message: str
+    activity_id: str | None = None
+    activity_kind: ActivityKind | None = None
+    activity_phase: ActivityPhase | None = None
+    title: str | None = None
+    delta: str | None = None
+    detail: str | None = None
 
 
 class ChatJobRegistry:
@@ -169,6 +178,7 @@ class ChatJobRegistry:
             tuple[asyncio.AbstractEventLoop, asyncio.Task[Any]],
         ] = {}
         self._interrupt_requested: set[str] = set()
+        self._event_sequences: dict[str, int] = {}
         self._approval_waiters: dict[
             str,
             tuple[str, asyncio.AbstractEventLoop, asyncio.Future[bool]],
@@ -416,6 +426,7 @@ class ChatJobRegistry:
 
         rollout_started_at = time.perf_counter()
         recorder: RolloutRecorder | None = None
+        active_activities: dict[str, tuple[ActivityKind, str]] = {}
         try:
             recorder = RolloutRecorder.create(
                 self._job_dir(job_id) / "attempts" / str(attempt_number),
@@ -463,22 +474,87 @@ class ChatJobRegistry:
                     )
 
             tool_names: dict[str, str] = {}
+            stream_events_seen = False
 
             def record_event(event: Event) -> None:
                 if isinstance(event, ToolUse):
                     tool_names[event.id] = event.name
+                    active_activities[event.id] = ("tool", event.name)
                     message = f"正在调用工具: {event.name}"
+                    self._record_activity(
+                        job_id,
+                        attempt_number,
+                        activity_id=event.id,
+                        activity_kind="tool",
+                        activity_phase="started",
+                        title=event.name,
+                        message=message,
+                        detail=f"输入：{_bounded_activity_detail(event.input)}",
+                    )
+                    return
                 elif isinstance(event, ToolResult):
                     name = tool_names.get(event.id, "unknown")
                     outcome = "失败" if event.is_error else "完成"
                     message = f"工具 {name} {outcome}。"
+                    self._record_activity(
+                        job_id,
+                        attempt_number,
+                        activity_id=event.id,
+                        activity_kind="tool",
+                        activity_phase="failed" if event.is_error else "completed",
+                        title=name,
+                        message=message,
+                        detail=f"结果：{_bounded_activity_detail(event.output)}",
+                    )
+                    active_activities.pop(event.id, None)
+                    return
                 elif isinstance(event, AssistantMessage):
+                    if stream_events_seen:
+                        return
                     message = "Agent 已生成阶段性内容。"
                 elif isinstance(event, Terminated):
                     message = f"Agent 循环结束: {event.reason}。"
                 else:
                     return
                 self._record_progress(job_id, attempt_number, message)
+
+            def record_stream_event(event: LLMStreamEvent) -> None:
+                nonlocal stream_events_seen
+                stream_events_seen = True
+                match event.type:
+                    case "reasoning_started":
+                        activity_kind, activity_phase = "reasoning", "started"
+                    case "reasoning_delta":
+                        activity_kind, activity_phase = "reasoning", "delta"
+                    case "reasoning_completed":
+                        activity_kind, activity_phase = "reasoning", "completed"
+                    case "assistant_started":
+                        activity_kind, activity_phase = "assistant", "started"
+                    case "assistant_delta":
+                        activity_kind, activity_phase = "assistant", "delta"
+                    case "assistant_completed":
+                        activity_kind, activity_phase = "assistant", "completed"
+                title = "思考过程" if activity_kind == "reasoning" else "回答"
+                activity_id = f"{event.response_id}:{activity_kind}"
+                if activity_phase == "started":
+                    active_activities[activity_id] = (activity_kind, title)
+                elif activity_phase == "completed":
+                    active_activities.pop(activity_id, None)
+                messages = {
+                    "started": f"{title}已开始。",
+                    "delta": event.text,
+                    "completed": f"{title}已完成。",
+                }
+                self._record_activity(
+                    job_id,
+                    attempt_number,
+                    activity_id=activity_id,
+                    activity_kind=activity_kind,
+                    activity_phase=activity_phase,
+                    title=title,
+                    message=messages[activity_phase],
+                    delta=event.text if activity_phase == "delta" else None,
+                )
 
             async def request_tool_approval(
                 approval: ToolApprovalRequest,
@@ -523,6 +599,7 @@ class ChatJobRegistry:
                         update_report=record.spec.update_report,
                         session_id=session_id,
                         event_callback=record_event,
+                        stream_event_callback=record_stream_event,
                         conversation_context=conversation_context,
                         previous_compaction_summary=previous_compaction_summary,
                         resume_history=resume_history,
@@ -558,6 +635,13 @@ class ChatJobRegistry:
 
             result = asyncio.run(run_request())
         except asyncio.CancelledError:
+            self._finish_active_activities(
+                job_id,
+                attempt_number,
+                active_activities,
+                phase="cancelled",
+                message="活动已由用户停止。",
+            )
             if recorder is not None:
                 recorder.record(
                     entity_type="rollout",
@@ -574,6 +658,13 @@ class ChatJobRegistry:
             return
         except Exception as exc:
             if self._is_interrupt_requested(job_id):
+                self._finish_active_activities(
+                    job_id,
+                    attempt_number,
+                    active_activities,
+                    phase="cancelled",
+                    message="活动已由用户停止。",
+                )
                 if recorder is not None:
                     recorder.record(
                         entity_type="rollout",
@@ -590,6 +681,14 @@ class ChatJobRegistry:
                     "任务已由用户中断。",
                 )
                 return
+            self._finish_active_activities(
+                job_id,
+                attempt_number,
+                active_activities,
+                phase="failed",
+                message="活动执行失败。",
+                detail=_bounded_activity_detail(str(exc)),
+            )
             if recorder is not None:
                 recorder.record(
                     entity_type="rollout",
@@ -603,6 +702,13 @@ class ChatJobRegistry:
             self._finish_failed(job_id, attempt_number, str(exc))
             return
         if result.termination_reason == "cancelled":
+            self._finish_active_activities(
+                job_id,
+                attempt_number,
+                active_activities,
+                phase="cancelled",
+                message="活动已由用户停止。",
+            )
             recorder.record(
                 entity_type="rollout",
                 entity_id=recorder.rollout_entity_id,
@@ -737,6 +843,34 @@ class ChatJobRegistry:
             record = self._read_record(job_id)
             if record.status != "running":
                 return
+            if activity_phase != "delta":
+                record.updated_at = _now_ts()
+                self._write_record(record)
+            self._append_event(
+                job_id,
+                event_type="progress",
+                status="running",
+                attempt=attempt_number,
+                message=message,
+            )
+
+    def _record_activity(
+        self,
+        job_id: str,
+        attempt_number: int,
+        *,
+        activity_id: str,
+        activity_kind: ActivityKind,
+        activity_phase: ActivityPhase,
+        title: str,
+        message: str,
+        delta: str | None = None,
+        detail: str | None = None,
+    ) -> None:
+        with self._lock:
+            record = self._read_record(job_id)
+            if record.status != "running":
+                return
             record.updated_at = _now_ts()
             self._write_record(record)
             self._append_event(
@@ -745,7 +879,36 @@ class ChatJobRegistry:
                 status="running",
                 attempt=attempt_number,
                 message=message,
+                activity_id=activity_id,
+                activity_kind=activity_kind,
+                activity_phase=activity_phase,
+                title=title,
+                delta=delta,
+                detail=detail,
             )
+
+    def _finish_active_activities(
+        self,
+        job_id: str,
+        attempt_number: int,
+        activities: dict[str, tuple[ActivityKind, str]],
+        *,
+        phase: Literal["failed", "cancelled"],
+        message: str,
+        detail: str | None = None,
+    ) -> None:
+        for activity_id, (activity_kind, title) in list(activities.items()):
+            self._record_activity(
+                job_id,
+                attempt_number,
+                activity_id=activity_id,
+                activity_kind=activity_kind,
+                activity_phase=phase,
+                title=title,
+                message=message,
+                detail=detail,
+            )
+            activities.pop(activity_id, None)
 
     def _recover_orphaned_jobs(self) -> None:
         with self._lock:
@@ -895,11 +1058,21 @@ class ChatJobRegistry:
         status: JobStatus,
         attempt: int,
         message: str,
+        activity_id: str | None = None,
+        activity_kind: ActivityKind | None = None,
+        activity_phase: ActivityPhase | None = None,
+        title: str | None = None,
+        delta: str | None = None,
+        detail: str | None = None,
     ) -> None:
         with self._events_changed:
             path = self._job_dir(job_id) / "events.jsonl"
             self._truncate_torn_event_tail(path)
-            seq = len(self._read_events(job_id)) + 1
+            previous_seq = self._event_sequences.get(job_id)
+            if previous_seq is None:
+                existing = self._read_events(job_id)
+                previous_seq = existing[-1].seq if existing else 0
+            seq = previous_seq + 1
             event = ChatJobEvent(
                 seq=seq,
                 ts=_now_ts(),
@@ -907,11 +1080,18 @@ class ChatJobRegistry:
                 status=status,
                 attempt=attempt,
                 message=message,
+                activity_id=activity_id,
+                activity_kind=activity_kind,
+                activity_phase=activity_phase,
+                title=title,
+                delta=delta,
+                detail=detail,
             )
             with path.open("a", encoding="utf-8") as stream:
                 stream.write(event.model_dump_json() + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
+            self._event_sequences[job_id] = seq
             self._events_changed.notify_all()
 
     def _truncate_torn_event_tail(self, path: Path) -> None:
@@ -962,6 +1142,20 @@ def _validate_job_id(job_id: str) -> None:
 
 def _now_ts() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _bounded_activity_detail(value: object, *, limit: int = 600) -> str:
+    if isinstance(value, str):
+        rendered = value
+    else:
+        rendered = json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        )
+    compact = " ".join(rendered.split())
+    return compact if len(compact) <= limit else f"{compact[:limit]}…"
 
 
 def _approval_future_set_result(

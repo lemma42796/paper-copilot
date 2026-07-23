@@ -325,12 +325,27 @@ eval ──► agents 的公开运行入口，以及 suite 明确使用的 LLMCl
 ## 模型分配
 
 唯一的 Paper Copilot、所有 LLM-backed 工具，以及 query rewrite /
-chunk rerank 等子任务统一使用 **qwen3.6-flash**，
-**不做模型分层**。具体 model id 在 `agents/llm_client.py` 里一处收敛。
+chunk rerank 等子任务统一使用用户在客户端选择的同一个模型，
+**不做模型分层**。未经过客户端配置时，Runtime 仍以
+**qwen3.6-flash** 为兼容默认值；具体 model id 在
+`agents/llm_client.py` 里一处收敛。
 
 - **默认端点**：`https://dashscope.aliyuncs.com/compatible-mode/v1`
   （阿里云百炼 OpenAI-compatible Chat Completions）；也可通过 `LLM_BASE_URL`、
-  `LLM_API_KEY`、`LLM_MODEL` 切换到 DeepSeek 官方兼容端点
+  `LLM_API_KEY`、`LLM_MODEL` 切换到其他 OpenAI-compatible 端点。macOS
+  客户端保存每条模型配置的端点、model id 和价格，API Key 单独存入 Keychain；
+  选择模型时通过 Runtime 环境变量传入，API Key 不写入 job、日志或 session
+- **Thinking 与流式输出**：Agent 系统的所有 LLM 调用必须开启模型 Thinking，
+  当前明确支持 Qwen/DashScope 的 `enable_thinking` 和 DeepSeek 的
+  `thinking.type=enabled` 协议；未知协议不能静默退化为非思考模式。主 Paper Copilot
+  调用使用 Chat Completions SSE，把 `reasoning_content`、回答文本和工具生命周期
+  转换为可持久化 activity events。内部 forced-tool 调用同样开启 Thinking，但不把
+  结构化 JSON 生成过程展示为用户可见回答。客户端为每条模型配置保存思考设置；
+  Qwen 3.6 继续使用 Chat Completions 的 `enable_thinking` 和
+  `thinking_budget`，轻度/中/高/极高/最高是 Paper Copilot 定义的产品预设，
+  分别限制为 4K/8K/16K/24K/32K 思考 token，不代表 Qwen 官方
+  `reasoning.effort` 档位。DeepSeek 仅提供其原生支持的 `high`/`max`。
+  推理 token 按输出价格计入同一预算。
 - **上下文压缩策略**：模型真实窗口记为 1M tokens，项目工作窗口按 256K
   input tokens 管理；预计下一轮输入达到 200K 时自动压缩到不超过 80K，240K
   是禁止继续普通调用的紧急门槛。每轮同时记录真实输入 token 高水位。
@@ -367,7 +382,7 @@ apps/macos 或 apps/web
   → chat.runtime.handle_chat_request(message)
   → agents.run_paper_copilot(...)                     # bounded tool loop
       → 按需调用 search / inspect / compare / read 等工具
-      → 通过 callback 追加工具进度事件
+      → 通过 callback 追加 reasoning / assistant delta 和工具生命周期事件
       → 生成最终 Markdown 回答
   → chat 落 session / report / quality 记录
   → chat.jobs 原子写回 completed / failed 和最终结果
@@ -394,7 +409,7 @@ queued/running 只恢复显示，不自动
 POST /jobs
   → chat.jobs 持久化 queued job
   → 后台线程更新 running 并创建 attempt session
-  → agent event callback 追加 progress events
+  → agent event callback 追加结构化 activity events
   → completed / failed 原子写回 job.json
 
 GET /jobs/<id>                 # 断线后重新发现状态

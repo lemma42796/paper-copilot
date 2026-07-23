@@ -1,8 +1,8 @@
-"""Token-usage and CNY cost tracking for supported LLM models.
+"""Token-usage and CNY cost tracking for LLM models.
 
-Pricing is keyed on the model id via :func:`pricing_for_model`; supported
-tiers are Qwen 3.6 Flash/Plus and DeepSeek V4 Flash/Pro. New tiers must be
-added explicitly — fall-through would silently mis-charge.
+Pricing is keyed on the model id via :func:`pricing_for_model`. Built-in
+tiers cover Qwen 3.6 Flash/Plus and DeepSeek V4 Flash/Pro; the macOS Runtime
+can provide an explicit four-line price configuration for another model.
 
 Consumes the provider-neutral usage mapping returned by ``agents.llm_client``.
 The ``UsageLike`` alias also accepts structural objects for injected test clients.
@@ -10,6 +10,7 @@ The ``UsageLike`` alias also accepts structural objects for injected test client
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from typing import Protocol
@@ -69,18 +70,31 @@ class DeepSeekV4ProPricing:
     OUTPUT_PER_MTOK_CNY: float = 6.0
 
 
+@dataclass(frozen=True, slots=True)
+class ConfiguredPricing:
+    INPUT_PER_MTOK_CNY: float
+    CACHE_CREATE_PER_MTOK_CNY: float
+    CACHE_HIT_PER_MTOK_CNY: float
+    OUTPUT_PER_MTOK_CNY: float
+
+
 type Pricing = (
-    QwenFlashPricing | QwenPlusPricing | DeepSeekV4FlashPricing | DeepSeekV4ProPricing
+    QwenFlashPricing
+    | QwenPlusPricing
+    | DeepSeekV4FlashPricing
+    | DeepSeekV4ProPricing
+    | ConfiguredPricing
 )
 
 
 def pricing_for_model(model: str) -> Pricing:
-    """Map a supported model id to its pricing tier.
+    """Map a model id or current Runtime configuration to its pricing tier.
 
-    Accepts Qwen rolling aliases/snapshot ids and DeepSeek V4 model ids.
-    Raises on unknown — silent fall-through to a default would mis-charge
-    instead of failing loud.
+    Raises on an unknown model without explicit Runtime pricing.
     """
+    configured = _configured_pricing(model)
+    if configured is not None:
+        return configured
     if model.startswith("qwen3.6-flash"):
         return QwenFlashPricing()
     if model.startswith("qwen3.6-plus"):
@@ -90,6 +104,36 @@ def pricing_for_model(model: str) -> Pricing:
     if model.startswith("deepseek-v4-pro"):
         return DeepSeekV4ProPricing()
     raise ValueError(f"no pricing registered for model {model!r}")
+
+
+def _configured_pricing(model: str) -> ConfiguredPricing | None:
+    if os.environ.get("LLM_MODEL") != model:
+        return None
+    names = (
+        "LLM_INPUT_PER_MTOK_CNY",
+        "LLM_CACHE_CREATE_PER_MTOK_CNY",
+        "LLM_CACHE_HIT_PER_MTOK_CNY",
+        "LLM_OUTPUT_PER_MTOK_CNY",
+    )
+    if all(os.environ.get(name) is None for name in names):
+        return None
+    values = [_required_nonnegative_price(name) for name in names]
+    return ConfiguredPricing(
+        INPUT_PER_MTOK_CNY=values[0],
+        CACHE_CREATE_PER_MTOK_CNY=values[1],
+        CACHE_HIT_PER_MTOK_CNY=values[2],
+        OUTPUT_PER_MTOK_CNY=values[3],
+    )
+
+
+def _required_nonnegative_price(name: str) -> float:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        raise ValueError(f"{name} is required when custom LLM pricing is configured")
+    value = float(raw_value)
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return value
 
 
 @dataclass(frozen=True, slots=True)

@@ -61,6 +61,7 @@ from paper_copilot.agents.loop import (
     Event,
     LLMClientProtocol,
     LLMResponse,
+    LLMStreamEventCallback,
     LoopConfig,
     Terminated,
     TextBlock,
@@ -634,6 +635,7 @@ async def run_paper_copilot(
     read_llm: LLMClient | None = None,
     session_id: str | None = None,
     event_callback: Callable[[Event], None] | None = None,
+    stream_event_callback: LLMStreamEventCallback | None = None,
     conversation_context: str | None = None,
     previous_compaction_summary: CompactionSummary | None = None,
     resume_history: list[dict[str, Any]] | None = None,
@@ -806,6 +808,7 @@ async def run_paper_copilot(
             build_recovery_state=build_recovery_state,
             context_token_estimator=estimate_history_tokens,
             compact_history_callback=compact_main_history,
+            stream_event_callback=stream_event_callback,
         ):
             events.append(event)
             if event_callback is not None:

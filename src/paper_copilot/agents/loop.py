@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import nullcontext
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
@@ -30,6 +31,8 @@ __all__ = [
     "Event",
     "LLMClientProtocol",
     "LLMResponse",
+    "LLMStreamEvent",
+    "LLMStreamEventCallback",
     "LoopConfig",
     "StopReason",
     "TerminateReason",
@@ -40,6 +43,8 @@ __all__ = [
     "ToolUse",
     "ToolUseBlock",
     "ToolUseRequest",
+    "emit_llm_stream_event",
+    "llm_stream_events",
     "run_agent_loop",
 ]
 
@@ -76,6 +81,47 @@ class LLMResponse:
     stop_reason: StopReason
     usage: UsageLike | None = None
     latency_ms: int = 0
+    reasoning_content: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class LLMStreamEvent:
+    response_id: str
+    type: Literal[
+        "reasoning_started",
+        "reasoning_delta",
+        "reasoning_completed",
+        "assistant_started",
+        "assistant_delta",
+        "assistant_completed",
+    ]
+    text: str = ""
+
+
+type LLMStreamEventCallback = Callable[[LLMStreamEvent], None]
+
+
+_LLM_STREAM_EVENT_CALLBACK: ContextVar[LLMStreamEventCallback | None] = ContextVar(
+    "paper_copilot_llm_stream_event_callback",
+    default=None,
+)
+
+
+@contextmanager
+def llm_stream_events(
+    callback: LLMStreamEventCallback | None,
+) -> Iterator[None]:
+    token = _LLM_STREAM_EVENT_CALLBACK.set(callback)
+    try:
+        yield
+    finally:
+        _LLM_STREAM_EVENT_CALLBACK.reset(token)
+
+
+def emit_llm_stream_event(event: LLMStreamEvent) -> None:
+    callback = _LLM_STREAM_EVENT_CALLBACK.get()
+    if callback is not None:
+        callback(event)
 
 
 class LLMClientProtocol(Protocol):
@@ -186,6 +232,7 @@ async def run_agent_loop(
         Awaitable[list[dict[str, Any]]],
     ]
     | None = None,
+    stream_event_callback: LLMStreamEventCallback | None = None,
 ) -> AsyncIterator[Event]:
     """Drive an LLM with tools until it stops or a limit fires.
 
@@ -288,12 +335,13 @@ async def run_agent_loop(
                 else None
             )
 
-            response = await llm.generate(
-                history,
-                tools,
-                system=system,
-                max_tokens=config.max_tokens,
-            )
+            with llm_stream_events(stream_event_callback):
+                response = await llm.generate(
+                    history,
+                    tools,
+                    system=system,
+                    max_tokens=config.max_tokens,
+                )
             if response.usage is not None:
                 context_input_tokens = _context_input_tokens(response.usage)
                 last_context_input_tokens = context_input_tokens
@@ -331,6 +379,8 @@ async def run_agent_loop(
                         stop_reason=response.stop_reason,
                         prompt_sha256=prompt_sha256,
                     )
+                if response.reasoning_content:
+                    store.append_reasoning(response.reasoning_content)
                 for block in response.content:
                     if isinstance(block, TextBlock):
                         store.append_message(role="assistant", text=block.text)
@@ -339,9 +389,13 @@ async def run_agent_loop(
                 if build_recovery_state is not None:
                     store.append_runtime_state(build_recovery_state())
             yield AssistantMessage(content=response.content)
-            history.append(
-                {"role": "assistant", "content": _content_blocks_to_wire(response.content)}
-            )
+            assistant_history: dict[str, Any] = {
+                "role": "assistant",
+                "content": _content_blocks_to_wire(response.content),
+            }
+            if response.reasoning_content:
+                assistant_history["reasoning_content"] = response.reasoning_content
+            history.append(assistant_history)
             turns += 1
 
             if response.stop_reason == "end_turn":

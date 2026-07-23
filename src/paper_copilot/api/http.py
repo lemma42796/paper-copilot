@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -246,6 +247,9 @@ def serve_http_api(
     host: str = "127.0.0.1",
     port: int = 8765,
     websocket_port: int | None = None,
+    *,
+    shutdown_event: threading.Event | None = None,
+    ready_callback: Callable[[str, int], None] | None = None,
 ) -> None:
     resolved_websocket_port = port + 1 if websocket_port is None else websocket_port
     http_server = _PaperCopilotHTTPServer(
@@ -264,6 +268,9 @@ def serve_http_api(
             port=resolved_websocket_port,
             error=str(exc),
         )
+    else:
+        websocket_address = websocket_server.socket.getsockname()
+        http_server.websocket_port = int(websocket_address[1])
     websocket_thread: threading.Thread | None = None
     if websocket_server is not None:
         websocket_thread = threading.Thread(
@@ -273,7 +280,15 @@ def serve_http_api(
         )
         websocket_thread.start()
     try:
-        http_server.serve_forever()
+        http_address = http_server.server_address
+        if ready_callback is not None:
+            ready_callback(str(http_address[0]), int(http_address[1]))
+        if shutdown_event is None:
+            http_server.serve_forever()
+        else:
+            http_server.timeout = 0.25
+            while not shutdown_event.is_set():
+                http_server.handle_request()
     finally:
         if websocket_server is not None:
             websocket_server.shutdown()
@@ -607,13 +622,17 @@ class _ChatHandler(BaseHTTPRequestHandler):
             self._write_stream_event(job_stream_payload(record, events, after=after))
             if events:
                 after = events[-1].seq
-            while record.status in {"queued", "running"}:
+            while record.status in {"queued", "running", "waiting_for_approval"}:
                 record, events = registry.wait_for_events(
                     job_id,
                     after=after,
                     limit=request.limit,
                 )
-                if events or record.status not in {"queued", "running"}:
+                if events or record.status not in {
+                    "queued",
+                    "running",
+                    "waiting_for_approval",
+                }:
                     self._write_stream_event(
                         job_stream_payload(record, events, after=after)
                     )

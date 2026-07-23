@@ -6,17 +6,21 @@ import json
 import os
 import time
 from contextlib import nullcontext
-from typing import Any, Final
+from dataclasses import dataclass, field
+from typing import Any, Final, Literal
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import httpx
 
 from paper_copilot.agents.loop import (
     ContentBlock,
     LLMResponse,
+    LLMStreamEvent,
     StopReason,
     TextBlock,
     ToolUseBlock,
+    emit_llm_stream_event,
 )
 from paper_copilot.observability import current_recorder, set_last_llm_call_id
 from paper_copilot.shared.env import load_env
@@ -47,6 +51,148 @@ EMERGENCY_COMPACT_TOKENS: Final[int] = 240_000
 _DEFAULT_MAX_TOKENS: Final[int] = 1500
 _DEFAULT_TIMEOUT_S: Final[float] = 60.0
 _DEFAULT_BASE_URL: Final[str] = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+_STREAM_FLUSH_CHARS: Final[int] = 96
+_STREAM_FLUSH_SECONDS: Final[float] = 0.08
+type ThinkingProtocol = Literal["qwen", "deepseek"]
+type ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
+_QWEN_THINKING_BUDGETS: Final[dict[ReasoningEffort, int]] = {
+    "low": 4_096,
+    "medium": 8_192,
+    "high": 16_384,
+    "xhigh": 24_576,
+    "max": 32_768,
+}
+
+
+@dataclass(slots=True)
+class _ToolCallParts:
+    id: str = ""
+    name: str = ""
+    arguments: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class _StreamAccumulator:
+    content: list[str] = field(default_factory=list)
+    reasoning: list[str] = field(default_factory=list)
+    tool_calls: dict[int, _ToolCallParts] = field(default_factory=dict)
+    usage: dict[str, Any] | None = None
+    finish_reason: str | None = None
+
+    def response_body(self) -> dict[str, Any]:
+        calls = [
+            {
+                "id": parts.id,
+                "type": "function",
+                "function": {
+                    "name": parts.name,
+                    "arguments": "".join(parts.arguments),
+                },
+            }
+            for _, parts in sorted(self.tool_calls.items())
+        ]
+        message: dict[str, Any] = {
+            "role": "assistant",
+            "content": "".join(self.content) or None,
+            "reasoning_content": "".join(self.reasoning),
+        }
+        if calls:
+            message["tool_calls"] = calls
+        return {
+            "choices": [
+                {
+                    "message": message,
+                    "finish_reason": self.finish_reason,
+                }
+            ],
+            "usage": self.usage,
+        }
+
+
+class _ActivityEmitter:
+    def __init__(self, response_id: str) -> None:
+        self._response_id = response_id
+        self._reasoning_buffer: list[str] = []
+        self._assistant_buffer: list[str] = []
+        self._reasoning_completed = False
+        self._assistant_started = False
+        self._last_flush_at = time.monotonic()
+        emit_llm_stream_event(
+            LLMStreamEvent(
+                response_id=response_id,
+                type="reasoning_started",
+            )
+        )
+
+    def reasoning_delta(self, text: str) -> None:
+        self._reasoning_buffer.append(text)
+        self._flush_if_ready("reasoning")
+
+    def assistant_delta(self, text: str) -> None:
+        self._complete_reasoning()
+        if not self._assistant_started:
+            emit_llm_stream_event(
+                LLMStreamEvent(
+                    response_id=self._response_id,
+                    type="assistant_started",
+                )
+            )
+            self._assistant_started = True
+        self._assistant_buffer.append(text)
+        self._flush_if_ready("assistant")
+
+    def complete(self) -> None:
+        self._complete_reasoning()
+        self._flush("assistant")
+        if self._assistant_started:
+            emit_llm_stream_event(
+                LLMStreamEvent(
+                    response_id=self._response_id,
+                    type="assistant_completed",
+                )
+            )
+
+    def _complete_reasoning(self) -> None:
+        if self._reasoning_completed:
+            return
+        self._flush("reasoning")
+        emit_llm_stream_event(
+            LLMStreamEvent(
+                response_id=self._response_id,
+                type="reasoning_completed",
+            )
+        )
+        self._reasoning_completed = True
+
+    def _flush_if_ready(self, kind: Literal["reasoning", "assistant"]) -> None:
+        buffer = (
+            self._reasoning_buffer if kind == "reasoning" else self._assistant_buffer
+        )
+        if (
+            sum(len(part) for part in buffer) >= _STREAM_FLUSH_CHARS
+            or time.monotonic() - self._last_flush_at >= _STREAM_FLUSH_SECONDS
+        ):
+            self._flush(kind)
+
+    def _flush(self, kind: Literal["reasoning", "assistant"]) -> None:
+        buffer = (
+            self._reasoning_buffer if kind == "reasoning" else self._assistant_buffer
+        )
+        if not buffer:
+            return
+        text = "".join(buffer)
+        buffer.clear()
+        event_type: Literal["reasoning_delta", "assistant_delta"] = (
+            "reasoning_delta" if kind == "reasoning" else "assistant_delta"
+        )
+        emit_llm_stream_event(
+            LLMStreamEvent(
+                response_id=self._response_id,
+                type=event_type,
+                text=text,
+            )
+        )
+        self._last_flush_at = time.monotonic()
 
 
 class LLMClient:
@@ -62,6 +208,8 @@ class LLMClient:
         )
         self._endpoint = _chat_completions_endpoint(self._base_url)
         self._is_dashscope = "dashscope.aliyuncs.com" in (urlparse(self._base_url).hostname or "")
+        self._thinking_protocol = _thinking_protocol(self._base_url, DEFAULT_MODEL)
+        self._reasoning_effort = _reasoning_effort()
         self._api_key = api_key or os.environ.get("LLM_API_KEY")
         if not self._api_key and self._is_dashscope:
             self._api_key = os.environ.get("DASHSCOPE_API_KEY")
@@ -79,15 +227,19 @@ class LLMClient:
         system: str | list[dict[str, Any]] | None = None,
         max_tokens: int | None = None,
     ) -> LLMResponse:
+        thinking_budget = _QWEN_THINKING_BUDGETS[self._reasoning_effort]
         payload: dict[str, Any] = {
             "model": DEFAULT_MODEL,
-            "max_tokens": max_tokens if max_tokens is not None else _DEFAULT_MAX_TOKENS,
+            "max_tokens": (
+                max_tokens if max_tokens is not None else _DEFAULT_MAX_TOKENS
+            ),
             "messages": _convert_messages(
                 messages,
                 system=system,
                 preserve_cache_control=self._is_dashscope,
             ),
-            "stream": False,
+            "stream": True,
+            "stream_options": {"include_usage": True},
         }
         if tools:
             payload["tools"] = _convert_tools(
@@ -96,10 +248,19 @@ class LLMClient:
             )
         if tool_choice is not None:
             payload["tool_choice"] = _convert_tool_choice(tool_choice)
-        if self._is_dashscope:
-            payload["enable_thinking"] = False
-        elif DEFAULT_MODEL.startswith("deepseek-"):
-            payload["thinking"] = {"type": "disabled"}
+        if self._thinking_protocol == "qwen":
+            payload["enable_thinking"] = True
+            payload["preserve_thinking"] = True
+            payload["tool_stream"] = True
+            payload["thinking_budget"] = thinking_budget
+        else:
+            if self._is_dashscope:
+                payload["enable_thinking"] = True
+            else:
+                payload["thinking"] = {"type": "enabled"}
+            payload["reasoning_effort"] = (
+                "max" if self._reasoning_effort == "max" else "high"
+            )
 
         recorder = current_recorder()
         llm_call_id = recorder.new_entity_id("llm") if recorder is not None else ""
@@ -115,48 +276,39 @@ class LLMClient:
         )
         with trace as operation:
             t0 = time.perf_counter()
+            response_id = llm_call_id or f"llm-{uuid4().hex}"
+            activity = _ActivityEmitter(response_id)
             try:
-                response = await self._client.post(
+                async with self._client.stream(
+                    "POST",
                     self._endpoint,
                     headers={
                         "Authorization": f"Bearer {self._api_key}",
                         "Content-Type": "application/json",
                     },
                     json=payload,
-                )
+                ) as response:
+                    if response.status_code == 401:
+                        await response.aread()
+                        raise AgentError("authentication failed — check LLM_API_KEY")
+                    if response.status_code == 429:
+                        await response.aread()
+                        raise AgentError(
+                            f"upstream rate limited: {_compact_response(response)}"
+                        )
+                    if response.is_error:
+                        await response.aread()
+                        raise AgentError(
+                            f"upstream {response.status_code}: "
+                            f"{_compact_response(response)}"
+                        )
+                    accumulator = await _read_stream(response, activity)
             except httpx.TimeoutException as exc:
                 raise AgentError(f"LLM request timed out: {exc}") from exc
             except httpx.RequestError as exc:
                 raise AgentError(f"cannot reach LLM endpoint: {exc}") from exc
             latency_ms = int((time.perf_counter() - t0) * 1000)
-            if operation is not None:
-                operation.set_result(
-                    status="failed" if response.is_error else "completed",
-                    output_payload={
-                        "http_status": response.status_code,
-                        "body": response.text,
-                    },
-                    attributes={
-                        "http_status": response.status_code,
-                        "latency_ms": latency_ms,
-                    },
-                )
-
-            if response.status_code == 401:
-                raise AgentError("authentication failed — check LLM_API_KEY")
-            if response.status_code == 429:
-                raise AgentError(f"upstream rate limited: {_compact_response(response)}")
-            if response.is_error:
-                raise AgentError(
-                    f"upstream {response.status_code}: {_compact_response(response)}"
-                )
-
-            try:
-                body = response.json()
-            except json.JSONDecodeError as exc:
-                raise AgentError("LLM endpoint returned invalid JSON") from exc
-            if not isinstance(body, dict):
-                raise AgentError("LLM endpoint returned a non-object response")
+            body = accumulator.response_body()
             converted = _convert_response(body, latency_ms=latency_ms)
             if operation is not None:
                 operation.set_result(
@@ -169,6 +321,117 @@ class LLMClient:
                 )
                 set_last_llm_call_id(llm_call_id)
             return converted
+
+
+def _thinking_protocol(base_url: str, model: str) -> ThinkingProtocol:
+    configured = os.environ.get("LLM_THINKING_PROTOCOL")
+    if configured in {"qwen", "deepseek"}:
+        return configured
+    if configured is not None:
+        raise AgentError(
+            "LLM_THINKING_PROTOCOL must be either 'qwen' or 'deepseek'"
+        )
+    hostname = urlparse(base_url).hostname or ""
+    normalized_model = model.lower()
+    if "dashscope.aliyuncs.com" in hostname or normalized_model.startswith("qwen"):
+        return "qwen"
+    if "deepseek" in hostname or normalized_model.startswith("deepseek"):
+        return "deepseek"
+    raise AgentError(
+        "the configured model has no supported Thinking protocol; "
+        "set LLM_THINKING_PROTOCOL to 'qwen' or 'deepseek'"
+    )
+
+
+def _reasoning_effort() -> ReasoningEffort:
+    configured = os.environ.get("LLM_REASONING_EFFORT") or "high"
+    if configured in {"low", "medium", "high", "xhigh", "max"}:
+        return configured
+    raise AgentError(
+        "LLM_REASONING_EFFORT must be one of "
+        "'low', 'medium', 'high', 'xhigh', or 'max'"
+    )
+
+
+async def _read_stream(
+    response: httpx.Response,
+    activity: _ActivityEmitter,
+) -> _StreamAccumulator:
+    accumulator = _StreamAccumulator()
+    async for line in response.aiter_lines():
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload:
+            continue
+        if payload == "[DONE]":
+            break
+        try:
+            chunk = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise AgentError("LLM stream returned invalid JSON") from exc
+        if not isinstance(chunk, dict):
+            raise AgentError("LLM stream chunk must be an object")
+        error = chunk.get("error")
+        if isinstance(error, dict):
+            raise AgentError(str(error.get("message") or "LLM stream returned an error"))
+        usage = chunk.get("usage")
+        if isinstance(usage, dict):
+            accumulator.usage = usage
+        choices = chunk.get("choices")
+        if not isinstance(choices, list) or not choices:
+            continue
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            raise AgentError("LLM stream choice must be an object")
+        finish_reason = choice.get("finish_reason")
+        if isinstance(finish_reason, str):
+            accumulator.finish_reason = finish_reason
+        delta = choice.get("delta")
+        if not isinstance(delta, dict):
+            continue
+        reasoning = delta.get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning:
+            accumulator.reasoning.append(reasoning)
+            activity.reasoning_delta(reasoning)
+        content = delta.get("content")
+        if isinstance(content, str) and content:
+            accumulator.content.append(content)
+            activity.assistant_delta(content)
+        tool_calls = delta.get("tool_calls")
+        if tool_calls is not None:
+            _accumulate_tool_calls(accumulator, tool_calls)
+    activity.complete()
+    if accumulator.finish_reason is None:
+        raise AgentError("LLM stream ended without a finish_reason")
+    return accumulator
+
+
+def _accumulate_tool_calls(
+    accumulator: _StreamAccumulator,
+    tool_calls: Any,
+) -> None:
+    if not isinstance(tool_calls, list):
+        raise AgentError("LLM stream tool_calls must be a list")
+    for fallback_index, item in enumerate(tool_calls):
+        if not isinstance(item, dict):
+            raise AgentError("LLM stream tool call must be an object")
+        raw_index = item.get("index", fallback_index)
+        if not isinstance(raw_index, int) or isinstance(raw_index, bool):
+            raise AgentError("LLM stream tool call index must be an integer")
+        parts = accumulator.tool_calls.setdefault(raw_index, _ToolCallParts())
+        identifier = item.get("id")
+        if isinstance(identifier, str) and identifier:
+            parts.id = identifier
+        function = item.get("function")
+        if not isinstance(function, dict):
+            continue
+        name = function.get("name")
+        if isinstance(name, str) and name:
+            parts.name += name
+        arguments = function.get("arguments")
+        if isinstance(arguments, str) and arguments:
+            parts.arguments.append(arguments)
 
 
 def _chat_completions_endpoint(base_url: str) -> str:
@@ -198,7 +461,7 @@ def _convert_messages(
         role = message.get("role")
         content = message.get("content")
         if role == "assistant":
-            converted.append(_convert_assistant_message(content))
+            converted.append(_convert_assistant_message(message))
         elif role == "user":
             converted.extend(
                 _convert_user_message(
@@ -262,9 +525,14 @@ def _convert_user_message(
     return converted
 
 
-def _convert_assistant_message(content: Any) -> dict[str, Any]:
+def _convert_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
+    content = message.get("content")
+    reasoning = message.get("reasoning_content")
     if not isinstance(content, list):
-        return {"role": "assistant", "content": str(content)}
+        converted = {"role": "assistant", "content": str(content)}
+        if isinstance(reasoning, str) and reasoning:
+            converted["reasoning_content"] = reasoning
+        return converted
 
     text_parts: list[str] = []
     tool_calls: list[dict[str, Any]] = []
@@ -291,13 +559,15 @@ def _convert_assistant_message(content: Any) -> dict[str, Any]:
                 )
             case other:
                 raise AgentError(f"unsupported assistant content block type: {other!r}")
-    message: dict[str, Any] = {
+    converted_message: dict[str, Any] = {
         "role": "assistant",
         "content": "\n".join(part for part in text_parts if part) or None,
     }
     if tool_calls:
-        message["tool_calls"] = tool_calls
-    return message
+        converted_message["tool_calls"] = tool_calls
+    if isinstance(reasoning, str) and reasoning:
+        converted_message["reasoning_content"] = reasoning
+    return converted_message
 
 
 def _convert_text_content(content: Any, *, preserve_cache_control: bool) -> Any:
@@ -411,6 +681,11 @@ def _convert_response(body: dict[str, Any], *, latency_ms: int) -> LLMResponse:
         stop_reason=stop_reason,
         usage=_convert_usage(body.get("usage")),
         latency_ms=latency_ms,
+        reasoning_content=(
+            str(message["reasoning_content"])
+            if isinstance(message.get("reasoning_content"), str)
+            else ""
+        ),
     )
 
 

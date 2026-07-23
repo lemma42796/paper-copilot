@@ -8,6 +8,7 @@ from .types import (
     Compaction,
     LLMCall,
     Message,
+    Reasoning,
     RecoveryBase,
     RuntimeState,
     SessionEntry,
@@ -39,12 +40,20 @@ def reconstruct_rollout(
             compaction_summary = _compaction_summary(entry)
 
     assistant_blocks: list[dict[str, Any]] = []
+    assistant_reasoning: list[str] = []
     user_blocks: list[dict[str, Any]] = []
 
     def flush_assistant() -> None:
-        if assistant_blocks:
-            history.append({"role": "assistant", "content": assistant_blocks.copy()})
+        if assistant_blocks or assistant_reasoning:
+            message: dict[str, Any] = {
+                "role": "assistant",
+                "content": assistant_blocks.copy(),
+            }
+            if assistant_reasoning:
+                message["reasoning_content"] = "".join(assistant_reasoning)
+            history.append(message)
             assistant_blocks.clear()
+            assistant_reasoning.clear()
 
     def flush_user() -> None:
         if user_blocks:
@@ -64,6 +73,9 @@ def reconstruct_rollout(
         elif isinstance(entry, Message) and entry.role == "assistant":
             flush_user()
             assistant_blocks.append({"type": "text", "text": entry.text})
+        elif isinstance(entry, Reasoning):
+            flush_user()
+            assistant_reasoning.append(entry.text)
         elif isinstance(entry, ToolUse):
             flush_user()
             assistant_blocks.append(
