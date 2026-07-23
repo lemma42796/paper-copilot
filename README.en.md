@@ -72,11 +72,12 @@ This section follows `TASKS.md`, updated on 2026-07-23.
 Paper Copilot is being reorganized around two local product surfaces that share
 the same Python Core:
 
-- **SwiftUI macOS client:** the active M20 milestone. It owns native windows,
+- **SwiftUI macOS client:** M20 is complete. It owns native windows,
   folder authorization, Keychain storage, task and report presentation, and
   Python Runtime lifecycle.
-- **Local MCP Server:** begins only after M20 and explicit user approval. Its
-  first version uses local `stdio` transport and read-only paper tools.
+- **Local MCP Server:** M21 is complete. It exposes six read-only paper tools
+  over local `stdio` and has passed real Codex Agent tool discovery and query
+  acceptance.
 
 Existing Python and Web baseline:
 
@@ -228,8 +229,8 @@ LLM_MODEL=deepseek-v4-flash
 
 ## Running
 
-Until the M20 native client is complete, the Web UI remains available for
-developing and exercising the existing product flow:
+The migration-period Web UI remains available for developing and exercising
+the existing product flow:
 
 ```bash
 cd apps/web
@@ -244,6 +245,36 @@ For person re-identification, choose a strong baseline, find recent compatible
 modules, compose a verifiable model framework, and include ablations and
 evidence references.
 ```
+
+### Local MCP Server
+
+In a development checkout, add the read-only `stdio` server to Codex with:
+
+```bash
+codex mcp add paper-copilot -- \
+  uv --directory /absolute/path/to/paper-copilot run paper-copilot-mcp
+```
+
+The server exposes `library_status`, `list_papers`, `search_papers`, `get_paper`,
+`inspect_evidence`, and `compare_papers`. Search uses the existing hybrid
+retrieval path when `DASHSCOPE_API_KEY` or `LLM_API_KEY` is available, and local
+FTS5/BM25 otherwise.
+
+In the Codex desktop MCP server settings, add
+`DASHSCOPE_API_KEY=sk-...` under environment variables, save, and restart the
+server. The same variable can instead be set in the project-root `.env`.
+With query embedding enabled, `search_papers` reports
+`retrieval_mode=hybrid` and `query_sent_to_embedding_provider=true`.
+
+MCP tool calls do not enter the Paper Copilot agent loop or invoke the default
+`qwen3.6-flash` model. The MCP host, such as Codex, interprets the request and
+orchestrates tools; the server performs MCP schema validation, service-level
+validation, and read-only Core calls. Only hybrid search query embedding uses
+`text-embedding-v4`.
+
+The tools never upload a complete PDF or session. However, an MCP client will
+normally pass returned paper summaries and evidence to its model. Treat those
+returned excerpts as data that may leave the device when using a cloud client.
 
 ## Local HTTP API
 
@@ -307,7 +338,7 @@ Failed or interrupted output is not added to conversation memory.
 ```text
 SwiftUI macOS Client ─┐
 Legacy Next.js Web UI ├─> local HTTP/job API ─> Python Paper Core
-Local MCP Server ─────┘                         (M21, planned)
+Local MCP Server ────────> read-only MCP tools ─┘
 
 Python Paper Core
   -> persistent chat.jobs lifecycle
@@ -321,13 +352,14 @@ Python Paper Core
 | --- | --- |
 | `src/paper_copilot/api/` | Local HTTP transport |
 | `src/paper_copilot/chat/` | Chat runtime, jobs, and history |
+| `src/paper_copilot/mcp/` | Local read-only `stdio` MCP server |
 | `src/paper_copilot/agents/` | Paper Copilot loop and bounded tools |
 | `src/paper_copilot/knowledge/` | Cross-paper indexes and hybrid search |
 | `src/paper_copilot/retrieval/` | Single-paper section extraction |
 | `src/paper_copilot/eval/` | Regression, retrieval eval, and reports |
 | `src/paper_copilot/session/` | Append-only JSONL session storage |
 | `src/paper_copilot/observability/` | Local rollout traces and diagnostics |
-| `apps/macos/` | M20 SwiftUI client under development |
+| `apps/macos/` | M20 SwiftUI client |
 | `apps/web/` | Migration-period Next.js frontend |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for current technical structure and
@@ -396,12 +428,10 @@ the flash tier.
 
 The active roadmap lives in [TASKS.md](TASKS.md).
 
-1. Complete the M20 SwiftUI macOS client foundation and one real local task
-   flow.
-2. Implement native folder authorization, Keychain storage, Runtime lifecycle,
-   progress, interruption, and Markdown reports.
-3. Stop after one real manual run. Begin M21 Local Read-only MCP only after
-   explicit user approval.
+1. M20 SwiftUI macOS Client Foundation is complete.
+2. M21 Local Read-only MCP is complete.
+3. Work is stopped here. Begin M22 MCP Long-running Jobs only after explicit
+   user approval.
 
 ## Known Limitations
 

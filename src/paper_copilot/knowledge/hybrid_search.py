@@ -101,7 +101,7 @@ class ContainsFilter:
 
 
 def search(
-    query_vec: np.ndarray,
+    query_vec: np.ndarray | None,
     *,
     fields_store: FieldsStore,
     embeddings_store: EmbeddingsStore,
@@ -125,6 +125,8 @@ def search(
         raise KnowledgeError("evidence_pool_per_paper must be >= 1")
     if rrf_k < 1:
         raise KnowledgeError("rrf_k must be >= 1")
+    if query_vec is None and query_text is None:
+        raise KnowledgeError("query_vec or query_text is required")
 
     candidates = _candidate_paper_ids(
         fields_store=fields_store, year=year, contains=contains
@@ -141,7 +143,11 @@ def search(
 
     paper_ids_arg = list(candidates) if candidates is not None else None
     pool = k * overfetch
-    vector_hits = embeddings_store.knn(query_vec, k=pool, paper_ids=paper_ids_arg)
+    vector_hits = (
+        embeddings_store.knn(query_vec, k=pool, paper_ids=paper_ids_arg)
+        if query_vec is not None
+        else []
+    )
     bm25_hits = (
         embeddings_store.bm25(query_text, k=pool, paper_ids=paper_ids_arg)
         if query_text is not None
@@ -154,17 +160,22 @@ def search(
     chunks_per_paper = _group_chunks_per_paper(fused, limit=max_chunks_per_paper)
 
     if len(chunks_per_paper) < k and (
-        len(vector_hits) == pool or len(bm25_hits) == pool
+        (query_vec is not None and len(vector_hits) == pool)
+        or len(bm25_hits) == pool
     ):
         # Top-k*overfetch chunks clustered into < k papers. Re-pull at the
         # full index size so the per-paper group-by has room to surface
         # papers whose best chunk was outranked by a popular paper's tail.
         ceiling = embeddings_store.count_chunks()
         if ceiling > pool:
-            vector_hits = embeddings_store.knn(
-                query_vec,
-                k=ceiling,
-                paper_ids=paper_ids_arg,
+            vector_hits = (
+                embeddings_store.knn(
+                    query_vec,
+                    k=ceiling,
+                    paper_ids=paper_ids_arg,
+                )
+                if query_vec is not None
+                else []
             )
             bm25_hits = (
                 embeddings_store.bm25(query_text, k=ceiling, paper_ids=paper_ids_arg)
@@ -312,7 +323,7 @@ def _group_chunks_per_paper(
 
 
 def _paper_local_chunks(
-    query_vec: np.ndarray,
+    query_vec: np.ndarray | None,
     *,
     embeddings_store: EmbeddingsStore,
     paper_id: str,
@@ -321,7 +332,11 @@ def _paper_local_chunks(
     limit: int,
     rrf_k: int,
 ) -> list[_FusedChunk]:
-    vector_hits = embeddings_store.knn(query_vec, k=pool, paper_ids=[paper_id])
+    vector_hits = (
+        embeddings_store.knn(query_vec, k=pool, paper_ids=[paper_id])
+        if query_vec is not None
+        else []
+    )
     bm25_hits = (
         embeddings_store.bm25(query_text, k=pool, paper_ids=[paper_id])
         if query_text is not None

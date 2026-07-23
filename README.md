@@ -57,8 +57,9 @@ PDF、索引、session、报告和 trace 默认保存在用户设备。本地检
 
 Paper Copilot 正在重构为两个复用同一 Python Core 的本地产品入口：
 
-- SwiftUI macOS 客户端：当前 M20，负责原生窗口、目录授权、Keychain、任务与报告界面，以及 Python Runtime 生命周期。
-- Local MCP Server：M21 才开始，第一版使用本地 `stdio` transport 和只读论文工具。
+- SwiftUI macOS 客户端：M20 已完成，负责原生窗口、目录授权、Keychain、任务与报告界面，以及 Python Runtime 生命周期。
+- Local MCP Server：M21 已完成，提供本地 `stdio` transport 和六个只读论文工具，
+  并已通过真实 Codex Agent 工具发现与查询验收。
 
 现有 Python 与 Web 基线：
 
@@ -214,8 +215,8 @@ embedding 仍使用独立的 `DASHSCOPE_API_KEY`。
 
 ## 运行
 
-在 M20 原生客户端完成前，Web UI 仍可用于开发和回归现有能力。它依赖宿主进程
-提供本地 HTTP API；仓库不再暴露终端启动命令：
+迁移期 Web UI 仍可用于开发和回归现有能力。它依赖宿主进程提供本地 HTTP API；
+仓库不再暴露面向用户的交互式终端界面：
 
 ```bash
 cd apps/web
@@ -228,6 +229,32 @@ npm run dev
 ```text
 针对行人重识别，先选一个 strong baseline，再从近年论文找可插拔模块，组合成可验证的新模型框架，并给出消融实验计划和证据引用。
 ```
+
+### Local MCP Server
+
+开发环境可把只读 `stdio` Server 加入 Codex：
+
+```bash
+codex mcp add paper-copilot -- \
+  uv --directory /absolute/path/to/paper-copilot run paper-copilot-mcp
+```
+
+Server 提供 `library_status`、`list_papers`、`search_papers`、`get_paper`、
+`inspect_evidence` 和 `compare_papers`。搜索在环境中有 `DASHSCOPE_API_KEY` 或
+`LLM_API_KEY` 时使用现有 hybrid retrieval，否则使用本地 FTS5/BM25。
+
+在 Codex 桌面端的 MCP Server 设置中，可在“环境变量”加入
+`DASHSCOPE_API_KEY=sk-...`，保存后重启 Server。也可以在项目根目录的 `.env`
+配置同名变量。成功启用 query embedding 后，`search_papers` 返回
+`retrieval_mode=hybrid` 和 `query_sent_to_embedding_provider=true`。
+
+MCP 工具调用不会进入 Paper Copilot Agent loop，也不会调用默认的
+`qwen3.6-flash`。Codex 等 MCP Host 负责理解请求和编排工具；Server 只做 MCP schema
+校验、服务层业务校验和只读 Core 调用。只有 hybrid 搜索的 query embedding 会使用
+`text-embedding-v4`。
+
+工具不会上传完整 PDF 或 session，但 MCP 客户端通常会把返回的论文摘要和 evidence
+交给其模型处理。使用云端 MCP 客户端前，应把这些返回内容视为会离开设备的数据。
 
 ## 本地 HTTP API
 
@@ -317,7 +344,7 @@ curl -sS -X POST http://127.0.0.1:8765/jobs \
 ```text
 SwiftUI macOS Client ─┐
 Legacy Next.js Web UI ├─> local HTTP/job API ─> Python Paper Core
-Local MCP Server ─────┘                         (M21, planned)
+Local MCP Server ────────> read-only MCP tools ─┘
 
 Python Paper Core
   -> chat.jobs persistent lifecycle
@@ -333,12 +360,13 @@ Python Paper Core
 | --- | --- |
 | `src/paper_copilot/api/` | 本地 HTTP API |
 | `src/paper_copilot/chat/` | 单输入框 runtime 与历史记录 |
+| `src/paper_copilot/mcp/` | 本地只读 `stdio` MCP Server |
 | `src/paper_copilot/agents/` | 单一 Paper Copilot、tool loop 与读论文工具 |
 | `src/paper_copilot/knowledge/` | 跨论文索引与 hybrid search |
 | `src/paper_copilot/retrieval/` | 单论文 chunk / section 工具 |
 | `src/paper_copilot/eval/` | 回归、retrieval eval 与报告 |
 | `src/paper_copilot/session/` | JSONL session 存储 |
-| `apps/macos/` | M20 SwiftUI 原生客户端（建设中） |
+| `apps/macos/` | M20 SwiftUI 原生客户端 |
 | `apps/web/` | 迁移期 Next.js 前端 |
 
 更多设计细节见 [ARCHITECTURE.md](ARCHITECTURE.md)，当前里程碑见 [TASKS.md](TASKS.md)。
@@ -407,9 +435,9 @@ git diff --check -- README.md README.en.md
 
 当前优先级：
 
-1. 完成 M20 SwiftUI macOS 客户端骨架和一条真实本地任务链路。
-2. 原生实现目录授权、Keychain、Runtime 生命周期、任务进度、停止和 Markdown 报告。
-3. 完成一次真实手动运行后停止；只有用户明确要求才进入 M21 Local Read-only MCP。
+1. M20 SwiftUI macOS Client Foundation 已完成。
+2. M21 Local Read-only MCP 已完成。
+3. 当前停止；只有用户明确要求才进入 M22 MCP Long-running Jobs。
 
 ## 已知限制
 

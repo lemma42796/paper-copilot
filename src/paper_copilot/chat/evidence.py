@@ -56,8 +56,10 @@ def lookup_evidence_chunk(ref: str, *, root: Path | None = None) -> EvidenceChun
     chunk_id = int(match.group("chunk_id"))
 
     with (
-        FieldsStore.open(home / "fields.db") as fields_store,
-        EmbeddingsStore.open(home / "embeddings.db", dim=EMBEDDING_DIM) as embeddings_store,
+        FieldsStore.open_read_only(home / "fields.db") as fields_store,
+        EmbeddingsStore.open_read_only(
+            home / "embeddings.db", dim=EMBEDDING_DIM
+        ) as embeddings_store,
     ):
         row = fields_store.get(paper_id)
         chunk = embeddings_store.get_chunk(chunk_id, paper_id=paper_id)
@@ -100,7 +102,7 @@ def lookup_evidence_field(ref: str, *, root: Path | None = None) -> EvidenceFiel
     paper_id = match.group("paper_id")
     field = match.group("field")
 
-    with FieldsStore.open(home / "fields.db") as fields_store:
+    with FieldsStore.open_read_only(home / "fields.db") as fields_store:
         row = fields_store.get(paper_id)
         if row is None:
             raise KnowledgeError(f"paper not found for ref: {ref}")

@@ -18,9 +18,11 @@ dependencies = [
     "sqlite-vec>=0.1.9",
     "numpy>=2.0",
     "pyyaml>=6.0",
+    "mcp>=1.27,<2",
 ]
 
 [project.scripts]
+paper-copilot-mcp = "paper_copilot.mcp.server:main"
 paper-copilot-runtime = "paper_copilot.api.runtime:main"
 
 [tool.hatch.build.targets.wheel]

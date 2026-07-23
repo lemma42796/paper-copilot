@@ -23,12 +23,13 @@
 
 ```
 apps/
-├── macos/        # M20 SwiftUI 原生客户端（建设中）
+├── macos/        # M20 SwiftUI 原生客户端
 └── web/          # 迁移期 Next.js 客户端
 
 src/paper_copilot/
 ├── api/          # 前端可调用的 HTTP API 边界
 ├── chat/         # 单输入框运行时入口与历史记录
+├── mcp/          # M21 本地只读 stdio MCP 边界
 ├── agents/       # 单一 Paper Copilot loop + 工具实现
 ├── schemas/      # Pydantic 模型，结构化输出契约
 ├── session/      # JSONL session tree 读写
@@ -46,6 +47,24 @@ src/paper_copilot/
 持久 job 创建/查询/事件/恢复/diagnostics、报告、evidence lookup、Composer
 library preview 和本地目录选择接口，不引入 FastAPI 等新依赖。API 层只做 JSON
 边界校验、CORS/header、错误响应和调用 `chat/` 的公开接口；业务编排仍归 `chat/`。
+
+### `mcp/`
+M21 的本地只读 MCP 边界。`paper-copilot-mcp` 使用官方 Python MCP SDK 和 `stdio`
+transport，提供 library status、论文列表、跨论文检索、结构化论文读取、evidence
+反查和确定性对比。它直接调用 `knowledge/` 与既有 evidence 接口，不复制检索或论文
+业务逻辑。
+
+MCP Host 的模型负责理解请求和工具编排；Server 不进入 `agents/` 的 Paper Copilot
+loop，不创建 agent session，也不调用 `LLMClient`。FastMCP/Pydantic 负责协议参数
+schema 校验，`MCPReadService` 负责查询长度、数量、paper id 和 compare aspect 等
+业务校验。
+
+MCP 工具没有任意路径或写操作参数，只从 `PAPER_COPILOT_HOME` 和配置的论文目录读取；
+fields 与 embeddings SQLite store 使用 read-only connection，不在工具调用时初始化或
+更新 schema。所有输出限制论文数、字段项数、evidence 数和文本长度，不返回完整 PDF
+或 session。语义搜索在存在 embedding Key 时沿用 vector + BM25 + RRF；否则使用同一
+本地索引的 FTS5/BM25 模式。MCP 客户端把工具结果交给云端模型时，返回的本地论文摘要
+与 evidence 会离开设备，客户端安装说明必须明确这一数据边界。
 
 ### `apps/macos/`
 M20 的原生 SwiftUI 客户端。它负责窗口、侧栏、聊天输入、任务状态、任务诊断、

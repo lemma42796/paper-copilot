@@ -118,6 +118,18 @@ class EmbeddingsStore:
         store._init_schema()
         return store
 
+    @classmethod
+    def open_read_only(cls, db_path: Path, *, dim: int) -> Self:
+        if not db_path.is_file():
+            raise KnowledgeError(f"embedding index not found: {db_path}")
+        uri = f"{db_path.resolve().as_uri()}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        conn.execute("PRAGMA query_only=ON")
+        return cls(conn, dim)
+
     @property
     def dim(self) -> int:
         return self._dim

@@ -86,6 +86,15 @@ class FieldsStore:
         store._init_schema()
         return store
 
+    @classmethod
+    def open_read_only(cls, db_path: Path) -> Self:
+        if not db_path.is_file():
+            raise KnowledgeError(f"fields index not found: {db_path}")
+        uri = f"{db_path.resolve().as_uri()}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        conn.execute("PRAGMA query_only=ON")
+        return cls(conn)
+
     def _init_schema(self) -> None:
         with self._conn:
             for stmt in _CREATE_STATEMENTS:

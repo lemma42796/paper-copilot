@@ -124,7 +124,7 @@ Python Paper Core ─────┤
 - 不做登录、订阅、支付、云同步和远程任务。
 - 不引入 Rust。
 
-## M21 Local Read-only MCP
+## Completed Milestone: M21 Local Read-only MCP
 
 只有 M20 完成且用户明确要求继续后才开始。
 
@@ -147,6 +147,27 @@ Python Paper Core ─────┤
 - 至少在一个主流 MCP 客户端完成手动安装、工具发现和真实查询。
 - 没有导入、删除、覆盖或任意命令执行工具。
 - 完成后停止，不自动进入 M22。
+
+### Progress (2026-07-23)
+
+- 已使用官方 Python MCP SDK v1 和本地 `stdio` transport，实现
+  `paper-copilot-mcp` 入口及全部六个计划内只读工具。
+- MCP 服务直接调用现有 fields store、hybrid search、evidence lookup 和 comparison
+  builder；fields / embeddings store 新增 SQLite read-only 打开模式，不在查询时初始化
+  或改写 schema。
+- 工具没有任意路径、导入、删除、覆盖或命令执行参数；论文数、evidence 数量和文本
+  长度均有上限，不返回完整 PDF 或 session。
+- `search_papers` 在配置 embedding Key 时复用 vector + BM25 + RRF；未配置 Key 时退回
+  本地 FTS5/BM25，并在结果中明确返回 retrieval mode 和查询是否发往 embedding 服务。
+- 已通过官方 SDK 客户端完成真实 `stdio` 初始化、六工具发现及
+  `library_status`、`list_papers`、`get_paper`、`search_papers`、
+  `inspect_evidence`、`compare_papers` 查询。
+- 已安装到本机 Codex 全局 MCP 配置并确认 enabled；Codex 桌面端完成真实工具发现，
+  `library_status` 返回 41 篇论文、2066 个 chunk 和 34 个本地 PDF。
+- Codex 桌面端在为 MCP 进程配置 `DASHSCOPE_API_KEY` 后再次调用
+  `search_papers("transformer attention")`，返回
+  `retrieval_mode=hybrid`、`query_sent_to_embedding_provider=true` 和 5 条结果。
+- M21 已完成。按里程碑边界在此停止，不自动进入 M22。
 
 ## M22 MCP Long-running Jobs
 
