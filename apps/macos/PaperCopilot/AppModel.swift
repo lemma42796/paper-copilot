@@ -42,6 +42,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var jobs: [ChatJobRecord] = []
     @Published private(set) var jobEvents: [String: [ChatJobEvent]] = [:]
     @Published private(set) var jobError: String?
+    @Published private(set) var jobDiagnostics: [String: RolloutDiagnostics] = [:]
+    @Published private(set) var jobDiagnosticErrors: [String: String] = [:]
+    @Published private(set) var loadingDiagnosticJobIDs: Set<String> = []
     @Published private(set) var isSubmitting = false
     @Published private(set) var modelConfigurations: [ModelConfiguration] = []
     @Published private(set) var availableModels: [ModelConfiguration] = []
@@ -55,6 +58,7 @@ final class AppModel: ObservableObject {
     private var api: PaperCopilotAPI?
     private var eventCursors: [String: Int] = [:]
     private var observationTasks: [String: Task<Void, Never>] = [:]
+    private var requestedDiagnosticAttempts: [String: Int] = [:]
 
     init() {
         restoreLibrary()
@@ -367,6 +371,47 @@ final class AppModel: ObservableObject {
                 }
             } catch {
                 jobError = error.localizedDescription
+            }
+        }
+    }
+
+    func loadDiagnostics(
+        for jobID: String,
+        attempt: Int,
+        force: Bool = false
+    ) {
+        guard let api else {
+            jobDiagnosticErrors[jobID] = "本地 Runtime 尚未连接。"
+            return
+        }
+        if
+            !force,
+            jobDiagnostics[jobID]?.attempt == attempt
+        {
+            return
+        }
+
+        requestedDiagnosticAttempts[jobID] = attempt
+        loadingDiagnosticJobIDs.insert(jobID)
+        jobDiagnosticErrors[jobID] = nil
+        Task {
+            do {
+                let diagnostics = try await api.diagnostics(
+                    for: jobID,
+                    attempt: attempt
+                )
+                guard requestedDiagnosticAttempts[jobID] == attempt else {
+                    return
+                }
+                jobDiagnostics[jobID] = diagnostics
+            } catch {
+                guard requestedDiagnosticAttempts[jobID] == attempt else {
+                    return
+                }
+                jobDiagnosticErrors[jobID] = error.localizedDescription
+            }
+            if requestedDiagnosticAttempts[jobID] == attempt {
+                loadingDiagnosticJobIDs.remove(jobID)
             }
         }
     }

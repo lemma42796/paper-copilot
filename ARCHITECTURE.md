@@ -43,16 +43,20 @@ src/paper_copilot/
 
 ### `api/`
 前端边界层。当前 v1 用 Python stdlib HTTP server 暴露 health、兼容 chat、
-持久 job 创建/查询/事件/恢复、报告、evidence lookup、Composer library preview
-和本地目录选择接口，不引入
-FastAPI 等新依赖。API 层只做 JSON 边界校验、CORS/header、错误响应和调用
-`chat/` 的公开接口；业务编排仍归 `chat/`。
+持久 job 创建/查询/事件/恢复/diagnostics、报告、evidence lookup、Composer
+library preview 和本地目录选择接口，不引入 FastAPI 等新依赖。API 层只做 JSON
+边界校验、CORS/header、错误响应和调用 `chat/` 的公开接口；业务编排仍归 `chat/`。
 
 ### `apps/macos/`
-M20 的原生 SwiftUI 客户端。它负责窗口、侧栏、聊天输入、任务状态、Markdown 报告、
-目录授权、Keychain 和 Python Runtime 生命周期；论文处理、job 状态机、恢复、
-检索和 LLM 调用仍由 Python Core 负责。客户端通过动态本地端口连接现有 job API，
-不复制 Python 业务逻辑。
+M20 的原生 SwiftUI 客户端。它负责窗口、侧栏、聊天输入、任务状态、任务诊断、
+Markdown 报告、目录授权、Keychain 和 Python Runtime 生命周期；论文处理、job
+状态机、恢复、检索和 LLM 调用仍由 Python Core 负责。客户端通过动态本地端口连接
+现有 job API，不复制 Python 业务逻辑。
+
+客户端为每个已有 attempt 的任务提供轻量诊断入口，使用独立原生 Sheet 按需调用
+只读 diagnostics API，展示 Trace ID、耗时、首错、慢操作、未完成实体和重复工具
+签名。它不直接读取 trace/payload 文件，不显示完整 prompt 或 PDF 正文，也不改变
+`observability/` 的归约和脱敏边界。
 
 ### `apps/web/`
 迁移期 Next.js 客户端。它通过本地 Python API 的持久 job 接口提交任务；

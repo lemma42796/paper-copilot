@@ -265,12 +265,39 @@ struct ToolApprovalRequest: Codable, Equatable {
     }
 }
 
+struct ChatJobAttempt: Codable, Equatable, Identifiable {
+    let number: Int
+    let status: String
+    let sessionID: String
+    let sessionPath: String
+    let startedAt: String
+    let finishedAt: String?
+    let error: String?
+    let resumedFromAttempt: Int?
+
+    var id: Int {
+        number
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case number
+        case status
+        case sessionID = "session_id"
+        case sessionPath = "session_path"
+        case startedAt = "started_at"
+        case finishedAt = "finished_at"
+        case error
+        case resumedFromAttempt = "resumed_from_attempt"
+    }
+}
+
 struct ChatJobRecord: Codable, Identifiable, Equatable {
     let id: String
     let status: ChatJobStatus
     let createdAt: String
     let updatedAt: String
     let spec: ChatJobSpec
+    let attempts: [ChatJobAttempt]
     let result: ChatJobResult?
     let error: String?
     let pendingApproval: ToolApprovalRequest?
@@ -281,6 +308,7 @@ struct ChatJobRecord: Codable, Identifiable, Equatable {
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case spec
+        case attempts
         case result
         case error
         case pendingApproval = "pending_approval"
@@ -318,6 +346,122 @@ struct ChatJobEvent: Codable, Identifiable, Equatable {
         case title
         case delta
         case detail
+    }
+}
+
+enum TraceEntityType: String, Codable, CaseIterable {
+    case rollout
+    case turn
+    case llmCall = "llm_call"
+    case toolCall = "tool_call"
+    case compaction
+
+    var displayName: String {
+        switch self {
+        case .rollout:
+            return "任务"
+        case .turn:
+            return "轮次"
+        case .llmCall:
+            return "模型调用"
+        case .toolCall:
+            return "工具调用"
+        case .compaction:
+            return "上下文压缩"
+        }
+    }
+}
+
+enum TraceStatus: String, Codable {
+    case running
+    case completed
+    case failed
+    case cancelled
+    case aborted
+
+    var displayName: String {
+        switch self {
+        case .running:
+            return "运行中"
+        case .completed:
+            return "已完成"
+        case .failed:
+            return "失败"
+        case .cancelled:
+            return "已取消"
+        case .aborted:
+            return "已中止"
+        }
+    }
+}
+
+struct OperationDiagnostic: Codable, Equatable, Identifiable {
+    let entityID: String
+    let entityType: TraceEntityType
+    let label: String
+    let status: TraceStatus
+    let durationMS: Int?
+    let errorType: String?
+    let errorMessage: String?
+
+    var id: String {
+        entityID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case entityID = "entity_id"
+        case entityType = "entity_type"
+        case label
+        case status
+        case durationMS = "duration_ms"
+        case errorType = "error_type"
+        case errorMessage = "error_message"
+    }
+}
+
+struct RepeatedToolCallDiagnostic: Codable, Equatable, Identifiable {
+    let toolName: String
+    let inputSHA256: String
+    let count: Int
+    let entityIDs: [String]
+
+    var id: String {
+        "\(toolName):\(inputSHA256)"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case toolName = "tool_name"
+        case inputSHA256 = "input_sha256"
+        case count
+        case entityIDs = "entity_ids"
+    }
+}
+
+struct RolloutDiagnostics: Codable, Equatable {
+    let jobID: String
+    let attempt: Int
+    let traceID: String
+    let status: TraceStatus
+    let eventCount: Int
+    let totalDurationMS: Int?
+    let phaseDurationMS: [String: Int]
+    let firstError: OperationDiagnostic?
+    let slowOperations: [OperationDiagnostic]
+    let unfinishedOperations: [OperationDiagnostic]
+    let repeatedToolCalls: [RepeatedToolCallDiagnostic]
+
+    enum CodingKeys: String, CodingKey {
+        case jobID = "job_id"
+        case attempt
+        case traceID = "trace_id"
+        case status
+        case eventCount = "event_count"
+        case totalDurationMS = "total_duration_ms"
+        case phaseDurationMS = "phase_duration_ms"
+        case firstError = "first_error"
+        case slowOperations = "slow_operations"
+        case unfinishedOperations = "unfinished_operations"
+        case repeatedToolCalls = "repeated_tool_calls"
     }
 }
 

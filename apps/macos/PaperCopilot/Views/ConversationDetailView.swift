@@ -289,6 +289,10 @@ private struct JobTurnView: View {
                     .background(.quaternary.opacity(0.5))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
             }
+
+            if !job.attempts.isEmpty {
+                JobDiagnosticsView(job: job)
+            }
         }
     }
 
@@ -348,6 +352,435 @@ private struct JobTurnView: View {
         .background(.orange.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
+}
+
+private struct JobDiagnosticsView: View {
+    @EnvironmentObject private var appModel: AppModel
+    let job: ChatJobRecord
+    @State private var isPresented = false
+
+    var body: some View {
+        HStack {
+            Button {
+                isPresented = true
+            } label: {
+                Label("查看任务诊断", systemImage: "waveform.path.ecg")
+            }
+            .buttonStyle(.borderless)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .help("查看耗时、错误和调用溯源")
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .sheet(isPresented: $isPresented) {
+            JobDiagnosticsSheet(job: job)
+                .environmentObject(appModel)
+        }
+    }
+}
+
+private struct JobDiagnosticsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var appModel: AppModel
+    let job: ChatJobRecord
+    @State private var selectedAttempt: Int
+
+    init(job: ChatJobRecord) {
+        self.job = job
+        _selectedAttempt = State(
+            initialValue: job.attempts.last?.number ?? 1
+        )
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            ScrollView {
+                diagnosticContent
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(minWidth: 680, idealWidth: 720, minHeight: 540, idealHeight: 620)
+        .onAppear {
+            loadDiagnostics()
+        }
+        .onChange(of: selectedAttempt) { _ in
+            loadDiagnostics()
+        }
+        .onChange(of: job.status) { status in
+            if !status.isActive {
+                loadDiagnostics(force: true)
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "waveform.path.ecg")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("任务诊断")
+                    .font(.headline)
+                Text(job.id)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+            }
+
+            Spacer(minLength: 16)
+
+            if job.attempts.count > 1 {
+                Picker("Attempt", selection: $selectedAttempt) {
+                    ForEach(job.attempts) { attempt in
+                        Text("Attempt \(attempt.number)")
+                            .tag(attempt.number)
+                    }
+                }
+                .pickerStyle(.menu)
+                .fixedSize()
+            } else {
+                Text("Attempt \(selectedAttempt)")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            Button {
+                loadDiagnostics(force: true)
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.borderless)
+            .disabled(isLoading)
+            .help("刷新诊断")
+
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    .symbolRenderingMode(.hierarchical)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help("关闭")
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+    }
+
+    @ViewBuilder
+    private var diagnosticContent: some View {
+        if
+            let diagnostics = appModel.jobDiagnostics[job.id],
+            diagnostics.attempt == selectedAttempt
+        {
+            RolloutDiagnosticsView(diagnostics: diagnostics)
+        } else if let error = appModel.jobDiagnosticErrors[job.id] {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+                Button("重试") {
+                    loadDiagnostics(force: true)
+                }
+                .buttonStyle(.bordered)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            VStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.regular)
+                Text("正在归约本地 trace…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 320)
+        }
+    }
+
+    private var isLoading: Bool {
+        appModel.loadingDiagnosticJobIDs.contains(job.id)
+    }
+
+    private func loadDiagnostics(force: Bool = false) {
+        appModel.loadDiagnostics(
+            for: job.id,
+            attempt: selectedAttempt,
+            force: force
+        )
+    }
+}
+
+private struct RolloutDiagnosticsView: View {
+    let diagnostics: RolloutDiagnostics
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            summary
+            phaseDurations
+
+            if let firstError = diagnostics.firstError {
+                diagnosticSection(
+                    title: "首个错误",
+                    systemImage: "exclamationmark.octagon.fill"
+                ) {
+                    OperationDiagnosticRow(
+                        operation: firstError,
+                        emphasizesError: true
+                    )
+                }
+            }
+
+            operationList(
+                title: "慢操作（≥ 1 秒）",
+                systemImage: "timer",
+                operations: diagnostics.slowOperations,
+                emptyMessage: "未检测到慢操作。"
+            )
+            operationList(
+                title: "未完成实体",
+                systemImage: "hourglass",
+                operations: diagnostics.unfinishedOperations,
+                emptyMessage: "没有未完成实体。"
+            )
+            repeatedToolCalls
+        }
+    }
+
+    private var summary: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 24) {
+                    DiagnosticMetric(
+                        title: "状态",
+                        value: diagnostics.status.displayName
+                    )
+                    DiagnosticMetric(
+                        title: "总耗时",
+                        value: formattedDuration(diagnostics.totalDurationMS)
+                    )
+                    DiagnosticMetric(
+                        title: "事件数",
+                        value: String(diagnostics.eventCount)
+                    )
+                }
+                Divider()
+                LabeledContent("Trace ID") {
+                    Text(diagnostics.traceID)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+            .padding(.vertical, 2)
+        } label: {
+            Label("概览", systemImage: "gauge")
+                .font(.caption.weight(.semibold))
+        }
+    }
+
+    private var phaseDurations: some View {
+        diagnosticSection(
+            title: "各类操作累计耗时",
+            systemImage: "chart.bar.xaxis"
+        ) {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(TraceEntityType.allCases, id: \.rawValue) { entityType in
+                    if
+                        let duration = diagnostics.phaseDurationMS[
+                            entityType.rawValue
+                        ]
+                    {
+                        HStack {
+                            Text(entityType.displayName)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(formattedDuration(duration))
+                                .font(.caption.monospacedDigit())
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var repeatedToolCalls: some View {
+        diagnosticSection(
+            title: "重复工具调用（≥ 3 次）",
+            systemImage: "repeat"
+        ) {
+            if diagnostics.repeatedToolCalls.isEmpty {
+                Text("未检测到重复工具调用。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(diagnostics.repeatedToolCalls) { call in
+                        DisclosureGroup {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("输入 SHA-256")
+                                    .foregroundStyle(.secondary)
+                                Text(call.inputSHA256)
+                                    .font(.caption.monospaced())
+                                    .textSelection(.enabled)
+                                Text("实体")
+                                    .foregroundStyle(.secondary)
+                                    .padding(.top, 2)
+                                ForEach(call.entityIDs, id: \.self) { entityID in
+                                    Text(entityID)
+                                        .font(.caption.monospaced())
+                                        .textSelection(.enabled)
+                                }
+                            }
+                            .font(.caption)
+                            .padding(.top, 4)
+                        } label: {
+                            HStack {
+                                Text(call.toolName)
+                                    .font(.caption.weight(.semibold))
+                                Spacer()
+                                Text("× \(call.count)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func operationList(
+        title: String,
+        systemImage: String,
+        operations: [OperationDiagnostic],
+        emptyMessage: String
+    ) -> some View {
+        diagnosticSection(title: title, systemImage: systemImage) {
+            if operations.isEmpty {
+                Text(emptyMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(operations) { operation in
+                        OperationDiagnosticRow(
+                            operation: operation,
+                            emphasizesError: false
+                        )
+                        if operation.id != operations.last?.id {
+                            Divider()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func diagnosticSection<Content: View>(
+        title: String,
+        systemImage: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                content()
+            }
+            .padding(.vertical, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            Label(title, systemImage: systemImage)
+                .font(.caption.weight(.semibold))
+        }
+    }
+}
+
+private struct DiagnosticMetric: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct OperationDiagnosticRow: View {
+    let operation: OperationDiagnostic
+    let emphasizesError: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(operation.label)
+                    .font(.caption.weight(.semibold))
+                Text(operation.entityType.displayName)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(operation.status.displayName)
+                    .font(.caption2)
+                    .foregroundStyle(
+                        emphasizesError ? Color.red : Color.secondary
+                    )
+                Text(formattedDuration(operation.durationMS))
+                    .font(.caption.monospacedDigit())
+            }
+            if let errorType = operation.errorType {
+                Text(errorType)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+            }
+            if let errorMessage = operation.errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+            }
+            Text(operation.entityID)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, emphasizesError ? 8 : 0)
+        .background(emphasizesError ? Color.red.opacity(0.07) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+private func formattedDuration(_ milliseconds: Int?) -> String {
+    guard let milliseconds else {
+        return "—"
+    }
+    if milliseconds < 1_000 {
+        return "\(milliseconds) ms"
+    }
+    if milliseconds < 60_000 {
+        return String(format: "%.2f s", Double(milliseconds) / 1_000)
+    }
+    return String(format: "%.1f min", Double(milliseconds) / 60_000)
 }
 
 private struct JobActivity: Identifiable {

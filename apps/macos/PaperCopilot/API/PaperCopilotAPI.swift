@@ -91,6 +91,21 @@ final class PaperCopilotAPI {
         return try await send(request)
     }
 
+    func diagnostics(
+        for jobID: String,
+        attempt: Int
+    ) async throws -> RolloutDiagnostics {
+        let request = URLRequest(
+            url: try url(
+                path: ["jobs", jobID, "diagnostics"],
+                queryItems: [
+                    URLQueryItem(name: "attempt", value: String(attempt))
+                ]
+            )
+        )
+        return try await send(request)
+    }
+
     func stream(
         jobID: String,
         after: Int

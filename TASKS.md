@@ -105,6 +105,16 @@ Python Paper Core ─────┤
   均正常恢复。
 - M20 已完成。按里程碑边界在此停止，不自动进入 M21。
 
+### Follow-up (2026-07-23)
+
+- macOS 客户端新增原生任务诊断 Sheet，按需读取既有只读 diagnostics API。
+- 用户可切换 job attempt，并查看 Trace ID、阶段耗时、首个错误、慢操作、未完成实体
+  和重复工具调用签名；诊断内容保留实体 ID，便于关联本地 trace 溯源。
+- 诊断入口保持在任务时间线内，详细内容使用独立 Sheet，避免把开发者信息混入主要
+  对话和报告阅读流程。
+- 本次只补充客户端诊断展示，没有修改 trace/payload 格式、保留策略或 Python
+  observability 实现，也没有开始 M21。
+
 ### Not in M20
 
 - 不删除 Next.js Web UI。
