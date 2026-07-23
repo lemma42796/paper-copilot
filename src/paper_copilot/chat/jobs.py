@@ -843,9 +843,8 @@ class ChatJobRegistry:
             record = self._read_record(job_id)
             if record.status != "running":
                 return
-            if activity_phase != "delta":
-                record.updated_at = _now_ts()
-                self._write_record(record)
+            record.updated_at = _now_ts()
+            self._write_record(record)
             self._append_event(
                 job_id,
                 event_type="progress",
@@ -871,8 +870,9 @@ class ChatJobRegistry:
             record = self._read_record(job_id)
             if record.status != "running":
                 return
-            record.updated_at = _now_ts()
-            self._write_record(record)
+            if activity_phase != "delta":
+                record.updated_at = _now_ts()
+                self._write_record(record)
             self._append_event(
                 job_id,
                 event_type="progress",

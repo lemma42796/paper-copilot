@@ -12,11 +12,12 @@ from dataclasses import asdict, dataclass
 from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Annotated, Any, Literal, cast
 
 import numpy as np
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     StrictInt,
@@ -506,9 +507,16 @@ class _PdfPathLocatorInput(BaseModel):
     )
 
 
-type _PaperLocatorInput = (
-    _PaperIdLocatorInput | _PaperTitleLocatorInput | _PdfPathLocatorInput
-)
+def _decode_paper_locator(value: Any) -> Any:
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
+
+
+type _PaperLocatorInput = Annotated[
+    _PaperIdLocatorInput | _PaperTitleLocatorInput | _PdfPathLocatorInput,
+    BeforeValidator(_decode_paper_locator),
+]
 
 
 class _ReadPaperInput(BaseModel):
