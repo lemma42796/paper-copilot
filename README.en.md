@@ -248,17 +248,19 @@ evidence references.
 
 ### Local MCP Server
 
-In a development checkout, add the read-only `stdio` server to Codex with:
+In a development checkout, add the local `stdio` server to Codex with:
 
 ```bash
 codex mcp add paper-copilot -- \
   uv --directory /absolute/path/to/paper-copilot run paper-copilot-mcp
 ```
 
-The server exposes `library_status`, `list_papers`, `search_papers`, `get_paper`,
-`inspect_evidence`, and `compare_papers`. Search uses the existing hybrid
-retrieval path when `DASHSCOPE_API_KEY` or `LLM_API_KEY` is available, and local
-FTS5/BM25 otherwise.
+The server exposes the read-only tools `library_status`, `list_papers`,
+`search_papers`, `get_paper`, `inspect_evidence`, and `compare_papers`, plus
+the long-running job tools `start_read_paper`, `get_job_status`,
+`get_job_result`, and `cancel_job`. Search uses the existing hybrid retrieval
+path when `DASHSCOPE_API_KEY` or `LLM_API_KEY` is available, and local FTS5/BM25
+otherwise.
 
 In the Codex desktop MCP server settings, add
 `DASHSCOPE_API_KEY=sk-...` under environment variables, save, and restart the
@@ -266,15 +268,25 @@ server. The same variable can instead be set in the project-root `.env`.
 With query embedding enabled, `search_papers` reports
 `retrieval_mode=hybrid` and `query_sent_to_embedding_provider=true`.
 
-MCP tool calls do not enter the Paper Copilot agent loop or invoke the default
-`qwen3.6-flash` model. The MCP host, such as Codex, interprets the request and
+Ordinary read-only MCP calls do not enter the Paper Copilot agent loop or invoke
+the default model. The MCP host, such as Codex, interprets the request and
 orchestrates tools; the server performs MCP schema validation, service-level
 validation, and read-only Core calls. Only hybrid search query embedding uses
 `text-embedding-v4`.
 
-The tools never upload a complete PDF or session. However, an MCP client will
-normally pass returned paper summaries and evidence to its model. Treat those
-returned excerpts as data that may leave the device when using a cloud client.
+`start_read_paper` is the explicit long-running entrypoint. It accepts only the
+`paper_id` of a local PDF under the configured directory, returns a job id
+immediately, and starts the Paper Copilot Agent through the existing
+job/attempt/recovery runtime. It spends the LLM budget reported in its response
+and writes local job, session, report, and index state, but cannot modify the PDF
+library. Poll incrementally with the event cursor returned by `get_job_status`,
+then call `get_job_result`; `cancel_job` requests cancellation, so a later
+status response is authoritative.
+
+The tools never upload a complete PDF or session and do not return local result
+paths. However, an MCP client will normally pass returned paper summaries,
+evidence, and job reports to its model. Treat those returned excerpts as data
+that may leave the device when using a cloud client.
 
 ## Local HTTP API
 

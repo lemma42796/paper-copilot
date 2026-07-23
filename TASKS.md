@@ -169,7 +169,7 @@ Python Paper Core ─────┤
   `retrieval_mode=hybrid`、`query_sent_to_embedding_provider=true` 和 5 条结果。
 - M21 已完成。按里程碑边界在此停止，不自动进入 M22。
 
-## M22 MCP Long-running Jobs
+## Completed Milestone: M22 MCP Long-running Jobs
 
 只有 M21 完成且用户明确要求继续后才开始。
 
@@ -184,6 +184,16 @@ Python Paper Core ─────┤
 
 这些工具必须复用现有 job/attempt/recovery 语义。不得让单次 MCP tool call 阻塞数分钟，
 也不得额外实现一套任务状态机。
+
+### Progress (2026-07-24)
+
+- 已新增四个计划内 MCP 工具，直接调用现有 `ChatJobRegistry`；启动立即返回 job id，
+  状态查询使用有界增量事件游标，结果不返回 session/report 本机路径。
+- `start_read_paper` 只接受配置论文目录内已有 PDF 的 `paper_id`，使用固定的现有 job
+  budget；取消复用线程安全 task cancellation，并等待 Agent 实际退出后才进入终态。
+- 已通过官方 SDK `stdio` 客户端完成 10 工具发现、既有 completed job 结果读取，以及
+  新任务的启动、增量状态查询、取消请求、interrupted 终态和无结果查询。
+- M22 已完成。按里程碑边界在此停止，不自动进入 M23。
 
 ## M23 Distribution
 

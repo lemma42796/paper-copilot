@@ -232,29 +232,37 @@ npm run dev
 
 ### Local MCP Server
 
-开发环境可把只读 `stdio` Server 加入 Codex：
+开发环境可把本地 `stdio` Server 加入 Codex：
 
 ```bash
 codex mcp add paper-copilot -- \
   uv --directory /absolute/path/to/paper-copilot run paper-copilot-mcp
 ```
 
-Server 提供 `library_status`、`list_papers`、`search_papers`、`get_paper`、
-`inspect_evidence` 和 `compare_papers`。搜索在环境中有 `DASHSCOPE_API_KEY` 或
-`LLM_API_KEY` 时使用现有 hybrid retrieval，否则使用本地 FTS5/BM25。
+Server 提供只读的 `library_status`、`list_papers`、`search_papers`、`get_paper`、
+`inspect_evidence`、`compare_papers`，以及长任务工具 `start_read_paper`、
+`get_job_status`、`get_job_result`、`cancel_job`。搜索在环境中有
+`DASHSCOPE_API_KEY` 或 `LLM_API_KEY` 时使用现有 hybrid retrieval，否则使用本地
+FTS5/BM25。
 
 在 Codex 桌面端的 MCP Server 设置中，可在“环境变量”加入
 `DASHSCOPE_API_KEY=sk-...`，保存后重启 Server。也可以在项目根目录的 `.env`
 配置同名变量。成功启用 query embedding 后，`search_papers` 返回
 `retrieval_mode=hybrid` 和 `query_sent_to_embedding_provider=true`。
 
-MCP 工具调用不会进入 Paper Copilot Agent loop，也不会调用默认的
-`qwen3.6-flash`。Codex 等 MCP Host 负责理解请求和编排工具；Server 只做 MCP schema
-校验、服务层业务校验和只读 Core 调用。只有 hybrid 搜索的 query embedding 会使用
-`text-embedding-v4`。
+普通只读 MCP 工具不会进入 Paper Copilot Agent loop，也不会调用默认模型。Codex 等
+MCP Host 负责理解请求和编排工具；Server 只做 MCP schema 校验、服务层业务校验和
+只读 Core 调用。只有 hybrid 搜索的 query embedding 会使用 `text-embedding-v4`。
 
-工具不会上传完整 PDF 或 session，但 MCP 客户端通常会把返回的论文摘要和 evidence
-交给其模型处理。使用云端 MCP 客户端前，应把这些返回内容视为会离开设备的数据。
+`start_read_paper` 是显式的长任务入口：它只接受配置目录内本地 PDF 的 `paper_id`，
+立即返回 job id，并通过现有 job/attempt/recovery runtime 启动 Paper Copilot Agent。
+它会花费返回值中标明的 LLM budget，并写入本地 job、session、report 和索引状态，但
+不会修改 PDF 论文库。使用 `get_job_status` 返回的事件游标增量轮询，完成后调用
+`get_job_result`；`cancel_job` 只提交取消请求，实际状态以之后的 status 查询为准。
+
+工具不会上传完整 PDF 或 session，也不返回本机结果路径，但 MCP 客户端通常会把返回
+的论文摘要、evidence 和任务报告交给其模型处理。使用云端 MCP 客户端前，应把这些
+返回内容视为会离开设备的数据。
 
 ## 本地 HTTP API
 
