@@ -34,10 +34,10 @@ struct ConversationDetailView: View {
             TextField("询问你的论文库…", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.body)
-                .lineLimit(1...4)
+                .lineLimit(1...3)
                 .frame(
-                    minHeight: 42,
-                    maxHeight: 80,
+                    minHeight: 28,
+                    maxHeight: 64,
                     alignment: .topLeading
                 )
                 .onSubmit {
@@ -52,8 +52,8 @@ struct ConversationDetailView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.top, 16)
-        .padding(.bottom, 10)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
         .background(.background)
         .clipShape(RoundedRectangle(cornerRadius: 20))
         .overlay {
