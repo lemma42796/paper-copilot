@@ -49,6 +49,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var modelConfigurations: [ModelConfiguration] = []
     @Published private(set) var availableModels: [ModelConfiguration] = []
     @Published private(set) var selectedModel: ModelConfiguration?
+    @Published private(set) var deletingConversationIDs: Set<String> = []
     @Published var selectedConversationID: String?
 
     private let bookmarkStore = LibraryBookmarkStore()
@@ -346,6 +347,57 @@ final class AppModel: ObservableObject {
             } catch {
                 jobError = error.localizedDescription
             }
+        }
+    }
+
+    func deleteConversation(_ conversation: ChatConversation) {
+        guard !conversation.jobs.contains(where: { $0.status.isActive }) else {
+            jobError = "请先停止会话中正在运行的任务。"
+            return
+        }
+        guard let api else {
+            jobError = "本地 Runtime 尚未连接。"
+            return
+        }
+        guard !deletingConversationIDs.contains(conversation.id) else {
+            return
+        }
+
+        let conversationOrder = conversations
+        let deletedIndex = conversationOrder.firstIndex {
+            $0.id == conversation.id
+        }
+        let jobIDs = Set(conversation.jobs.map(\.id))
+        deletingConversationIDs.insert(conversation.id)
+        jobError = nil
+        Task {
+            do {
+                _ = try await api.deleteConversation(conversation.id)
+                for jobID in jobIDs {
+                    observationTasks[jobID]?.cancel()
+                    observationTasks.removeValue(forKey: jobID)
+                    eventCursors.removeValue(forKey: jobID)
+                    jobEvents.removeValue(forKey: jobID)
+                    jobDiagnostics.removeValue(forKey: jobID)
+                    jobDiagnosticErrors.removeValue(forKey: jobID)
+                    loadingDiagnosticJobIDs.remove(jobID)
+                    requestedDiagnosticAttempts.removeValue(forKey: jobID)
+                }
+                jobs.removeAll { jobIDs.contains($0.id) }
+                if selectedConversationID == conversation.id {
+                    let remaining = conversations
+                    if let deletedIndex, !remaining.isEmpty {
+                        selectedConversationID = remaining[
+                            min(deletedIndex, remaining.count - 1)
+                        ].id
+                    } else {
+                        selectedConversationID = remaining.first?.id
+                    }
+                }
+            } catch {
+                jobError = error.localizedDescription
+            }
+            deletingConversationIDs.remove(conversation.id)
         }
     }
 

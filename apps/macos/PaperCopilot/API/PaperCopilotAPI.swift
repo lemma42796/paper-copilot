@@ -75,6 +75,21 @@ final class PaperCopilotAPI {
         return try await send(request)
     }
 
+    func deleteConversation(
+        _ conversationID: String
+    ) async throws -> ConversationDeletionResponse {
+        var request = URLRequest(
+            url: try url(path: ["conversations", conversationID])
+        )
+        request.httpMethod = "DELETE"
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Content-Type"
+        )
+        request.httpBody = Data("{}".utf8)
+        return try await send(request)
+    }
+
     func events(
         for jobID: String,
         after: Int

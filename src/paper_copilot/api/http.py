@@ -208,6 +208,44 @@ class _ChatHandler(BaseHTTPRequestHandler):
 
         self._write_error(HTTPStatus.NOT_FOUND, "not_found", f"unknown path: {parsed.path}")
 
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        conversation_id = _conversation_route(parsed.path)
+        if conversation_id is None:
+            self._write_error(
+                HTTPStatus.NOT_FOUND,
+                "not_found",
+                f"unknown path: {parsed.path}",
+            )
+            return
+        try:
+            request = JobActionHttpRequest.model_validate(self._read_json_body())
+        except ValidationError as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
+            return
+        except (json.JSONDecodeError, ValueError) as exc:
+            self._write_error(HTTPStatus.BAD_REQUEST, "invalid_json", str(exc))
+            return
+
+        try:
+            deleted_jobs = job_registry(request.root).delete_conversation(
+                conversation_id
+            )
+        except PaperCopilotError as exc:
+            self._write_error(
+                HTTPStatus.BAD_REQUEST,
+                exc.__class__.__name__,
+                str(exc),
+            )
+            return
+        self._write_json(
+            HTTPStatus.OK,
+            {
+                "conversation_id": conversation_id,
+                "deleted_jobs": deleted_jobs,
+            },
+        )
+
     def _handle_create_job(self) -> None:
         try:
             request = JobCreateHttpRequest.model_validate(self._read_json_body())
@@ -375,7 +413,10 @@ class _ChatHandler(BaseHTTPRequestHandler):
         self.send_response(status.value)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "content-type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header(
+            "Access-Control-Allow-Methods",
+            "DELETE, GET, POST, OPTIONS",
+        )
         if payload is not None:
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -402,6 +443,13 @@ def _job_route(path: str) -> tuple[str, str | None] | None:
         in {"diagnostics", "events", "stream", "resume", "interrupt", "approval"}
     ):
         return parts[1], parts[2]
+    return None
+
+
+def _conversation_route(path: str) -> str | None:
+    parts = path.strip("/").split("/")
+    if len(parts) == 2 and parts[0] == "conversations":
+        return parts[1]
     return None
 
 

@@ -503,6 +503,16 @@ struct ChatJobCreateRequest: Encodable {
     }
 }
 
+struct ConversationDeletionResponse: Decodable {
+    let conversationID: String
+    let deletedJobs: Int
+
+    enum CodingKeys: String, CodingKey {
+        case conversationID = "conversation_id"
+        case deletedJobs = "deleted_jobs"
+    }
+}
+
 struct ChatConversation: Identifiable, Equatable {
     let id: String
     let jobs: [ChatJobRecord]

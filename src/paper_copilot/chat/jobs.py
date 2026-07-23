@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import threading
 import time
 from datetime import UTC, datetime
@@ -221,6 +222,80 @@ class ChatJobRegistry:
             records = [self._read_record(path.parent.name) for path in self._job_files()]
         records.sort(key=lambda record: record.updated_at, reverse=True)
         return records[:limit]
+
+    def delete_conversation(self, conversation_id: str) -> int:
+        _validate_conversation_id(conversation_id)
+        with self._lock:
+            papers_dir = self._root / "papers"
+            if self._jobs_dir.is_symlink() or papers_dir.is_symlink():
+                raise JobError(
+                    "refusing to delete through symlinked storage directories"
+                )
+            records = [
+                self._read_record(path.parent.name)
+                for path in self._job_files()
+            ]
+            conversation_records = [
+                record
+                for record in records
+                if record.spec.conversation_id == conversation_id
+            ]
+            if not conversation_records:
+                raise JobError(f"conversation not found: {conversation_id}")
+
+            active = [
+                record.id
+                for record in conversation_records
+                if record.status in {"queued", "running", "waiting_for_approval"}
+                or (
+                    (thread := self._threads.get(record.id)) is not None
+                    and thread.is_alive()
+                )
+                or record.id in self._async_tasks
+            ]
+            if active:
+                raise JobError(
+                    "conversation has active jobs; interrupt them before deletion: "
+                    + ", ".join(active)
+                )
+
+            session_dirs: list[Path] = []
+            for record in conversation_records:
+                job_dir = self._job_dir(record.id)
+                if job_dir.is_symlink():
+                    raise JobError(f"refusing to delete symlinked job dir: {job_dir}")
+                for attempt in record.attempts:
+                    expected_session_id = (
+                        f"paper-copilot-{record.id}-attempt-{attempt.number}"
+                    )
+                    expected_path = session_file(
+                        expected_session_id,
+                        self._root,
+                    ).absolute()
+                    session_dir = expected_path.parent
+                    if (
+                        attempt.session_id != expected_session_id
+                        or Path(attempt.session_path).expanduser().absolute()
+                        != expected_path
+                    ):
+                        raise JobError(
+                            f"invalid session path for job {record.id} "
+                            f"attempt {attempt.number}"
+                        )
+                    if session_dir.is_symlink():
+                        raise JobError(
+                            f"refusing to delete symlinked session dir: {session_dir}"
+                        )
+                    session_dirs.append(session_dir)
+
+            for record in conversation_records:
+                shutil.rmtree(self._job_dir(record.id))
+                self._event_sequences.pop(record.id, None)
+            for session_dir in session_dirs:
+                if session_dir.exists():
+                    shutil.rmtree(session_dir)
+            self._events_changed.notify_all()
+            return len(conversation_records)
 
     def events(
         self,
@@ -1138,6 +1213,11 @@ def _new_conversation_id() -> str:
 def _validate_job_id(job_id: str) -> None:
     if _JOB_ID_RE.fullmatch(job_id) is None:
         raise JobError(f"invalid job id: {job_id}")
+
+
+def _validate_conversation_id(conversation_id: str) -> None:
+    if _CONVERSATION_ID_RE.fullmatch(conversation_id) is None:
+        raise JobError(f"invalid conversation id: {conversation_id}")
 
 
 def _now_ts() -> str:
