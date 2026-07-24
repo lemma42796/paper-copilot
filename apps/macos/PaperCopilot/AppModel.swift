@@ -819,8 +819,29 @@ final class AppModel: ObservableObject {
     }
 
     private func upsert(_ record: ChatJobRecord) {
-        jobs.removeAll { $0.id == record.id }
-        jobs.append(record)
+        if let index = jobs.firstIndex(where: { $0.id == record.id }) {
+            let current = jobs[index]
+            guard current.hasMaterialPresentationChange(comparedWith: record) else {
+                return
+            }
+            jobs[index] = record
+        } else {
+            jobs.append(record)
+        }
         jobs.sort { $0.updatedAt > $1.updatedAt }
+    }
+}
+
+private extension ChatJobRecord {
+    func hasMaterialPresentationChange(
+        comparedWith other: ChatJobRecord
+    ) -> Bool {
+        status != other.status
+            || createdAt != other.createdAt
+            || spec != other.spec
+            || attempts != other.attempts
+            || result != other.result
+            || error != other.error
+            || pendingApproval != other.pendingApproval
     }
 }

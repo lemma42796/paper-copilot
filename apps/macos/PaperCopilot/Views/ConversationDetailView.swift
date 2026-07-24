@@ -272,6 +272,15 @@ private struct ConversationTimeline: View {
     @EnvironmentObject private var appModel: AppModel
     let conversation: ChatConversation
 
+    private var latestAnswerSequence: Int {
+        conversation.jobs.compactMap {
+            appModel.jobEvents[$0.id]?.last {
+                $0.activityKind == "assistant"
+                    && $0.activityPhase == "delta"
+            }?.seq
+        }.max() ?? 0
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -293,8 +302,12 @@ private struct ConversationTimeline: View {
             .onChange(of: appModel.jobs) { _ in
                 proxy.scrollTo("timeline-bottom", anchor: .bottom)
             }
-            .onChange(of: appModel.jobEvents) { _ in
-                proxy.scrollTo("timeline-bottom", anchor: .bottom)
+            .onChange(of: latestAnswerSequence) { _ in
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    proxy.scrollTo("timeline-bottom", anchor: .bottom)
+                }
             }
         }
     }
@@ -303,8 +316,17 @@ private struct ConversationTimeline: View {
 private struct JobTurnView: View {
     @EnvironmentObject private var appModel: AppModel
     @State private var approvalDetailsExpanded = false
+    @State private var activityAccumulator: JobActivityAccumulator
     let job: ChatJobRecord
     let events: [ChatJobEvent]
+
+    init(job: ChatJobRecord, events: [ChatJobEvent]) {
+        self.job = job
+        self.events = events
+        _activityAccumulator = State(
+            initialValue: JobActivityAccumulator(events: events)
+        )
+    }
 
     var body: some View {
         VStack(spacing: 14) {
@@ -339,6 +361,9 @@ private struct JobTurnView: View {
             if !job.attempts.isEmpty {
                 JobDiagnosticsView(job: job)
             }
+        }
+        .onChange(of: events.last?.seq) { _ in
+            activityAccumulator.append(events)
         }
     }
 
@@ -375,7 +400,7 @@ private struct JobTurnView: View {
     }
 
     private var visibleActivities: [JobActivity] {
-        JobActivity.reduce(events).filter {
+        activityAccumulator.activities.filter {
             job.result == nil || $0.kind != .assistant
         }
     }
@@ -1080,21 +1105,41 @@ private struct JobActivity: Identifiable {
     var title: String
     var text: String
     var detail: String
+}
 
-    static func reduce(_ events: [ChatJobEvent]) -> [JobActivity] {
-        var order: [String] = []
-        var activities: [String: JobActivity] = [:]
-        for event in events {
+private struct JobActivityAccumulator {
+    private(set) var activities: [JobActivity] = []
+    private var indicesByID: [String: Int] = [:]
+    private var processedEventCount = 0
+    private var lastSequence = 0
+
+    init(events: [ChatJobEvent]) {
+        append(events)
+    }
+
+    mutating func append(_ events: [ChatJobEvent]) {
+        guard events.count >= processedEventCount else {
+            self = JobActivityAccumulator(events: events)
+            return
+        }
+        let newEvents = events.dropFirst(processedEventCount)
+        processedEventCount = events.count
+        for event in newEvents {
+            guard event.seq > lastSequence else {
+                continue
+            }
+            lastSequence = event.seq
             guard
                 let id = event.activityID,
                 let kindValue = event.activityKind,
-                let kind = Kind(rawValue: kindValue),
+                let kind = JobActivity.Kind(rawValue: kindValue),
                 let phaseValue = event.activityPhase,
-                let phase = Phase(rawValue: phaseValue)
+                let phase = JobActivity.Phase(rawValue: phaseValue)
             else {
                 continue
             }
-            var activity = activities[id] ?? JobActivity(
+            let existingIndex = indicesByID[id]
+            var activity = existingIndex.map { activities[$0] } ?? JobActivity(
                 id: id,
                 kind: kind,
                 phase: phase,
@@ -1102,9 +1147,6 @@ private struct JobActivity: Identifiable {
                 text: "",
                 detail: ""
             )
-            if activities[id] == nil {
-                order.append(id)
-            }
             activity.phase = phase
             if let title = event.title {
                 activity.title = title
@@ -1118,12 +1160,16 @@ private struct JobActivity: Identifiable {
                 }
                 activity.detail += detail
             }
-            activities[id] = activity
+            if let existingIndex {
+                activities[existingIndex] = activity
+            } else {
+                indicesByID[id] = activities.count
+                activities.append(activity)
+            }
         }
-        return order.compactMap { activities[$0] }
     }
 
-    private static func defaultTitle(for kind: Kind) -> String {
+    private func defaultTitle(for kind: JobActivity.Kind) -> String {
         switch kind {
         case .reasoning:
             return "思考过程"
@@ -1142,14 +1188,19 @@ private struct ActivityRow: View {
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
             if !activity.text.isEmpty {
-                Text(activity.text)
-                    .font(activity.kind == .reasoning ? .caption : .body)
-                    .foregroundStyle(
-                        activity.kind == .reasoning ? .secondary : .primary
+                if activity.kind == .assistant {
+                    StreamingActivityText(
+                        text: activity.text,
+                        isComplete: activity.phase == .completed
                     )
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 4)
+                } else {
+                    Text(activity.text)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
+                }
             }
             if !activity.detail.isEmpty {
                 Text(activity.detail)
@@ -1199,5 +1250,89 @@ private struct ActivityRow: View {
         case .started, .delta:
             return .secondary
         }
+    }
+}
+
+private struct StreamingActivityText: View {
+    let text: String
+    let isComplete: Bool
+
+    @State private var displayedText = ""
+    @State private var queuedText = ""
+    @State private var revealTask: Task<Void, Never>?
+
+    var body: some View {
+        Text(displayedText)
+            .font(.body)
+            .foregroundStyle(.primary)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 4)
+            .onAppear {
+                accept(text)
+            }
+            .onChange(of: text) { updatedText in
+                accept(updatedText)
+            }
+            .onChange(of: isComplete) { completed in
+                if completed {
+                    finish()
+                }
+            }
+            .onDisappear {
+                revealTask?.cancel()
+                revealTask = nil
+            }
+    }
+
+    private func accept(_ updatedText: String) {
+        let acceptedText = displayedText + queuedText
+        guard updatedText.hasPrefix(acceptedText) else {
+            displayedText = updatedText
+            queuedText = ""
+            revealTask?.cancel()
+            revealTask = nil
+            return
+        }
+        queuedText.append(contentsOf: updatedText.dropFirst(acceptedText.count))
+        if isComplete {
+            finish()
+        } else {
+            startRevealTaskIfNeeded()
+        }
+    }
+
+    private func startRevealTaskIfNeeded() {
+        guard revealTask == nil, !queuedText.isEmpty else {
+            return
+        }
+        revealTask = Task { @MainActor in
+            while !Task.isCancelled, !queuedText.isEmpty {
+                let batchSize = revealBatchSize(for: queuedText.count)
+                let revealed = queuedText.prefix(batchSize)
+                displayedText.append(contentsOf: revealed)
+                queuedText.removeFirst(revealed.count)
+                try? await Task.sleep(nanoseconds: 25_000_000)
+            }
+            revealTask = nil
+        }
+    }
+
+    private func revealBatchSize(for backlog: Int) -> Int {
+        switch backlog {
+        case 241...:
+            return 24
+        case 81...:
+            return 8
+        default:
+            return 3
+        }
+    }
+
+    private func finish() {
+        revealTask?.cancel()
+        revealTask = nil
+        displayedText += queuedText
+        queuedText = ""
     }
 }

@@ -3,9 +3,13 @@ import SwiftUI
 
 struct MarkdownReportView: View {
     let markdown: String
+    @State private var document: MarkdownDocument
 
-    private var document: MarkdownDocument {
-        MarkdownDocument(markdown: markdown)
+    init(markdown: String) {
+        self.markdown = markdown
+        _document = State(
+            initialValue: MarkdownDocument(markdown: markdown)
+        )
     }
 
     var body: some View {
@@ -38,6 +42,9 @@ struct MarkdownReportView: View {
                 .stroke(.separator.opacity(0.7), lineWidth: 1)
         }
         .textSelection(.enabled)
+        .onChange(of: markdown) { updatedMarkdown in
+            document = MarkdownDocument(markdown: updatedMarkdown)
+        }
     }
 }
 
