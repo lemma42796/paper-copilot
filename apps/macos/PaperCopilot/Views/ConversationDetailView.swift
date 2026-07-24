@@ -4,6 +4,7 @@ import SwiftUI
 struct ConversationDetailView: View {
     @EnvironmentObject private var appModel: AppModel
     @State private var draft = ""
+    @State private var showsContextUsage = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -55,6 +56,7 @@ struct ConversationDetailView: View {
                     .foregroundStyle(.tertiary)
                 Spacer()
 
+                contextUsageIndicator
                 modelMenu
                 submitControl
             }
@@ -80,6 +82,25 @@ struct ConversationDetailView: View {
         .padding(.top, 8)
         .padding(.bottom, 14)
         .background(.background)
+    }
+
+    private var contextUsageIndicator: some View {
+        ContextUsageRing(usage: appModel.selectedConversation?.latestContextUsage)
+            .frame(width: 20, height: 20, alignment: .center)
+            .offset(y: 1.5)
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                showsContextUsage = hovering
+            }
+            .popover(
+                isPresented: $showsContextUsage,
+                attachmentAnchor: .rect(.bounds),
+                arrowEdge: .bottom
+            ) {
+                ContextUsagePopover(
+                    usage: appModel.selectedConversation?.latestContextUsage
+                )
+            }
     }
 
     @ViewBuilder
@@ -272,6 +293,100 @@ struct ConversationDetailView: View {
         ) {
             draft = ""
         }
+    }
+}
+
+private struct ContextUsageRing: View {
+    let usage: ChatContextUsage?
+
+    private var fractionUsed: Double {
+        guard let usage else {
+            return 0
+        }
+        return min(
+            max(
+                Double(usage.contextTokens)
+                    / Double(usage.contextWindowTokens),
+                0
+            ),
+            1
+        )
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.secondary.opacity(0.18), lineWidth: 3)
+            Circle()
+                .trim(from: 0, to: fractionUsed)
+                .stroke(
+                    Color.secondary,
+                    style: StrokeStyle(lineWidth: 3, lineCap: .round)
+                )
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: 13, height: 13)
+        .accessibilityLabel("背景信息窗口 token 消耗")
+        .accessibilityValue(accessibilityValue)
+    }
+
+    private var accessibilityValue: String {
+        guard let usage else {
+            return "暂无使用记录"
+        }
+        return "\(usage.contextTokens) / \(usage.contextWindowTokens)"
+    }
+}
+
+private struct ContextUsagePopover: View {
+    let usage: ChatContextUsage?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("背景信息窗口：")
+                .foregroundStyle(.secondary)
+            if let usage {
+                Text("\(percentageUsed(usage))% 已用（剩余 \(percentageRemaining(usage))%）")
+                Text(
+                    "已用 \(formattedTokens(usage.contextTokens)) 标记，共 "
+                        + formattedTokens(usage.contextWindowTokens)
+                )
+            } else {
+                Text("暂无 token 使用记录")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.callout)
+        .padding(14)
+        .fixedSize()
+    }
+
+    private func percentageUsed(_ usage: ChatContextUsage) -> Int {
+        min(
+            Int(
+                (
+                    Double(usage.contextTokens)
+                        / Double(usage.contextWindowTokens)
+                        * 100
+                ).rounded()
+            ),
+            100
+        )
+    }
+
+    private func percentageRemaining(_ usage: ChatContextUsage) -> Int {
+        max(100 - percentageUsed(usage), 0)
+    }
+
+    private func formattedTokens(_ tokens: Int) -> String {
+        guard tokens >= 1_000 else {
+            return tokens.formatted()
+        }
+        let thousands = Double(tokens) / 1_000
+        let precision = thousands < 100 && tokens % 1_000 != 0 ? 1 : 0
+        return thousands.formatted(
+            .number.precision(.fractionLength(precision))
+        ) + "k"
     }
 }
 

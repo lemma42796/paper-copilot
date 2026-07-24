@@ -843,5 +843,6 @@ private extension ChatJobRecord {
             || result != other.result
             || error != other.error
             || pendingApproval != other.pendingApproval
+            || contextUsage != other.contextUsage
     }
 }

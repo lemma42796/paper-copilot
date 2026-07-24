@@ -22,6 +22,7 @@ from paper_copilot.agents.loop import (
     ToolResult,
     ToolUse,
 )
+from paper_copilot.agents.llm_client import WORKING_CONTEXT_LIMIT_TOKENS
 from paper_copilot.agents.tool_security import (
     ApprovalMode,
     ToolApprovalRequest,
@@ -35,7 +36,7 @@ from paper_copilot.observability import (
     reduce_trace_bundle,
 )
 from paper_copilot.schemas.compaction import CompactionSummary
-from paper_copilot.session import SessionStore, reconstruct_rollout
+from paper_copilot.session import LLMCall, SessionStore, reconstruct_rollout
 from paper_copilot.session.paths import default_root, session_file
 from paper_copilot.shared.errors import JobError, RolloutTimeoutError
 
@@ -129,6 +130,13 @@ class ChatJobAttempt(BaseModel):
     resumed_from_attempt: int | None = Field(default=None, ge=1)
 
 
+class ChatContextUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    context_tokens: int = Field(ge=0)
+    context_window_tokens: int = Field(gt=0)
+
+
 class ChatJobRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -142,6 +150,7 @@ class ChatJobRecord(BaseModel):
     result: ChatJobResult | None = None
     error: str | None = None
     pending_approval: ToolApprovalRequest | None = None
+    context_usage: ChatContextUsage | None = None
 
 
 class ChatJobEvent(BaseModel):
@@ -221,13 +230,13 @@ class ChatJobRegistry:
     def get(self, job_id: str) -> ChatJobRecord:
         _validate_job_id(job_id)
         with self._lock:
-            return self._read_record(job_id)
+            return self._with_context_usage(self._read_record(job_id))
 
     def list(self, *, limit: int = 50) -> list[ChatJobRecord]:
         with self._lock:
             records = [self._read_record(path.parent.name) for path in self._job_files()]
         records.sort(key=lambda record: record.updated_at, reverse=True)
-        return records[:limit]
+        return [self._with_context_usage(record) for record in records[:limit]]
 
     def delete_conversation(self, conversation_id: str) -> int:
         _validate_conversation_id(conversation_id)
@@ -369,7 +378,7 @@ class ChatJobRegistry:
                 events = [
                     event for event in self._read_events(job_id) if event.seq > after
                 ][:limit]
-            return record, events
+            return self._with_context_usage(record), events
 
     def resume(self, job_id: str) -> ChatJobRecord:
         _validate_job_id(job_id)
@@ -1127,6 +1136,27 @@ class ChatJobRegistry:
         if not path.exists():
             raise JobError(f"job not found: {job_id}")
         return ChatJobRecord.model_validate_json(path.read_text(encoding="utf-8"))
+
+    def _with_context_usage(self, record: ChatJobRecord) -> ChatJobRecord:
+        for attempt in reversed(record.attempts):
+            session_path = Path(attempt.session_path)
+            if not session_path.is_file():
+                continue
+            for entry in reversed(SessionStore(session_path, last_id="").read_all()):
+                if isinstance(entry, LLMCall):
+                    return record.model_copy(
+                        update={
+                            "context_usage": ChatContextUsage(
+                                context_tokens=(
+                                    entry.input_tokens
+                                    + entry.cache_creation_input_tokens
+                                    + entry.cache_read_input_tokens
+                                ),
+                                context_window_tokens=WORKING_CONTEXT_LIMIT_TOKENS,
+                            )
+                        }
+                    )
+        return record
 
     def _write_record(self, record: ChatJobRecord) -> None:
         job_dir = self._job_dir(record.id)

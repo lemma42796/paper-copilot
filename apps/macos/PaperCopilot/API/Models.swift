@@ -406,6 +406,16 @@ struct ChatJobAttempt: Codable, Equatable, Identifiable {
     }
 }
 
+struct ChatContextUsage: Codable, Equatable {
+    let contextTokens: Int
+    let contextWindowTokens: Int
+
+    enum CodingKeys: String, CodingKey {
+        case contextTokens = "context_tokens"
+        case contextWindowTokens = "context_window_tokens"
+    }
+}
+
 struct ChatJobRecord: Codable, Identifiable, Equatable {
     let id: String
     let status: ChatJobStatus
@@ -416,6 +426,7 @@ struct ChatJobRecord: Codable, Identifiable, Equatable {
     let result: ChatJobResult?
     let error: String?
     let pendingApproval: ToolApprovalRequest?
+    let contextUsage: ChatContextUsage?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -427,6 +438,7 @@ struct ChatJobRecord: Codable, Identifiable, Equatable {
         case result
         case error
         case pendingApproval = "pending_approval"
+        case contextUsage = "context_usage"
     }
 }
 
@@ -658,5 +670,9 @@ struct ChatConversation: Identifiable, Equatable {
 
     var latestJob: ChatJobRecord? {
         jobs.last
+    }
+
+    var latestContextUsage: ChatContextUsage? {
+        jobs.reversed().compactMap(\.contextUsage).first
     }
 }
