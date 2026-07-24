@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from paper_copilot.agents.tool_security import ApprovalMode
 from paper_copilot.chat.jobs import (
     ChatJobEvent,
     ChatJobRecord,
@@ -36,6 +37,7 @@ class JobCreateHttpRequest(BaseModel):
         pattern=r"^conversation-[0-9A-Za-z-]{8,80}$",
     )
     rollout_timeout_seconds: float | None = Field(default=3600.0, gt=0)
+    approval_mode: ApprovalMode = "ask"
 
 
 class JobsHttpRequest(BaseModel):
@@ -268,6 +270,7 @@ class _ChatHandler(BaseHTTPRequestHandler):
                     record_quality=request.record_quality,
                     update_report=request.update_report,
                     rollout_timeout_seconds=request.rollout_timeout_seconds,
+                    approval_mode=request.approval_mode,
                 )
             )
         except PaperCopilotError as exc:

@@ -50,6 +50,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var availableModels: [ModelConfiguration] = []
     @Published private(set) var selectedModel: ModelConfiguration?
     @Published private(set) var deletingConversationIDs: Set<String> = []
+    @Published private(set) var resolvingApprovalIDs: Set<String> = []
+    @Published private(set) var approvalMode: ApprovalMode
     @Published var selectedConversationID: String?
 
     private let bookmarkStore = LibraryBookmarkStore()
@@ -60,8 +62,14 @@ final class AppModel: ObservableObject {
     private var eventCursors: [String: Int] = [:]
     private var observationTasks: [String: Task<Void, Never>] = [:]
     private var requestedDiagnosticAttempts: [String: Int] = [:]
+    private static let approvalModeKey = "approvalMode"
 
     init() {
+        approvalMode = ApprovalMode(
+            rawValue: UserDefaults.standard.string(
+                forKey: Self.approvalModeKey
+            ) ?? ""
+        ) ?? .ask
         restoreLibrary()
         initializeModelRuntime()
     }
@@ -217,6 +225,14 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func selectApprovalMode(_ mode: ApprovalMode) {
+        approvalMode = mode
+        UserDefaults.standard.set(
+            mode.rawValue,
+            forKey: Self.approvalModeKey
+        )
+    }
+
     func reloadModelConfigurations(restartRuntime: Bool = true) {
         do {
             try loadModelConfigurations()
@@ -322,7 +338,8 @@ final class AppModel: ObservableObject {
                 let record = try await api.createJob(
                     message: trimmed,
                     pdfDir: libraryURL.path,
-                    conversationID: conversationID
+                    conversationID: conversationID,
+                    approvalMode: approvalMode
                 )
                 upsert(record)
                 selectedConversationID = record.spec.conversationID ?? record.id
@@ -344,6 +361,38 @@ final class AppModel: ObservableObject {
         Task {
             do {
                 upsert(try await api.interrupt(jobID))
+            } catch {
+                jobError = error.localizedDescription
+            }
+        }
+    }
+
+    func resolveApproval(
+        jobID: String,
+        approvalID: String,
+        approved: Bool
+    ) {
+        guard let api else {
+            jobError = "本地 Runtime 尚未连接。"
+            return
+        }
+        guard !resolvingApprovalIDs.contains(approvalID) else {
+            return
+        }
+        resolvingApprovalIDs.insert(approvalID)
+        jobError = nil
+        Task {
+            defer {
+                resolvingApprovalIDs.remove(approvalID)
+            }
+            do {
+                upsert(
+                    try await api.resolveApproval(
+                        jobID: jobID,
+                        approvalID: approvalID,
+                        approved: approved
+                    )
+                )
             } catch {
                 jobError = error.localizedDescription
             }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -37,20 +38,42 @@ def test_library_files_rejects_paths_outside_library(tmp_path: Path) -> None:
         )
 
 
-def test_library_files_trash_is_recoverable(tmp_path: Path) -> None:
+def test_library_files_trash_uses_macos_system_trash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     paper = tmp_path / "paper.pdf"
     paper.write_bytes(b"paper")
+    commands: list[list[str]] = []
+
+    def move_to_trash(
+        command: list[str],
+        *,
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        paper.unlink()
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "paper_copilot.agents.library_files_tool.subprocess.run",
+        move_to_trash,
+    )
+    monkeypatch.setattr(
+        "paper_copilot.agents.library_files_tool.sys.platform",
+        "darwin",
+    )
 
     trashed = run_library_files(
         LibraryFilesInput(operation="trash", paths=[paper.name]),
         tmp_path,
     )
+
+    assert trashed["destination"] == "macos_trash"
+    assert trashed["files"] == [paper.name]
+    assert commands[0][0] == "/usr/bin/osascript"
+    assert "set sourceFile to POSIX file" in commands[0][2]
+    assert commands[0][-1] == str(paper)
     assert not paper.exists()
-
-    restored = run_library_files(
-        LibraryFilesInput(operation="restore", receipt_id=trashed["receipt_id"]),
-        tmp_path,
-    )
-
-    assert restored["restored"] == [paper.name]
-    assert paper.read_bytes() == b"paper"

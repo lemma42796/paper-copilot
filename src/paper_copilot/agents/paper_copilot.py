@@ -26,6 +26,7 @@ from pydantic import (
     model_validator,
 )
 
+from paper_copilot.agents.approval_review import review_tool_approval
 from paper_copilot.agents.composer_library import (
     ComposerLibrary,
     ComposerPool,
@@ -80,9 +81,12 @@ from paper_copilot.agents.library_files_tool import (
 )
 from paper_copilot.agents.read_pipeline import ReadPipelineRun, run_read_pipeline
 from paper_copilot.agents.tool_security import (
+    ApprovalMode,
     ToolApprovalRequest,
+    ToolApprovalReviewEvent,
     ToolDefinition,
     ToolEffect,
+    approval_matches,
     cap_tool_output,
     evaluate_tool_call,
 )
@@ -188,6 +192,7 @@ _CLAIM_BOUNDARY_RE = re.compile(r"(?<=[.!?。！？])\s+")  # noqa: RUF001
 
 type QueryEncoder = Callable[[str], np.ndarray]
 type ToolApprovalCallback = Callable[[ToolApprovalRequest], Awaitable[bool]]
+type ToolApprovalReviewCallback = Callable[[ToolApprovalReviewEvent], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -650,6 +655,8 @@ async def run_paper_copilot(
     resume_runtime_state: dict[str, Any] | None = None,
     recovery_source_session: str | None = None,
     request_tool_approval: ToolApprovalCallback | None = None,
+    approval_mode: ApprovalMode = "ask",
+    approval_review_callback: ToolApprovalReviewCallback | None = None,
 ) -> PaperCopilotRun:
     resolved_session_id = (
         session_id if session_id is not None else _paper_copilot_session_id(prompt)
@@ -710,6 +717,11 @@ async def run_paper_copilot(
             cost=cost,
             max_budget_cny=max_budget_cny,
             request_tool_approval=request_tool_approval,
+            approval_mode=approval_mode,
+            approval_llm=llm,
+            user_request=prompt,
+            store=store,
+            approval_review_callback=approval_review_callback,
         )
 
     def build_runtime_context() -> str:
@@ -1245,7 +1257,12 @@ def dispatch_paper_copilot_tool(
 ) -> ToolResultData:
     try:
         definition, parsed_input = _parse_tool_input(req)
-        decision = evaluate_tool_call(definition, parsed_input)
+        decision = evaluate_tool_call(
+            definition,
+            parsed_input,
+            tool_call_id=req.id,
+            library_root=context.pdf_dir,
+        )
         if decision.kind == "deny":
             return _err(decision.reason or "tool call denied by policy")
         if decision.kind == "require_approval":
@@ -1318,17 +1335,102 @@ async def dispatch_paper_copilot_tool_async(
     cost: CostTracker,
     max_budget_cny: float,
     request_tool_approval: ToolApprovalCallback | None = None,
+    approval_mode: ApprovalMode = "ask",
+    approval_llm: LLMClientProtocol | None = None,
+    user_request: str = "",
+    store: SessionStore | None = None,
+    approval_review_callback: ToolApprovalReviewCallback | None = None,
 ) -> ToolResultData:
     try:
         definition, parsed_input = _parse_tool_input(req)
-        decision = evaluate_tool_call(definition, parsed_input)
+        decision = evaluate_tool_call(
+            definition,
+            parsed_input,
+            tool_call_id=req.id,
+            library_root=context.pdf_dir,
+        )
         if decision.kind == "deny":
             return _err(decision.reason or "tool call denied by policy")
         if decision.kind == "require_approval":
-            if decision.approval is None or request_tool_approval is None:
+            approval = decision.approval
+            if approval is None:
                 return _err(decision.reason or "tool call requires user approval")
-            if not await request_tool_approval(decision.approval):
-                return _err("user declined the requested tool operation")
+            if (
+                approval_mode == "auto_review"
+                and approval.auto_review_allowed
+                and approval_llm is not None
+            ):
+                if approval_review_callback is not None:
+                    approval_review_callback(
+                        ToolApprovalReviewEvent(
+                            approval_id=approval.id,
+                            reviewer="auto_review",
+                            status="started",
+                        )
+                    )
+                try:
+                    review = await review_tool_approval(
+                        approval_llm,
+                        user_request=user_request,
+                        approval=approval,
+                    )
+                except (PaperCopilotError, ValidationError, ValueError) as exc:
+                    if approval_review_callback is not None:
+                        approval_review_callback(
+                            ToolApprovalReviewEvent(
+                                approval_id=approval.id,
+                                reviewer="auto_review",
+                                status="failed",
+                                rationale=str(exc),
+                            )
+                        )
+                    return _err(
+                        "automatic approval review failed closed: "
+                        f"{exc}"
+                    )
+                if review.usage is not None:
+                    cost.record(review.usage)
+                if store is not None:
+                    store.append_llm_call(
+                        agent="ApprovalReviewer",
+                        model=DEFAULT_MODEL,
+                        usage=review.usage if review.usage is not None else {},
+                        latency_ms=review.latency_ms,
+                        stop_reason=review.stop_reason,
+                    )
+                assessment = review.assessment
+                if approval_review_callback is not None:
+                    approval_review_callback(
+                        ToolApprovalReviewEvent(
+                            approval_id=approval.id,
+                            reviewer="auto_review",
+                            status=(
+                                "approved"
+                                if assessment.outcome == "allow"
+                                else "denied"
+                            ),
+                            risk_level=assessment.risk_level,
+                            user_authorization=assessment.user_authorization,
+                            rationale=assessment.rationale,
+                        )
+                    )
+                if assessment.outcome == "deny":
+                    return _err(
+                        "automatic approval review denied the operation: "
+                        f"{assessment.rationale}"
+                    )
+            else:
+                if request_tool_approval is None:
+                    return _err(decision.reason or "tool call requires user approval")
+                if not await request_tool_approval(approval):
+                    return _err("user declined the requested tool operation")
+            if not approval_matches(
+                approval,
+                tool_call_id=req.id,
+                parsed_input=parsed_input,
+                library_root=context.pdf_dir,
+            ):
+                return _err("approved tool parameters changed before execution")
         if req.name == "read_paper":
             payload = await _read_paper_async(
                 cast(_ReadPaperInput, parsed_input),

@@ -22,7 +22,11 @@ from paper_copilot.agents.loop import (
     ToolResult,
     ToolUse,
 )
-from paper_copilot.agents.tool_security import ToolApprovalRequest
+from paper_copilot.agents.tool_security import (
+    ApprovalMode,
+    ToolApprovalRequest,
+    ToolApprovalReviewEvent,
+)
 from paper_copilot.chat.runtime import ChatRunResult, handle_chat_request
 from paper_copilot.observability import (
     RolloutDiagnostics,
@@ -69,6 +73,7 @@ class ChatJobSpec(BaseModel):
     update_report: bool = True
     recovery_mode: Literal["restart_from_request", "rollout_replay"] = "rollout_replay"
     rollout_timeout_seconds: float | None = Field(default=3600.0, gt=0)
+    approval_mode: ApprovalMode = "ask"
 
 
 class ChatJobResult(BaseModel):
@@ -153,6 +158,7 @@ class ChatJobEvent(BaseModel):
         "failed",
         "resumed",
         "approval_required",
+        "approval_review",
         "approval_resolved",
     ]
     status: JobStatus
@@ -448,6 +454,15 @@ class ChatJobRegistry:
                 status="running",
                 attempt=len(record.attempts),
                 message="用户已批准工具操作。" if approved else "用户已拒绝工具操作。",
+                detail=json.dumps(
+                    {
+                        "reviewer": "user",
+                        "decision": "approved" if approved else "denied",
+                        "approval": pending.model_dump(mode="json"),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
             )
             _approval_future_set_result(waiter[1], waiter[2], approved)
             return record
@@ -654,8 +669,28 @@ class ChatJobRegistry:
                         status="waiting_for_approval",
                         attempt=attempt_number,
                         message=approval.reason,
+                        detail=approval.model_dump_json(),
                     )
                 return await future
+
+            def record_approval_review(event: ToolApprovalReviewEvent) -> None:
+                with self._lock:
+                    current = self._read_record(job_id)
+                    status = current.status
+                messages = {
+                    "started": "自动审核正在评估工具操作。",
+                    "approved": "自动审核已批准工具操作。",
+                    "denied": "自动审核已拒绝工具操作。",
+                    "failed": "自动审核失败，工具操作未执行。",
+                }
+                self._append_event(
+                    job_id,
+                    event_type="approval_review",
+                    status=status,
+                    attempt=attempt_number,
+                    message=messages[event.status],
+                    detail=event.model_dump_json(),
+                )
 
             async def execute_request() -> ChatRunResult:
                 with recorder.activate():
@@ -681,6 +716,8 @@ class ChatJobRegistry:
                         resume_runtime_state=resume_runtime_state,
                         recovery_source_session=recovery_source_session,
                         request_tool_approval=request_tool_approval,
+                        approval_mode=record.spec.approval_mode,
+                        approval_review_callback=record_approval_review,
                     )
 
             async def run_request() -> ChatRunResult:
@@ -1128,6 +1165,7 @@ class ChatJobRegistry:
             "failed",
             "resumed",
             "approval_required",
+            "approval_review",
             "approval_resolved",
         ],
         status: JobStatus,

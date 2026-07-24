@@ -45,6 +45,7 @@ struct ConversationDetailView: View {
                 }
 
             HStack(spacing: 10) {
+                approvalModeMenu
                 Spacer()
 
                 modelMenu
@@ -211,6 +212,49 @@ struct ConversationDetailView: View {
         )
     }
 
+    private var approvalModeMenu: some View {
+        Menu {
+            Section("如何批准 Paper Copilot 操作？") {
+                ForEach(ApprovalMode.allCases) { mode in
+                    Button {
+                        appModel.selectApprovalMode(mode)
+                    } label: {
+                        HStack {
+                            Label {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(mode.displayName)
+                                    Text(mode.detail)
+                                        .foregroundStyle(.secondary)
+                                }
+                            } icon: {
+                                Image(systemName: mode.systemImage)
+                            }
+                            if appModel.approvalMode == mode {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: appModel.approvalMode.systemImage)
+                    .foregroundStyle(.secondary)
+                Text(appModel.approvalMode.displayName)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .fixedSize()
+        .help(appModel.approvalMode.detail)
+    }
+
     private func send() {
         guard appModel.selectedActiveJob == nil else {
             return
@@ -257,6 +301,8 @@ private struct ConversationTimeline: View {
 }
 
 private struct JobTurnView: View {
+    @EnvironmentObject private var appModel: AppModel
+    @State private var approvalDetailsExpanded = false
     let job: ChatJobRecord
     let events: [ChatJobEvent]
 
@@ -335,22 +381,252 @@ private struct JobTurnView: View {
     }
 
     private func approvalCard(_ approval: ToolApprovalRequest) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("任务等待工具操作确认", systemImage: "hand.raised.fill")
-                .font(.headline)
-                .foregroundStyle(.orange)
-            Text(approval.reason)
-            Text(approval.toolName)
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-            Text("M20 当前可停止此任务；批准或拒绝界面尚未实现。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        let isResolving = appModel.resolvingApprovalIDs.contains(approval.id)
+        let operation = approvalOperation(approval)
+        let isDestructive = operation == "trash"
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(
+                    systemName: isDestructive
+                        ? "trash.fill"
+                        : approval.requiresExplicitConfirmation
+                            ? "exclamationmark.triangle.fill"
+                            : "hand.raised.fill"
+                )
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(
+                    isDestructive
+                        ? Color.red
+                        : approval.requiresExplicitConfirmation
+                            ? Color.orange
+                            : Color.secondary
+                )
+                .frame(width: 22, height: 22)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(approvalTitle(approval))
+                        .font(.headline)
+                    Text(approval.reason)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            DisclosureGroup(
+                "查看操作详情",
+                isExpanded: $approvalDetailsExpanded
+            ) {
+                VStack(alignment: .leading, spacing: 6) {
+                    approvalDetailRow("工具", value: approval.toolName)
+                    if let toolInput = approval.toolInput {
+                        ForEach(toolInput.keys.sorted(), id: \.self) { key in
+                            approvalDetailRow(
+                                approvalInputLabel(key),
+                                value: toolInput[key]?.displayText ?? ""
+                            )
+                        }
+                    }
+                    approvalDetailRow(
+                        "副作用",
+                        value: approval.effects.map(approvalEffectLabel).joined(
+                            separator: "、"
+                        )
+                    )
+                }
+                .padding(.top, 6)
+            }
+            .font(.subheadline)
+
+            if approval.requiresExplicitConfirmation {
+                Text("仅允许执行上面这一次操作。参数或文件状态变化后，需要重新确认。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 8) {
+                Spacer()
+
+                Button("取消", role: .cancel) {
+                    appModel.resolveApproval(
+                        jobID: job.id,
+                        approvalID: approval.id,
+                        approved: false
+                    )
+                }
+                .disabled(isResolving)
+
+                if isDestructive {
+                    Button(role: .destructive) {
+                        approve(approval)
+                    } label: {
+                        approvalButtonLabel(
+                            approvalActionLabel(approval),
+                            isResolving: isResolving
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                    .disabled(isResolving)
+                } else {
+                    Button {
+                        approve(approval)
+                    } label: {
+                        approvalButtonLabel(
+                            approvalActionLabel(approval),
+                            isResolving: isResolving
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isResolving)
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(.orange.opacity(0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(14)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.separator.opacity(0.45), lineWidth: 1)
+        }
+    }
+
+    private func approve(_ approval: ToolApprovalRequest) {
+        appModel.resolveApproval(
+            jobID: job.id,
+            approvalID: approval.id,
+            approved: true
+        )
+    }
+
+    @ViewBuilder
+    private func approvalButtonLabel(
+        _ title: String,
+        isResolving: Bool
+    ) -> some View {
+        HStack(spacing: 6) {
+            if isResolving {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            Text(title)
+        }
+    }
+
+    private func approvalTitle(_ approval: ToolApprovalRequest) -> String {
+        let count = approvalPathCount(approval)
+        switch approvalOperation(approval) {
+        case "trash":
+            return count == 1
+                ? "将这篇论文移到废纸篓？"
+                : "将 \(count) 篇论文移到废纸篓？"
+        case "restore":
+            return "恢复历史回收区中的论文？"
+        case "move":
+            return count == 1 ? "允许移动这篇论文？" : "允许移动 \(count) 篇论文？"
+        case "copy":
+            return count == 1 ? "允许复制这篇论文？" : "允许复制 \(count) 篇论文？"
+        case "mkdir":
+            return "允许创建文件夹？"
+        default:
+            return approval.requiresExplicitConfirmation
+                ? "确认执行这项高影响操作？"
+                : "允许执行这项操作？"
+        }
+    }
+
+    private func approvalActionLabel(
+        _ approval: ToolApprovalRequest
+    ) -> String {
+        switch approvalOperation(approval) {
+        case "trash":
+            return "移到废纸篓"
+        case "restore":
+            return "恢复"
+        case "move":
+            return "允许移动"
+        case "copy":
+            return "允许复制"
+        case "mkdir":
+            return "允许创建"
+        default:
+            return approval.requiresExplicitConfirmation
+                ? "确认执行一次"
+                : "允许一次"
+        }
+    }
+
+    private func approvalOperation(
+        _ approval: ToolApprovalRequest
+    ) -> String? {
+        guard
+            let value = approval.toolInput?["operation"],
+            case .string(let operation) = value
+        else {
+            return nil
+        }
+        return operation
+    }
+
+    private func approvalPathCount(
+        _ approval: ToolApprovalRequest
+    ) -> Int {
+        guard
+            let value = approval.toolInput?["paths"],
+            case .array(let paths) = value
+        else {
+            return 0
+        }
+        return paths.count
+    }
+
+    private func approvalDetailRow(
+        _ label: String,
+        value: String
+    ) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 62, alignment: .leading)
+            Text(value)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func approvalInputLabel(_ key: String) -> String {
+        switch key {
+        case "operation":
+            return "操作"
+        case "paths":
+            return "文件"
+        case "destination":
+            return "目标"
+        case "receipt_id":
+            return "历史回执"
+        case "recursive":
+            return "递归"
+        default:
+            return key
+        }
+    }
+
+    private func approvalEffectLabel(_ effect: String) -> String {
+        switch effect {
+        case "write_library":
+            return "修改论文库文件"
+        case "write_index":
+            return "更新论文索引"
+        case "spend_llm_budget":
+            return "使用模型额度"
+        default:
+            return effect
+        }
     }
 }
 

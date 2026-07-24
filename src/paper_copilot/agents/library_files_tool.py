@@ -3,10 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
-from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -24,7 +25,15 @@ LibraryFileOperation = Literal[
 
 _MAX_PATHS = 100
 _MAX_LIST_RESULTS = 500
-_TRASH_DIR_NAME = ".paper-copilot-trash"
+_LEGACY_TRASH_DIR_NAME = ".paper-copilot-trash"
+_MOVE_TO_MACOS_TRASH_SCRIPT = """\
+on run itemPaths
+    repeat with itemPath in itemPaths
+        set sourceFile to POSIX file (itemPath as text)
+        tell application "Finder" to delete sourceFile
+    end repeat
+end run
+"""
 
 
 class LibraryFilesInput(BaseModel):
@@ -57,7 +66,7 @@ class LibraryFilesInput(BaseModel):
                     raise ValueError("mkdir requires destination and no paths")
             case "restore":
                 if self.receipt_id is None:
-                    raise ValueError("restore requires receipt_id")
+                    raise ValueError("restore requires a legacy receipt_id")
         return self
 
 
@@ -66,8 +75,8 @@ def library_files_tool_description() -> str:
         "Inspect and organize PDF files inside the user-selected paper library. "
         "Compose list and inspect to answer file questions. mkdir, copy, move, "
         "trash, and restore modify the library and require host approval. All paths "
-        "must be relative to the library root. trash is recoverable and permanent "
-        "deletion is not supported."
+        "must be relative to the library root. trash moves PDFs to the macOS system "
+        "Trash. restore only accepts receipts created by the legacy application trash."
     )
 
 
@@ -89,7 +98,7 @@ def run_library_files(args: LibraryFilesInput, library_root: Path | None) -> dic
         case "trash":
             return _trash_files(args, root)
         case "restore":
-            return _restore_files(args, root)
+            return _restore_legacy_files(args, root)
 
 
 def _list_files(args: LibraryFilesInput, root: Path) -> dict[str, Any]:
@@ -99,7 +108,7 @@ def _list_files(args: LibraryFilesInput, root: Path) -> dict[str, Any]:
     iterator = directory.rglob("*") if args.recursive else directory.iterdir()
     entries: list[dict[str, Any]] = []
     for path in sorted(iterator):
-        if _is_trash_path(root, path) or path.name.startswith("."):
+        if _is_legacy_trash_path(root, path) or path.name.startswith("."):
             continue
         if path.is_dir():
             entries.append(_entry_payload(root, path, include_hash=False))
@@ -133,8 +142,10 @@ def _inspect_files(args: LibraryFilesInput, root: Path) -> dict[str, Any]:
 def _make_directory(args: LibraryFilesInput, root: Path) -> dict[str, Any]:
     assert args.destination is not None
     destination = _resolve_library_path(root, args.destination)
-    if _is_trash_path(root, destination):
-        raise KnowledgeError("library_files cannot create directories inside its trash area")
+    if _is_legacy_trash_path(root, destination):
+        raise KnowledgeError(
+            "library_files cannot create directories inside its legacy trash area"
+        )
     destination.mkdir(parents=args.recursive, exist_ok=False)
     return {
         "status": "ok",
@@ -147,8 +158,8 @@ def _copy_or_move(args: LibraryFilesInput, root: Path) -> dict[str, Any]:
     assert args.destination is not None
     sources = [_resolve_existing_pdf(root, raw) for raw in args.paths]
     destination = _resolve_library_path(root, args.destination)
-    if _is_trash_path(root, destination):
-        raise KnowledgeError("use trash instead of moving files into the trash area")
+    if _is_legacy_trash_path(root, destination):
+        raise KnowledgeError("legacy trash contents are not available to file operations")
     targets = _operation_targets(root, sources, destination)
     _require_unique_paths(sources, label="source")
     _require_unique_paths(targets, label="destination")
@@ -169,53 +180,57 @@ def _copy_or_move(args: LibraryFilesInput, root: Path) -> dict[str, Any]:
 
 
 def _trash_files(args: LibraryFilesInput, root: Path) -> dict[str, Any]:
+    if sys.platform != "darwin":
+        raise KnowledgeError("trash requires macOS")
     sources = [_resolve_existing_pdf(root, raw) for raw in args.paths]
     _require_unique_paths(sources, label="source")
-    receipt_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") + "-" + uuid4().hex[:8]
-    receipt_root = root / _TRASH_DIR_NAME / receipt_id
-    records: list[dict[str, str]] = []
-    for source in sources:
-        relative = source.relative_to(root)
-        target = receipt_root / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(source), str(target))
-        records.append(
-            {"original": str(relative), "trashed": str(target.relative_to(root))}
-        )
-    manifest = {
-        "receipt_id": receipt_id,
-        "created_at": datetime.now(UTC).isoformat(),
-        "files": records,
-    }
-    receipt_root.mkdir(parents=True, exist_ok=True)
-    (receipt_root / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    completed = subprocess.run(
+        [
+            "/usr/bin/osascript",
+            "-e",
+            _MOVE_TO_MACOS_TRASH_SCRIPT,
+            *(str(source) for source in sources),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
     )
-    return {"status": "ok", "operation": "trash", **manifest}
+    if completed.returncode != 0:
+        message = completed.stderr.strip() or "Finder did not move the PDFs to Trash"
+        raise KnowledgeError(f"macOS Trash operation failed: {message}")
+    return {
+        "status": "ok",
+        "operation": "trash",
+        "destination": "macos_trash",
+        "files": [_relative(root, source) for source in sources],
+    }
 
 
-def _restore_files(args: LibraryFilesInput, root: Path) -> dict[str, Any]:
+def _restore_legacy_files(
+    args: LibraryFilesInput,
+    root: Path,
+) -> dict[str, Any]:
     assert args.receipt_id is not None
-    receipt_root = root / _TRASH_DIR_NAME / args.receipt_id
+    receipt_root = root / _LEGACY_TRASH_DIR_NAME / args.receipt_id
     manifest_path = receipt_root / "manifest.json"
     if not manifest_path.is_file():
-        raise KnowledgeError(f"trash receipt does not exist: {args.receipt_id}")
+        raise KnowledgeError(f"legacy trash receipt does not exist: {args.receipt_id}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     records = manifest.get("files")
     if not isinstance(records, list):
-        raise KnowledgeError(f"trash receipt is invalid: {args.receipt_id}")
+        raise KnowledgeError(f"legacy trash receipt is invalid: {args.receipt_id}")
     restore_pairs: list[tuple[Path, Path, str]] = []
     for record in records:
         if not isinstance(record, dict):
-            raise KnowledgeError(f"trash receipt is invalid: {args.receipt_id}")
+            raise KnowledgeError(f"legacy trash receipt is invalid: {args.receipt_id}")
         original_raw = record.get("original")
         trashed_raw = record.get("trashed")
         if not isinstance(original_raw, str) or not isinstance(trashed_raw, str):
-            raise KnowledgeError(f"trash receipt is invalid: {args.receipt_id}")
+            raise KnowledgeError(f"legacy trash receipt is invalid: {args.receipt_id}")
         source = _resolve_library_path(root, trashed_raw)
         destination = _resolve_library_path(root, original_raw)
         if not source.is_file() or source.suffix.lower() != ".pdf":
-            raise KnowledgeError(f"trashed PDF is missing: {trashed_raw}")
+            raise KnowledgeError(f"legacy trashed PDF is missing: {trashed_raw}")
         if destination.exists():
             raise KnowledgeError(f"restore destination already exists: {original_raw}")
         restore_pairs.append((source, destination, original_raw))
@@ -229,7 +244,10 @@ def _restore_files(args: LibraryFilesInput, root: Path) -> dict[str, Any]:
         shutil.move(str(source), str(destination))
         restored.append(original_raw)
     manifest_path.unlink()
-    _remove_empty_parents(receipt_root, stop=root / _TRASH_DIR_NAME)
+    _remove_empty_parents(
+        receipt_root,
+        stop=root / _LEGACY_TRASH_DIR_NAME,
+    )
     return {
         "status": "ok",
         "operation": "restore",
@@ -263,8 +281,8 @@ def _resolve_existing_pdf(root: Path, raw: str) -> Path:
     path = _resolve_library_path(root, raw)
     if not path.is_file() or path.suffix.lower() != ".pdf":
         raise KnowledgeError(f"library path is not a PDF: {raw}")
-    if _is_trash_path(root, path):
-        raise KnowledgeError("trash contents are only accessible through restore")
+    if _is_legacy_trash_path(root, path):
+        raise KnowledgeError("legacy trash contents are not available to file operations")
     return path
 
 
@@ -306,8 +324,8 @@ def _relative(root: Path, path: Path) -> str:
     return str(relative) if relative.parts else "."
 
 
-def _is_trash_path(root: Path, path: Path) -> bool:
-    trash_root = root / _TRASH_DIR_NAME
+def _is_legacy_trash_path(root: Path, path: Path) -> bool:
+    trash_root = root / _LEGACY_TRASH_DIR_NAME
     return path == trash_root or trash_root in path.parents
 
 

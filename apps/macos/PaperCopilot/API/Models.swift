@@ -1,5 +1,104 @@
 import Foundation
 
+enum ApprovalMode: String, Codable, CaseIterable, Identifiable {
+    case ask
+    case autoReview = "auto_review"
+
+    var id: String {
+        rawValue
+    }
+
+    var displayName: String {
+        switch self {
+        case .ask:
+            return "请求批准"
+        case .autoReview:
+            return "替我审批"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .ask:
+            return "修改论文文件时始终询问"
+        case .autoReview:
+            return "仅对检测到的高风险操作请求确认"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .ask:
+            return "hand.raised"
+        case .autoReview:
+            return "checkmark.shield"
+        }
+    }
+}
+
+enum JSONValue: Codable, Equatable {
+    case string(String)
+    case number(Double)
+    case bool(Bool)
+    case object([String: JSONValue])
+    case array([JSONValue])
+    case null
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([String: JSONValue].self) {
+            self = .object(value)
+        } else {
+            self = .array(try container.decode([JSONValue].self))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value):
+            try container.encode(value)
+        case .number(let value):
+            try container.encode(value)
+        case .bool(let value):
+            try container.encode(value)
+        case .object(let value):
+            try container.encode(value)
+        case .array(let value):
+            try container.encode(value)
+        case .null:
+            try container.encodeNil()
+        }
+    }
+
+    var displayText: String {
+        switch self {
+        case .string(let value):
+            return value
+        case .number(let value):
+            return value.formatted()
+        case .bool(let value):
+            return value ? "是" : "否"
+        case .object(let value):
+            return value.keys.sorted().map {
+                "\($0): \(value[$0]?.displayText ?? "")"
+            }.joined(separator: ", ")
+        case .array(let value):
+            return value.map(\.displayText).joined(separator: "、")
+        case .null:
+            return "无"
+        }
+    }
+}
+
 enum ModelThinkingProtocol: String, Codable, CaseIterable, Identifiable {
     case qwen
     case deepSeek = "deepseek"
@@ -229,11 +328,13 @@ struct ChatJobSpec: Codable, Equatable {
     let request: String
     let conversationID: String?
     let pdfDir: String?
+    let approvalMode: ApprovalMode
 
     enum CodingKeys: String, CodingKey {
         case request
         case conversationID = "conversation_id"
         case pdfDir = "pdf_dir"
+        case approvalMode = "approval_mode"
     }
 }
 
@@ -253,15 +354,29 @@ struct ChatJobResult: Codable, Equatable {
 
 struct ToolApprovalRequest: Codable, Equatable {
     let id: String
+    let toolCallID: String?
     let toolName: String
     let reason: String
     let effects: [String]
+    let toolInput: [String: JSONValue]?
+    let inputSHA256: String?
+    let requirement: String?
+    let autoReviewAllowed: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id
+        case toolCallID = "tool_call_id"
         case toolName = "tool_name"
         case reason
         case effects
+        case toolInput = "tool_input"
+        case inputSHA256 = "input_sha256"
+        case requirement
+        case autoReviewAllowed = "auto_review_allowed"
+    }
+
+    var requiresExplicitConfirmation: Bool {
+        requirement == "explicit_confirmation"
     }
 }
 
@@ -495,11 +610,23 @@ struct ChatJobCreateRequest: Encodable {
     let message: String
     let pdfDir: String
     let conversationID: String?
+    let approvalMode: ApprovalMode
 
     enum CodingKeys: String, CodingKey {
         case message
         case pdfDir = "pdf_dir"
         case conversationID = "conversation_id"
+        case approvalMode = "approval_mode"
+    }
+}
+
+struct JobApprovalRequest: Encodable {
+    let approvalID: String
+    let approved: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case approvalID = "approval_id"
+        case approved
     }
 }
 

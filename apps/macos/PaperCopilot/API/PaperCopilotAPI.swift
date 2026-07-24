@@ -50,7 +50,8 @@ final class PaperCopilotAPI {
     func createJob(
         message: String,
         pdfDir: String,
-        conversationID: String?
+        conversationID: String?,
+        approvalMode: ApprovalMode
     ) async throws -> ChatJobRecord {
         var request = URLRequest(url: try url(path: ["jobs"]))
         request.httpMethod = "POST"
@@ -59,7 +60,8 @@ final class PaperCopilotAPI {
             ChatJobCreateRequest(
                 message: message,
                 pdfDir: pdfDir,
-                conversationID: conversationID
+                conversationID: conversationID,
+                approvalMode: approvalMode
             )
         )
         return try await send(request)
@@ -72,6 +74,25 @@ final class PaperCopilotAPI {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = Data("{}".utf8)
+        return try await send(request)
+    }
+
+    func resolveApproval(
+        jobID: String,
+        approvalID: String,
+        approved: Bool
+    ) async throws -> ChatJobRecord {
+        var request = URLRequest(
+            url: try url(path: ["jobs", jobID, "approval"])
+        )
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try encoder.encode(
+            JobApprovalRequest(
+                approvalID: approvalID,
+                approved: approved
+            )
+        )
         return try await send(request)
     }
 

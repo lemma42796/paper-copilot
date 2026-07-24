@@ -17,7 +17,11 @@ from paper_copilot.agents.paper_copilot import (
     PaperCopilotRun,
     run_paper_copilot,
 )
-from paper_copilot.agents.tool_security import ToolApprovalRequest
+from paper_copilot.agents.tool_security import (
+    ApprovalMode,
+    ToolApprovalRequest,
+    ToolApprovalReviewEvent,
+)
 from paper_copilot.eval._paths import default_report_path
 from paper_copilot.eval.report import write_report
 from paper_copilot.eval.runs import load_history, write_research_quality_run
@@ -70,7 +74,11 @@ async def handle_chat_request(
     resume_history: list[dict[str, Any]] | None = None,
     resume_runtime_state: dict[str, Any] | None = None,
     recovery_source_session: str | None = None,
-    request_tool_approval: Callable[[ToolApprovalRequest], Awaitable[bool]] | None = None,
+    request_tool_approval: (
+        Callable[[ToolApprovalRequest], Awaitable[bool]] | None
+    ) = None,
+    approval_mode: ApprovalMode = "ask",
+    approval_review_callback: Callable[[ToolApprovalReviewEvent], None] | None = None,
 ) -> ChatRunResult:
     home = root if root is not None else default_root()
     library_dir = pdf_dir if pdf_dir is not None else default_pdf_dir()
@@ -144,6 +152,8 @@ async def handle_chat_request(
             resume_runtime_state=resume_runtime_state,
             recovery_source_session=recovery_source_session,
             request_tool_approval=request_tool_approval,
+            approval_mode=approval_mode,
+            approval_review_callback=approval_review_callback,
         )
 
     return _persist_chat_result(
