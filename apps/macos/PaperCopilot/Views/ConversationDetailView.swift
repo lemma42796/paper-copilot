@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ConversationDetailView: View {
@@ -332,11 +333,14 @@ private struct JobTurnView: View {
         VStack(spacing: 14) {
             HStack {
                 Spacer(minLength: 80)
-                Text(job.spec.request)
-                    .textSelection(.enabled)
-                    .padding(12)
-                    .background(Color.accentColor.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(job.spec.request)
+                        .textSelection(.enabled)
+                        .padding(12)
+                        .background(Color.accentColor.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                    CopyMessageButton(text: job.spec.request)
+                }
             }
 
             if !events.isEmpty || job.status.isActive {
@@ -348,7 +352,10 @@ private struct JobTurnView: View {
             }
 
             if let report = job.result?.reportMarkdown {
-                MarkdownReportView(markdown: report)
+                VStack(alignment: .leading, spacing: 4) {
+                    MarkdownReportView(markdown: report)
+                    CopyMessageButton(text: report)
+                }
             } else if let error = job.error, !job.status.isActive {
                 Label(error, systemImage: job.status.systemImage)
                     .foregroundStyle(job.status == .failed ? .red : .secondary)
@@ -651,6 +658,60 @@ private struct JobTurnView: View {
             return "使用模型额度"
         default:
             return effect
+        }
+    }
+}
+
+private struct CopyMessageButton: View {
+    let text: String
+    @State private var isHovering = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        } label: {
+            Image(systemName: "doc.on.doc")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+                .background(
+                    isHovering
+                        ? Color.secondary.opacity(0.12)
+                        : Color.clear
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .top) {
+            if isHovering {
+                Text("复制")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(.regularMaterial)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 7)
+                            .stroke(Color.secondary.opacity(0.16), lineWidth: 1)
+                    }
+                    .shadow(
+                        color: .black.opacity(0.12),
+                        radius: 5,
+                        x: 0,
+                        y: 2
+                    )
+                    .fixedSize()
+                    .offset(y: -34)
+                    .allowsHitTesting(false)
+            }
+        }
+        .accessibilityLabel("复制")
+        .zIndex(isHovering ? 1 : 0)
+        .onHover { hovering in
+            isHovering = hovering
         }
     }
 }
