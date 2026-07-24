@@ -32,21 +32,27 @@ struct ConversationDetailView: View {
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 4) {
-            TextField("询问你的论文库…", text: $draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.body)
-                .lineLimit(1...3)
-                .frame(
-                    minHeight: 22,
-                    maxHeight: 52,
-                    alignment: .topLeading
-                )
-                .onSubmit {
-                    send()
+            ZStack(alignment: .topLeading) {
+                if draft.isEmpty {
+                    Text("询问你的论文库…")
+                        .foregroundStyle(.tertiary)
+                        .allowsHitTesting(false)
                 }
+
+                MessageComposerTextView(text: $draft, onSubmit: send)
+            }
+            .font(.body)
+            .frame(
+                minHeight: 22,
+                maxHeight: 52,
+                alignment: .topLeading
+            )
 
             HStack(spacing: 10) {
                 approvalModeMenu
+                Text("⇧ + 回车换行")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
                 Spacer()
 
                 modelMenu
@@ -265,6 +271,87 @@ struct ConversationDetailView: View {
             conversationID: appModel.selectedConversationID
         ) {
             draft = ""
+        }
+    }
+}
+
+private struct MessageComposerTextView: NSViewRepresentable {
+    @Binding var text: String
+    let onSubmit: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let textView = SubmitTextView()
+        textView.delegate = context.coordinator
+        textView.onSubmit = context.coordinator.submit
+        textView.isRichText = false
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.drawsBackground = false
+        textView.font = NSFont.preferredFont(forTextStyle: .body)
+        textView.textColor = .labelColor
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.autoresizingMask = [.width]
+        textView.allowsUndo = true
+
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.borderType = .noBorder
+        scrollView.documentView = textView
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard
+            let textView = scrollView.documentView as? SubmitTextView,
+            textView.string != text
+        else {
+            return
+        }
+        textView.string = text
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: MessageComposerTextView
+
+        init(parent: MessageComposerTextView) {
+            self.parent = parent
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else {
+                return
+            }
+            parent.text = textView.string
+        }
+
+        func submit() {
+            parent.onSubmit()
+        }
+    }
+}
+
+private final class SubmitTextView: NSTextView {
+    var onSubmit: () -> Void = {}
+
+    override func keyDown(with event: NSEvent) {
+        let isReturn = event.keyCode == 36 || event.keyCode == 76
+        guard isReturn, !hasMarkedText() else {
+            super.keyDown(with: event)
+            return
+        }
+        if event.modifierFlags.contains(.shift) {
+            super.keyDown(with: event)
+        } else {
+            onSubmit()
         }
     }
 }
