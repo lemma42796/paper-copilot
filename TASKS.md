@@ -1,99 +1,93 @@
 # TASKS
 
-> 当前路线图与完成状态。历史实现过程见 Git，技术结构见
-> [ARCHITECTURE.md](ARCHITECTURE.md)。
+> Paper Copilot 的当前路线图与完成状态。工程规则见
+> [AGENTS.md](AGENTS.md)，技术结构和稳定架构决策见
+> [ARCHITECTURE.md](ARCHITECTURE.md)，历史实现过程见 Git。
+
+更新于 2026-07-26。
 
 ## Current Direction
 
-更新于 2026-07-24。
+Paper Copilot 是本地优先的个人论文研究工具，面向约 50–100 篇论文的知识库。产品通过
+SwiftUI macOS 客户端和 Local MCP Server 两个入口复用同一 Python Core。
 
-Paper Copilot 是本地优先的个人论文研究工具，面向约 50–100 篇论文的知识库。产品有
-两个入口，复用同一 Python Core：
+当前采用 BYOK。PDF、索引、结构化字段、session、报告和 trace 默认保存在本地；只有
+本地检索选出的必要文本可以发送给用户配置的云端模型。当前不建设账号、支付、托管模型
+或云端论文库。
 
-- SwiftUI macOS 客户端：管理论文目录、模型配置、Agent 任务、报告和应用生命周期。
-- Local MCP Server：向支持 MCP 的 Agent 客户端提供论文查询与长任务工具。
+## Current Work
 
-### Product Boundary
+当前没有进行中的 milestone 或 bounded slice。M20–M24、工具审批闭环和最近一轮
+command-first 工具重设计均已完成。开始下一项工作前，需要从下方
+`Requirements To Plan` 中明确选择目标并定义范围与 DoD。
 
-- PDF、索引、结构化字段、session、报告和 trace 默认保存在本地。
-- 本地检索选出的文本片段可以发送给用户配置的云端模型；产品必须明确展示此边界。
-- 当前采用 BYOK，不建设账号、支付、托管模型或云端论文库。
-- SwiftUI 负责界面、目录授权、本地凭据和 Runtime 生命周期；Python 负责 Agent、
-  PDF、RAG、存储、恢复、eval 和 observability。
-- MCP 与 macOS 客户端必须复用 Python Core，不复制业务逻辑。
-
-## Completed Milestones
+## Recently Completed
 
 ### M20 — macOS Client Foundation
 
-已完成 SwiftUI 原生客户端、security-scoped 论文目录、本地模型配置、动态端口
-Runtime、持久 conversation/job、SSE 与 polling、停止/恢复、Markdown 报告和任务诊断。
-已通过真实论文任务、停止操作及 App 重启恢复验收。
+完成 SwiftUI 原生客户端、security-scoped 论文目录、本地模型配置、Runtime 生命周期、
+持久 conversation/job、流式事件、停止与恢复、Markdown 报告和任务诊断。已通过真实
+论文任务、停止操作及 App 重启恢复验收。
 
 ### M21 — Local Read-only MCP
 
-已完成本地 `stdio` MCP Server，提供：
-
-- `library_status`
-- `list_papers`
-- `search_papers`
-- `get_paper`
-- `inspect_evidence`
-- `compare_papers`
-
-工具只访问配置的论文库和数据目录，输出有界，无任意路径、导入、删除、覆盖或命令执行
-能力。已通过 Codex 中的真实工具发现与查询验收。
+完成本地 `stdio` MCP Server 的有界论文库查询、证据检查与论文比较能力。工具只访问
+配置的论文库和数据目录，不接受任意路径，也不提供导入、删除、覆盖或命令执行能力。
+已在 Codex 中通过真实工具发现与查询验收。
 
 ### M22 — MCP Long-running Jobs
 
-已完成 `start_read_paper`、`get_job_status`、`get_job_result` 和 `cancel_job`。它们复用
-既有 job/attempt/recovery 状态机，启动立即返回 job ID，状态查询使用增量事件游标。
-已通过启动、查询、取消和 interrupted 终态验收。
+完成通过 MCP 启动、查询、获取和取消长任务，并复用既有 job/attempt/recovery 状态机。
+已通过启动、增量状态查询、取消和 interrupted 终态验收。
 
 ### M23 — Distribution
 
-已完成自包含的 Apple Silicon `.app` 和开发预览 DMG。App 内嵌 Python 3.12 Runtime
-及 `sqlite-vec`，终端用户无需安装 Python、uv 或 Node.js。已通过签名检查、DMG
-安装、Runtime 握手和真实论文任务验收。
+完成自包含的 Apple Silicon `.app` 和开发预览 DMG。App 内嵌 Python 3.12 Runtime 与
+`sqlite-vec`，终端用户无需安装 Python、uv 或 Node.js。已通过签名检查、DMG 安装、
+Runtime 握手和真实论文任务验收。
 
-Developer ID 与 Apple 公证留到正式公开发布阶段。
+Developer ID、Apple 公证和正式公开发布仍在 `Deferred`。
 
 ### M24 — Legacy Web Retirement
 
-已删除 Next.js Web UI 和仅为旧界面服务的 API。当前仅保留 macOS 客户端、MCP 和
-Python Core 共同需要的 health、job、events、SSE、interrupt、resume、approval 与
-diagnostics 能力。
+删除 Next.js Web UI 和仅为旧界面服务的 API。保留 macOS 客户端、MCP 和 Python Core
+共同需要的本地 Runtime 边界。
 
-## Current Status
+### Post-M24 bounded slices
 
-M20–M24 全部完成，工具审核机制也已完成。当前没有进行中的里程碑。工具重设计以
-bounded slice 推进：已加入只读论文库命令执行能力，以及面向多篇超长论文的分层
-读取与召回能力；模型工具表面收敛为 `library_exec`、`library_edit`、
-`paper_search`、`read_paper`。`paper_search` 使用游标分页，“所有论文”必须遍历到
-`next_cursor = null`。旧的专用查询与编辑实现暂时保留为内部能力。
+- 完成需要批准的工具操作在 macOS 客户端中的展示、批准、拒绝、中断与恢复闭环。
+- 为模型加入有界的论文库只读命令和编辑能力，并收敛公开工具表面。
+- 加入面向多篇超长论文的分层读取、召回和游标遍历能力。
+- 旧的专用查询与编辑实现暂时保留为内部能力；是否迁移或删除需要后续评估。
 
 ## Requirements To Plan
 
-以下需求已记录，尚未拆分 milestone 或进入实现：
+以下需求尚未成为 active milestone 或 bounded slice。开始实现前需要先确定目标、范围、
+验收方式和明确不做的内容。
 
-1. **审视并评估工具设计**
-   - 盘点现有工具的职责、粒度、输入输出、权限、副作用和组合方式。
-   - 排查能力缺口、职责重叠、隐式耦合、不一致的安全策略及难以评估的接口。
-   - 基于排查结果决定是否需要重构；在结论明确前不预设重构范围。
+### 1. 完成工具系统评估
 
-2. **重新设计新论文框架生成功能**
-   - 重新定义 Research Idea Composer 的用户目标、工作流、证据要求、产出契约和失败模式。
-   - 对比单 Agent、确定性编排和多 Agent 方案的质量、成本、延迟、可恢复性与可评估性。
-   - 先完成设计和实验，再决定是否引入多 Agent；不得仅为架构形式增加 Agent。
+- 以当前 command-first 工具表面为基线，盘点职责、粒度、输入输出、权限、副作用和
+  组合方式。
+- 排查能力缺口、职责重叠、隐式耦合、安全策略不一致及难以评估的接口。
+- 评估仍保留的旧内部工具应继续复用、迁移还是删除。
+- 根据评估结论决定后续 bounded slice，不预设重构范围。
 
-3. **完成 Agent 系统评估**
-   - 盘点现有 eval suite、golden、retrieval gate、质量启发式和趋势报告的覆盖范围。
-   - 检查当前指标是否与真实用户任务、证据质量、工具选择、安全性、成本和延迟一致。
-   - 识别不稳定、可被投机优化或缺少判别力的指标，并提出校准、替换或新增方案。
+### 2. 重新设计 Research Idea Composer
+
+- 重新定义用户目标、工作流、证据要求、产出契约和失败模式。
+- 对比单 Agent、确定性编排和多 Agent 方案的质量、成本、延迟、可恢复性与可评估性。
+- 先完成设计和实验，再决定是否引入多 Agent；不为架构形式增加 Agent。
+
+### 3. 完成 Agent 系统评估
+
+- 盘点现有 eval suite、golden、retrieval gate、质量启发式和趋势报告的覆盖范围。
+- 检查指标是否对应真实用户任务、证据质量、工具选择、安全性、成本和延迟。
+- 识别不稳定、可被投机优化或缺少判别力的指标，并提出校准、替换或新增方案。
 
 ## Deferred
 
-以下方向只有经用户明确选择后才成为新里程碑：
+以下方向只有经用户明确选择后才进入规划：
 
 - Developer ID、公证、正式公开发布和 App Store。
 - 远程 MCP 与目录提交。
@@ -102,23 +96,3 @@ bounded slice 推进：已加入只读论文库命令执行能力，以及面向
 - Zotero 同步和本地模型推理。
 - Swift/Rust 局部性能模块。
 - 云端数据库、对象存储和 worker 集群。
-
-## Stable Decisions
-
-- Python 3.12+，所有函数和方法使用完整类型标注。
-- 模块边界以 [ARCHITECTURE.md](ARCHITECTURE.md) 为准。
-- 所有 LLM 调用经过 `agents/llm_client.py`。
-- session 使用 append-only JSONL；热查询和索引使用 SQLite。
-- LLM 结构化输出必须经过 Pydantic 校验；语义约束使用确定性 validator。
-- 模型升级必须同时满足零回归和可测量的质量、成本、延迟收益。
-- 本地 MCP 默认最小权限；写操作和外部副作用必须显式标注并审批。
-- 未经用户确认不新增依赖、不改变发布技术栈。
-
-## Working Discipline
-
-1. 一次只推进一个 milestone 或 bounded slice。
-2. 开始前查看现有接口；非平凡里程碑先给出计划并等待确认。
-3. 新模块先稳定公开接口并完成一次手动运行，再考虑测试。
-4. 未经明确要求，不主动新增或运行 Ruff、mypy、pytest 等验证。
-5. DoD 满足后停止，列出完成项、缺失项和未修改的相邻问题。
-6. 默认不 commit、不 push。
