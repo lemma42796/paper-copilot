@@ -17,9 +17,21 @@ SwiftUI macOS 客户端和 Local MCP Server 两个入口复用同一 Python Core
 
 ## Current Work
 
-当前没有进行中的 milestone 或 bounded slice。M20–M24、工具审批闭环和最近一轮
-command-first 工具重设计均已完成。开始下一项工作前，需要从下方
-`Requirements To Plan` 中明确选择目标并定义范围与 DoD。
+当前正在执行 command-first 工具系统评估的四轮多论文 pilot，尚未进入代码实现
+bounded slice。
+
+已完成：
+
+- 冻结 14 篇硕士学位论文、四轮 query 和私有 Gold；
+- 完成原生 Codex 四轮盲测和基线评测；
+- 基线未发现作者—方法错配，主要失败类型为 `constraint_memory_failure`；
+- 给出一个优先工具方向：让 `paper_search` 返回可在后续轮次续用、并能报告遍历覆盖的
+  稳定结果集合。
+
+当前停在工具改造决策门。上述方向尚未获得实现确认，也没有修改公开工具契约、
+`ARCHITECTURE.md` 或产品代码。Paper Copilot 盲测和最终对比评测尚未开始。下一步由
+用户决定是停止在基线报告，还是把唯一建议定义为独立 bounded slice，明确目标失败
+类型、工具契约、状态生命周期、非目标和验收方式后再实施。
 
 ## Recently Completed
 
@@ -62,16 +74,17 @@ Developer ID、Apple 公证和正式公开发布仍在 `Deferred`。
 
 ## Requirements To Plan
 
-以下需求尚未成为 active milestone 或 bounded slice。开始实现前需要先确定目标、范围、
-验收方式和明确不做的内容。
+第 1 项已进入实验评估，但尚未成为代码实现 bounded slice。其余需求仍未成为 active
+milestone。开始实现前需要先确定目标、范围、验收方式和明确不做的内容。
 
-### 1. 完成工具系统评估
+### 1. 完成工具系统评估（进行中）
 
 - 以当前 command-first 工具表面为基线，盘点职责、粒度、输入输出、权限、副作用和
   组合方式。
 - 排查能力缺口、职责重叠、隐式耦合、安全策略不一致及难以评估的接口。
 - 评估仍保留的旧内部工具应继续复用、迁移还是删除。
-- 根据评估结论决定后续 bounded slice，不预设重构范围。
+- 已完成四轮多论文 Codex 基线；是否实施稳定结果集合方向仍待用户确认。
+- 根据评估结论决定后续 bounded slice，不预设重构范围，也不在决策前修改工具。
 
 ### 2. 重新设计 Research Idea Composer
 
