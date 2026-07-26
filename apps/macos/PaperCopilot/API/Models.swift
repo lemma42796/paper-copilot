@@ -360,6 +360,8 @@ struct ToolApprovalRequest: Codable, Equatable {
     let effects: [String]
     let toolInput: [String: JSONValue]?
     let inputSHA256: String?
+    let targetSnapshot: [[String: JSONValue]]?
+    let changePreview: [String: JSONValue]?
     let requirement: String?
     let autoReviewAllowed: Bool?
 
@@ -371,6 +373,8 @@ struct ToolApprovalRequest: Codable, Equatable {
         case effects
         case toolInput = "tool_input"
         case inputSHA256 = "input_sha256"
+        case targetSnapshot = "target_snapshot"
+        case changePreview = "change_preview"
         case requirement
         case autoReviewAllowed = "auto_review_allowed"
     }

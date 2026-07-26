@@ -74,10 +74,25 @@ from paper_copilot.agents.loop import (
     ToolUseRequest,
     run_agent_loop,
 )
+from paper_copilot.agents.library_edit_tool import (
+    LibraryEditInput,
+    library_edit_tool_description,
+    run_library_edit,
+)
+from paper_copilot.agents.library_exec_tool import (
+    LibraryExecInput,
+    library_exec_tool_description,
+    run_library_exec,
+)
 from paper_copilot.agents.library_files_tool import (
     LibraryFilesInput,
     library_files_tool_description,
     run_library_files,
+)
+from paper_copilot.agents.notes_patch_tool import (
+    NotesPatchInput,
+    notes_patch_tool_description,
+    run_notes_patch,
 )
 from paper_copilot.agents.read_pipeline import ReadPipelineRun, run_read_pipeline
 from paper_copilot.agents.tool_security import (
@@ -121,11 +136,30 @@ __all__ = [
 
 _AGENT_NAME = "PaperCopilot"
 _MAX_LIST_LIMIT = 20
+_MAX_PAPER_SEARCH_OFFSET = 10_000
+_MAX_INTERNAL_SEARCH_RESULTS = _MAX_PAPER_SEARCH_OFFSET + _MAX_LIST_LIMIT + 1
 _MAX_SEARCH_K = 10
 _MAX_SEARCH_CHUNKS_PER_PAPER = 5
 _MAX_EVIDENCE_POOL_PER_PAPER = 50
 _MAX_RELATED_K = 10
 _MAX_TOKENS = 3000
+_MODEL_TOOL_NAMES = (
+    "library_exec",
+    "library_edit",
+    "paper_search",
+    "read_paper",
+)
+_RESEARCH_EVIDENCE_TOOL_NAMES = frozenset(
+    {
+        "paper_search",
+        "read_paper",
+        "search_papers",
+        "query_paper",
+        "query_papers",
+        "compare_papers",
+        "find_related_papers",
+    }
+)
 _COMPOSER_TOOL_NAMES = frozenset(
     {
         "list_composer_library",
@@ -168,19 +202,20 @@ _BASE_SYSTEM_PROMPT = (
     "Never invent citations or claim that an unread PDF was analyzed. If required "
     "evidence is missing, say exactly what is missing. For synthesis or comparison, "
     "query enough relevant papers rather than stopping at the first result when "
-    "the paper budget allows it. Tool inputs must match their JSON schemas exactly.\n\n"
-    "For a direct answer with no tools, respond naturally without forced report "
-    "headings or citations. After using non-Composer paper tools, write a concise "
-    "Markdown report with Findings, Evidence, Gaps, and Next Steps. Tie each "
-    "concrete claim to a bracket reference in exact format [paper_id:field], such "
-    "as [abc123:chunks[12]] or [abc123:contributions[0].claim], or explicitly mark "
-    "it as a gap. Write in the user's language and keep the report under 900 words.\n\n"
-    "If the request needs a new research proposal or model framework, use the "
-    "Composer tools instead of giving an ungrounded idea directly. Start with "
-    "list_composer_library, follow composer_plan.allowed_next_tools, and follow the "
-    "returned final_report_contract. Do not write the final proposal before "
-    "composer_plan.report_ready is true unless every module pool has been searched "
-    "and the answer is explicitly a gap report.\n\n"
+    "the paper budget allows it. Use library_exec for read-only filesystem work, "
+    "library_edit for every library mutation, paper_search for semantic retrieval "
+    "over one paper, named papers, or the library, and read_paper only when a local "
+    "PDF is not indexed. A command result is filesystem evidence, not citation-grade "
+    "paper-content evidence. When the user asks for all matching papers, continue "
+    "paper_search pagination until next_cursor is null. Tool inputs must match their "
+    "JSON schemas exactly.\n\n"
+    "For a direct answer or a library_exec/library_edit task, respond naturally "
+    "without forced report headings or citations. After using paper_search or "
+    "read_paper, write a concise Markdown report with Findings, Evidence, Gaps, "
+    "and Next Steps. Tie each concrete research claim to a bracket reference in "
+    "exact format [paper_id:field], such as [abc123:chunks[12]] or "
+    "[abc123:contributions[0].claim], or explicitly mark it as a gap. Write in the "
+    "user's language and keep the report under 900 words.\n\n"
     "Return the answer or report itself. Do not narrate the working process."
 )
 _EVIDENCE_REF_RE = re.compile(
@@ -334,7 +369,11 @@ class _SearchPapersInput(BaseModel):
             "match indexed papers because unread PDFs have no extracted metadata."
         ),
     )
-    limit: StrictInt = Field(default=8, ge=1, le=_MAX_LIST_LIMIT)
+    limit: StrictInt = Field(
+        default=8,
+        ge=1,
+        le=_MAX_INTERNAL_SEARCH_RESULTS,
+    )
 
     @field_validator("query")
     @classmethod
@@ -555,6 +594,121 @@ class _QueryPaperInput(BaseModel):
         le=_MAX_SEARCH_CHUNKS_PER_PAPER,
         description="Maximum original-text evidence chunks to return.",
     )
+
+
+class _QueryPapersInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    papers: list[_PaperLocatorInput] = Field(
+        min_length=2,
+        max_length=20,
+        description=(
+            "Two to twenty candidate papers for one cross-paper question. Each "
+            "locator identifies one indexed paper by paper_id, title, or PDF path. "
+            "The retrieval pipeline ranks these candidates before spending the "
+            "paper-analysis budget."
+        ),
+    )
+    question: str = Field(
+        min_length=1,
+        description=(
+            "One question to investigate across the candidate papers. Preserve "
+            "technical terms, dataset names, metric names, and equation symbols."
+        ),
+    )
+    max_papers: StrictInt = Field(
+        default=5,
+        ge=1,
+        le=5,
+        description=(
+            "Maximum relevant papers to return after cross-paper ranking. This "
+            "cannot override the run's remaining paper-analysis budget."
+        ),
+    )
+    evidence_per_paper: StrictInt = Field(
+        default=3,
+        ge=1,
+        le=_MAX_SEARCH_CHUNKS_PER_PAPER,
+        description=(
+            "Maximum complementary original-text evidence chunks per selected paper."
+        ),
+    )
+
+
+class _PaperSearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Optional content question or discovery query. Omit it to browse the "
+            "library or resolve the explicitly named papers."
+        ),
+    )
+    papers: list[_PaperLocatorInput] = Field(
+        default_factory=list,
+        max_length=20,
+        description=(
+            "Optional papers that bound retrieval. One paper performs paper-local "
+            "search; multiple papers use bounded hierarchical retrieval. Leave empty "
+            "to search or browse the library."
+        ),
+    )
+    scope: Literal["indexed", "local", "all"] = Field(
+        default="indexed",
+        description=(
+            "Library scope when papers is empty. indexed searches content, local "
+            "searches PDF filenames, and all combines both."
+        ),
+    )
+    filters: _SearchPaperFiltersInput = Field(
+        default_factory=_SearchPaperFiltersInput,
+        description=(
+            "Optional year, venue, method, dataset, and baseline filters for "
+            "library-wide discovery."
+        ),
+    )
+    page_size: StrictInt = Field(
+        default=20,
+        ge=1,
+        le=_MAX_LIST_LIMIT,
+        description=(
+            "Maximum papers in one response page. This is not a total result limit."
+        ),
+    )
+    cursor: str | None = Field(
+        default=None,
+        pattern=r"^v1:[0-9]+:[0-9a-f]{16}$",
+        max_length=64,
+        description=(
+            "Opaque next_cursor returned by the previous call. Reuse it unchanged "
+            "with the same query, scope, filters, and evidence_per_paper."
+        ),
+    )
+    evidence_per_paper: StrictInt = Field(
+        default=3,
+        ge=1,
+        le=_MAX_SEARCH_CHUNKS_PER_PAPER,
+        description="Maximum original-text evidence chunks per analyzed paper.",
+    )
+
+    @model_validator(mode="after")
+    def _scope_matches_explicit_papers(self) -> _PaperSearchInput:
+        if self.papers and self.cursor is not None:
+            raise ValueError("cursor applies only when papers is empty")
+        if self.papers and self.scope != "indexed":
+            raise ValueError("explicit papers require scope=indexed")
+        if self.papers and any(
+            value is not None for value in self.filters.model_dump().values()
+        ):
+            raise ValueError("filters apply only when papers is empty")
+        if (
+            self.query is not None
+            and re.search(r"\w", self.query, flags=re.UNICODE) is None
+        ):
+            raise ValueError("query must contain at least one letter or digit")
+        return self
 
 
 type _CompareAspect = Literal[
@@ -961,7 +1115,11 @@ async def run_paper_copilot(
             }
 
     evidence_refs = _extract_evidence_refs(report_markdown)
-    quality = _quality_summary(report_markdown, evidence_refs) if tool_names else None
+    quality = (
+        _quality_summary(report_markdown, evidence_refs)
+        if any(name in _RESEARCH_EVIDENCE_TOOL_NAMES for name in tool_names)
+        else None
+    )
     if proposal_check is not None:
         report_markdown = append_composer_check_section(report_markdown, proposal_check)
 
@@ -1093,6 +1251,21 @@ def _proposal_error_codes(proposal_check: ComposerProposalCheck) -> list[str]:
 def _tool_schema_templates() -> list[dict[str, Any]]:
     return [
         _tool_schema(
+            "paper_search",
+            (
+                "Search, browse, or query the paper library through one unified "
+                "interface. Leave papers empty for library-wide discovery; provide "
+                "one paper for paper-local evidence; provide multiple named papers "
+                "for bounded hierarchical retrieval across very long documents. "
+                "Unindexed local PDFs are reported as needs_read and should be passed "
+                "to read_paper before retrying. Returned original-text chunks carry "
+                "stable citation references. Library-wide results are paginated; "
+                "when the user asks for all matching papers, follow next_cursor until "
+                "it is null before answering."
+            ),
+            _PaperSearchInput,
+        ),
+        _tool_schema(
             "search_papers",
             (
                 "Find or browse papers in the personal library. Use this when the "
@@ -1112,7 +1285,7 @@ def _tool_schema_templates() -> list[dict[str, Any]]:
                 "Read and index one local PDF, then return its default structured "
                 "summary and stable evidence references. Use this when the paper "
                 "resolves to an unindexed local PDF. Do not reread an indexed paper "
-                "merely to answer a question; use query_paper instead. Reading "
+                "merely to answer a question; use paper_search instead. Reading "
                 "consumes the paper and CNY budgets. The locator must identify "
                 "exactly one of paper_id, title, or pdf_path. Ambiguous titles "
                 "return candidates without reading any PDF."
@@ -1127,11 +1300,27 @@ def _tool_schema_templates() -> list[dict[str, Any]]:
                 "explanations, equations, ablations, implementation details, "
                 "reported results, limitations, or page-level evidence. Search is "
                 "restricted to the selected paper. Use search_papers to discover "
-                "papers and compare_papers for questions about two or more papers. "
+                "papers, query_papers for one evidence question across multiple "
+                "papers, and compare_papers for structured field comparisons. "
                 "An unindexed local PDF returns needs_read; ambiguous titles return "
                 "candidates; missing original-text evidence is reported explicitly."
             ),
             _QueryPaperInput,
+        ),
+        _tool_schema(
+            "query_papers",
+            (
+                "Investigate one question across two to twenty named, indexed, "
+                "potentially very long papers. Use this when the user asks what "
+                "multiple papers collectively do, which approaches dominate, or "
+                "how they address the same problem. Retrieval is hierarchical and "
+                "bounded: first rank candidate papers globally, then retrieve "
+                "paper-local evidence, then prefer complementary sections. Only "
+                "selected papers consume the run's paper budget. Use query_paper "
+                "for one paper, search_papers to discover an open-ended candidate "
+                "set, and compare_papers for a structured field comparison."
+            ),
+            _QueryPapersInput,
         ),
         _tool_schema(
             "list_composer_library",
@@ -1175,8 +1364,8 @@ def _tool_schema_templates() -> list[dict[str, Any]]:
                 "or how their contributions, methods, experiments, and limitations "
                 "align. Each paper locator must resolve uniquely. Ambiguous, missing, "
                 "or unread papers are returned as resolution issues without guessing. "
-                "Use query_paper separately when the comparison needs original-text "
-                "evidence about a specific mechanism, equation, or result."
+                "Use query_papers when the comparison needs original-text evidence "
+                "about a shared mechanism, equation, or result."
             ),
             _ComparePapersInput,
         ),
@@ -1198,39 +1387,69 @@ def _tool_schema_templates() -> list[dict[str, Any]]:
             library_files_tool_description(),
             LibraryFilesInput,
         ),
+        _tool_schema(
+            "library_exec",
+            library_exec_tool_description(),
+            LibraryExecInput,
+        ),
+        _tool_schema(
+            "library_edit",
+            library_edit_tool_description(),
+            LibraryEditInput,
+        ),
+        _tool_schema(
+            "notes_patch",
+            notes_patch_tool_description(),
+            NotesPatchInput,
+        ),
     ]
 
 
 def _tool_definitions() -> dict[str, ToolDefinition]:
     schemas = {schema["name"]: schema for schema in _tool_schema_templates()}
     models: dict[str, type[BaseModel]] = {
+        "paper_search": _PaperSearchInput,
         "search_papers": _SearchPapersInput,
         "read_paper": _ReadPaperInput,
         "query_paper": _QueryPaperInput,
+        "query_papers": _QueryPapersInput,
         "list_composer_library": _ListComposerLibraryInput,
         "search_composer_candidates": _SearchComposerCandidatesInput,
         "update_composer_plan": _UpdateComposerPlanInput,
         "compare_papers": _ComparePapersInput,
         "find_related_papers": _FindRelatedPapersInput,
         "library_files": LibraryFilesInput,
+        "library_exec": LibraryExecInput,
+        "library_edit": LibraryEditInput,
+        "notes_patch": NotesPatchInput,
     }
     effects: dict[str, frozenset[ToolEffect]] = {
+        "paper_search": frozenset({"read_library"}),
         "search_papers": frozenset({"read_library"}),
         "read_paper": frozenset(
             {"read_library", "write_index", "spend_llm_budget"}
         ),
         "query_paper": frozenset({"read_library"}),
+        "query_papers": frozenset({"read_library"}),
         "list_composer_library": frozenset({"read_library"}),
         "search_composer_candidates": frozenset({"read_library"}),
         "update_composer_plan": frozenset({"update_job_state"}),
         "compare_papers": frozenset({"read_library"}),
         "find_related_papers": frozenset({"read_library"}),
         "library_files": frozenset({"read_library", "write_library"}),
+        "library_exec": frozenset({"read_library", "execute_command"}),
+        "library_edit": frozenset({"read_library", "write_library"}),
+        "notes_patch": frozenset({"read_library", "write_library"}),
     }
     output_limits = {
+        "paper_search": 60_000,
         "read_paper": 60_000,
         "query_paper": 60_000,
+        "query_papers": 60_000,
         "library_files": 16_000,
+        "library_exec": 16_000,
+        "library_edit": 40_000,
+        "notes_patch": 40_000,
     }
     return {
         name: ToolDefinition(
@@ -1245,9 +1464,11 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
 
 
 def paper_copilot_tools() -> list[dict[str, Any]]:
+    definitions = _tool_definitions()
     return [
         _tool_schema(definition.name, definition.description, definition.input_model)
-        for definition in _tool_definitions().values()
+        for name in _MODEL_TOOL_NAMES
+        if (definition := definitions.get(name)) is not None
     ]
 
 
@@ -1281,6 +1502,10 @@ def _dispatch_parsed_tool(
     context: PaperCopilotContext,
 ) -> ToolResultData:
     match tool_name:
+        case "paper_search":
+            return _ok(
+                _paper_search(cast(_PaperSearchInput, parsed_input), context)
+            )
         case "search_papers":
             return _ok(
                 _search_papers(cast(_SearchPapersInput, parsed_input), context)
@@ -1289,6 +1514,8 @@ def _dispatch_parsed_tool(
             return _ok(_read_paper(cast(_ReadPaperInput, parsed_input), context))
         case "query_paper":
             return _ok(_query_paper(cast(_QueryPaperInput, parsed_input), context))
+        case "query_papers":
+            return _ok(_query_papers(cast(_QueryPapersInput, parsed_input), context))
         case "list_composer_library":
             return _ok(
                 _list_composer_library(
@@ -1323,6 +1550,22 @@ def _dispatch_parsed_tool(
                     cast(LibraryFilesInput, parsed_input), context.pdf_dir
                 )
             )
+        case "library_exec":
+            return _err("library_exec requires the asynchronous tool dispatcher")
+        case "library_edit":
+            return _ok(
+                run_library_edit(
+                    cast(LibraryEditInput, parsed_input),
+                    context.pdf_dir,
+                )
+            )
+        case "notes_patch":
+            return _ok(
+                run_notes_patch(
+                    cast(NotesPatchInput, parsed_input),
+                    context.pdf_dir,
+                )
+            )
         case _:
             return _err(f"unknown research tool: {tool_name}")
 
@@ -1341,6 +1584,8 @@ async def dispatch_paper_copilot_tool_async(
     store: SessionStore | None = None,
     approval_review_callback: ToolApprovalReviewCallback | None = None,
 ) -> ToolResultData:
+    if req.name not in _MODEL_TOOL_NAMES:
+        return _err(f"tool is not exposed to the agent: {req.name}")
     try:
         definition, parsed_input = _parse_tool_input(req)
         decision = evaluate_tool_call(
@@ -1438,6 +1683,12 @@ async def dispatch_paper_copilot_tool_async(
                 read_llm=read_llm,
                 cost=cost,
                 max_budget_cny=max_budget_cny,
+            )
+            tool_result = _ok(payload)
+        elif req.name == "library_exec":
+            payload = await run_library_exec(
+                cast(LibraryExecInput, parsed_input),
+                context.pdf_dir,
             )
             tool_result = _ok(payload)
         else:
@@ -1970,6 +2221,139 @@ async def _read_paper_async(
     }
 
 
+def _paper_search(args: _PaperSearchInput, context: PaperCopilotContext) -> dict[str, Any]:
+    if not args.papers:
+        fingerprint = _paper_search_fingerprint(args)
+        offset = _paper_search_offset(args.cursor, fingerprint=fingerprint)
+        fetch_limit = offset + args.page_size + 1
+        payload = _search_papers(
+            _SearchPapersInput(
+                query=args.query,
+                scope=args.scope,
+                filters=args.filters,
+                limit=fetch_limit,
+            ),
+            context,
+        )
+        candidates = list(payload["papers"])
+        page = candidates[offset : offset + args.page_size]
+        has_more = len(candidates) > offset + args.page_size
+        next_offset = offset + len(page)
+        pagination_limit_reached = (
+            has_more and next_offset > _MAX_PAPER_SEARCH_OFFSET
+        )
+        if pagination_limit_reached:
+            has_more = False
+            payload["gaps"].append(
+                "Pagination stopped at the application safety limit."
+            )
+        payload.update(
+            {
+                "status": "ok" if page else "no_matches",
+                "papers": page,
+                "returned": len(page),
+                "indexed_returned": sum(
+                    bool(paper["indexed"]) for paper in page
+                ),
+                "unindexed_returned": sum(
+                    not bool(paper["indexed"]) for paper in page
+                ),
+                "page_size": args.page_size,
+                "offset": offset,
+                "has_more": has_more,
+                "next_cursor": (
+                    _encode_paper_search_cursor(
+                        next_offset,
+                        fingerprint=fingerprint,
+                    )
+                    if has_more
+                    else None
+                ),
+                "total_candidates": (
+                    None if has_more else offset + len(page)
+                ),
+            }
+        )
+        payload["mode"] = "library"
+        return payload
+
+    if args.query is None:
+        rows, issues = _resolve_indexed_locators(args.papers, context)
+        return {
+            "status": "ok" if rows else "needs_resolution",
+            "mode": "resolve",
+            "papers": [
+                _paper_summary(row, max_items=5)
+                for row in rows[: args.page_size]
+            ],
+            "resolution_issues": issues,
+            "paper_budget": _paper_budget_payload(context),
+        }
+
+    if len(args.papers) == 1:
+        payload = _query_paper(
+            _QueryPaperInput(
+                paper=args.papers[0],
+                question=args.query,
+                evidence_limit=args.evidence_per_paper,
+            ),
+            context,
+        )
+        payload["mode"] = "paper_local"
+        return payload
+
+    payload = _query_papers(
+        _QueryPapersInput(
+            papers=args.papers,
+            question=args.query,
+            max_papers=min(args.page_size, 5),
+            evidence_per_paper=args.evidence_per_paper,
+        ),
+        context,
+    )
+    payload["mode"] = "multi_paper_hierarchical"
+    return payload
+
+
+def _paper_search_fingerprint(args: _PaperSearchInput) -> str:
+    payload = {
+        "query": args.query,
+        "scope": args.scope,
+        "filters": args.filters.model_dump(mode="json", exclude_none=True),
+        "evidence_per_paper": args.evidence_per_paper,
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def _paper_search_offset(cursor: str | None, *, fingerprint: str) -> int:
+    if cursor is None:
+        return 0
+    match = re.fullmatch(
+        r"v1:(?P<offset>[0-9]+):(?P<fingerprint>[0-9a-f]{16})",
+        cursor,
+    )
+    if match is None:
+        raise KnowledgeError("paper_search cursor is invalid")
+    if match.group("fingerprint") != fingerprint:
+        raise KnowledgeError(
+            "paper_search cursor does not match the current query parameters"
+        )
+    offset = int(match.group("offset"))
+    if offset > _MAX_PAPER_SEARCH_OFFSET:
+        raise KnowledgeError("paper_search cursor exceeds the pagination safety limit")
+    return offset
+
+
+def _encode_paper_search_cursor(offset: int, *, fingerprint: str) -> str:
+    return f"v1:{offset}:{fingerprint}"
+
+
 def _search_papers(args: _SearchPapersInput, context: PaperCopilotContext) -> dict[str, Any]:
     gaps: list[str] = []
     indexed_papers: list[dict[str, Any]] = []
@@ -2327,6 +2711,141 @@ def _query_paper(args: _QueryPaperInput, context: PaperCopilotContext) -> dict[s
         }
     )
     return payload
+
+
+def _query_papers(args: _QueryPapersInput, context: PaperCopilotContext) -> dict[str, Any]:
+    rows, issues = _resolve_indexed_locators(args.papers, context)
+    payload: dict[str, Any] = {
+        "question": args.question,
+        "candidate_count": len(args.papers),
+        "indexed_candidate_count": len(rows),
+        "resolution_issues": issues,
+        "citation_format": "[paper_id:chunks[chunk_id]]",
+        "paper_budget": _paper_budget_payload(context),
+    }
+    if not rows:
+        payload.update(
+            {
+                "status": "needs_resolution",
+                "papers": [],
+                "gaps": ["No uniquely resolved indexed paper is available to query."],
+            }
+        )
+        return payload
+    if context.embeddings_store is None or context.encode_query is None:
+        payload.update(
+            {
+                "status": "structured_only",
+                "papers": [_paper_summary(row, max_items=5) for row in rows],
+                "gaps": [
+                    "Hierarchical original-text retrieval is unavailable because "
+                    "the embedding index is not configured."
+                ],
+            }
+        )
+        return payload
+
+    already_touched_candidates = sum(
+        row.paper_id in context.touched_paper_ids for row in rows
+    )
+    search_limit = min(
+        len(rows),
+        args.max_papers + already_touched_candidates,
+    )
+    results = search(
+        context.encode_query(args.question),
+        fields_store=context.fields_store,
+        embeddings_store=context.embeddings_store,
+        k=search_limit,
+        max_chunks_per_paper=args.evidence_per_paper,
+        evidence_pool_per_paper=max(30, args.evidence_per_paper * 8),
+        query_text=args.question,
+        paper_ids=[row.paper_id for row in rows],
+        expand_to_full_index=False,
+        prefer_section_diversity=True,
+    )
+    selected, budget_skipped_ids = _select_query_paper_results(
+        results,
+        context=context,
+        limit=args.max_papers,
+    )
+    selected_ids = [result.paper_id for result in selected]
+    if selected_ids:
+        _reserve_papers(context, selected_ids)
+        for paper_id in selected_ids:
+            context.composer_plan.mark_inspected(paper_id)
+
+    selected_payloads = [
+        _search_result_payload(result, paper_rank=rank)
+        for rank, result in enumerate(selected, start=1)
+    ]
+    selected_id_set = set(selected_ids)
+    unselected = [
+        {
+            **_paper_brief(row),
+            "reason": (
+                "paper_budget_exhausted"
+                if row.paper_id in budget_skipped_ids
+                else "not_selected_by_bounded_relevance_ranking"
+            ),
+        }
+        for row in rows
+        if row.paper_id not in selected_id_set
+    ]
+    gaps: list[str] = []
+    if issues:
+        gaps.append(
+            "Some requested papers were ambiguous, duplicated, missing, or not indexed."
+        )
+    if budget_skipped_ids:
+        gaps.append(
+            "Some relevant papers were omitted because the run's paper budget is exhausted."
+        )
+    if not selected:
+        gaps.append("No original-text chunk matched the question in the bounded candidate pool.")
+    payload.update(
+        {
+            "status": "ok" if selected else "no_evidence",
+            "retrieval": {
+                "strategy": "candidate_paper_then_paper_local_section_diverse_chunks",
+                "global_paper_limit": search_limit,
+                "global_chunk_pool_limit": search_limit * 5,
+                "local_chunk_pool_per_paper": max(
+                    30,
+                    args.evidence_per_paper * 8,
+                ),
+                "full_index_expansion": False,
+            },
+            "selected_count": len(selected),
+            "papers": selected_payloads,
+            "unselected_papers": unselected,
+            "gaps": gaps,
+            "paper_budget": _paper_budget_payload(context),
+        }
+    )
+    return payload
+
+
+def _select_query_paper_results(
+    results: list[SearchResult],
+    *,
+    context: PaperCopilotContext,
+    limit: int,
+) -> tuple[list[SearchResult], set[str]]:
+    if context.max_papers <= 0:
+        raise KnowledgeError("max_papers must be positive")
+    proposed = set(context.touched_paper_ids)
+    selected: list[SearchResult] = []
+    budget_skipped_ids: set[str] = set()
+    for result in results:
+        if len(selected) >= limit:
+            break
+        if result.paper_id not in proposed and len(proposed) >= context.max_papers:
+            budget_skipped_ids.add(result.paper_id)
+            continue
+        selected.append(result)
+        proposed.add(result.paper_id)
+    return selected, budget_skipped_ids
 
 
 def _suggested_citations(row: PaperRow, *, max_items: int) -> list[dict[str, Any]]:

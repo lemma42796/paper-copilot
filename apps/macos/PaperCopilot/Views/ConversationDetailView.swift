@@ -654,12 +654,32 @@ private struct JobTurnView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     approvalDetailRow("工具", value: approval.toolName)
                     if let toolInput = approval.toolInput {
-                        ForEach(toolInput.keys.sorted(), id: \.self) { key in
+                        ForEach(
+                            toolInput.keys.sorted().filter {
+                                !(
+                                    approvalOperation(approval) == "write_document"
+                                        && $0 == "content"
+                                )
+                            },
+                            id: \.self
+                        ) { key in
                             approvalDetailRow(
                                 approvalInputLabel(key),
                                 value: toolInput[key]?.displayText ?? ""
                             )
                         }
+                    }
+                    if let beforeSHA = approvalPreviewString(
+                        approval,
+                        key: "before_sha256"
+                    ) {
+                        approvalDetailRow("原始哈希", value: beforeSHA)
+                    }
+                    if let afterSHA = approvalPreviewString(
+                        approval,
+                        key: "after_sha256"
+                    ) {
+                        approvalDetailRow("修改哈希", value: afterSHA)
                     }
                     approvalDetailRow(
                         "副作用",
@@ -671,6 +691,35 @@ private struct JobTurnView: View {
                 .padding(.top, 6)
             }
             .font(.subheadline)
+
+            if let diff = approvalPreviewString(approval, key: "diff"),
+               !diff.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("修改预览")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ScrollView([.horizontal, .vertical]) {
+                        Text(diff)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 220)
+                    .padding(8)
+                    .background(
+                        Color.secondary.opacity(0.08),
+                        in: RoundedRectangle(cornerRadius: 8)
+                    )
+                    if approvalPreviewBool(
+                        approval,
+                        key: "diff_truncated"
+                    ) == true {
+                        Text("修改预览已达到显示上限，请结合修改前后哈希谨慎确认。")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+            }
 
             if approval.requiresExplicitConfirmation {
                 Text("仅允许执行上面这一次操作。参数或文件状态变化后，需要重新确认。")
@@ -765,6 +814,8 @@ private struct JobTurnView: View {
             return count == 1 ? "允许复制这篇论文？" : "允许复制 \(count) 篇论文？"
         case "mkdir":
             return "允许创建文件夹？"
+        case "write_document":
+            return "允许更新这条研究笔记？"
         default:
             return approval.requiresExplicitConfirmation
                 ? "确认执行这项高影响操作？"
@@ -786,6 +837,8 @@ private struct JobTurnView: View {
             return "允许复制"
         case "mkdir":
             return "允许创建"
+        case "write_document":
+            return "允许写入笔记"
         default:
             return approval.requiresExplicitConfirmation
                 ? "确认执行一次"
@@ -833,6 +886,32 @@ private struct JobTurnView: View {
         }
     }
 
+    private func approvalPreviewString(
+        _ approval: ToolApprovalRequest,
+        key: String
+    ) -> String? {
+        guard
+            let value = approval.changePreview?[key],
+            case .string(let text) = value
+        else {
+            return nil
+        }
+        return text
+    }
+
+    private func approvalPreviewBool(
+        _ approval: ToolApprovalRequest,
+        key: String
+    ) -> Bool? {
+        guard
+            let value = approval.changePreview?[key],
+            case .bool(let flag) = value
+        else {
+            return nil
+        }
+        return flag
+    }
+
     private func approvalInputLabel(_ key: String) -> String {
         switch key {
         case "operation":
@@ -845,6 +924,10 @@ private struct JobTurnView: View {
             return "历史回执"
         case "recursive":
             return "递归"
+        case "path":
+            return "笔记"
+        case "content":
+            return "内容"
         default:
             return key
         }

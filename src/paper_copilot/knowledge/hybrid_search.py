@@ -10,8 +10,8 @@ to the first global chunk pool.
 No reranker — ARCHITECTURE.md 135 defers that. ``overfetch`` controls
 the initial pool width (``k * overfetch`` chunks); if grouping leaves
 fewer than ``k`` unique papers and the pool was the bottleneck, the
-search escalates once to the full chunk index and re-groups. Worst
-case is one extra full-table KNN scan per query.
+search normally escalates once to the full chunk index and re-groups.
+Callers handling many very long papers can disable that expansion.
 """
 
 from __future__ import annotations
@@ -71,6 +71,7 @@ _SELECTOR_BOTH_MODALITY_BONUS = 0.002
 _SELECTOR_SECTION_WEIGHT = 0.002
 _SELECTOR_REFERENCE_PENALTY = 0.004
 _SELECTOR_REDUNDANCY_WEIGHT = 0.008
+_SELECTOR_SAME_SECTION_PENALTY = 0.006
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +115,8 @@ def search(
     query_text: str | None = None,
     paper_ids: list[str] | set[str] | None = None,
     rrf_k: int = 60,
+    expand_to_full_index: bool = True,
+    prefer_section_diversity: bool = False,
 ) -> list[SearchResult]:
     if k <= 0:
         return []
@@ -159,7 +162,7 @@ def search(
 
     chunks_per_paper = _group_chunks_per_paper(fused, limit=max_chunks_per_paper)
 
-    if len(chunks_per_paper) < k and (
+    if expand_to_full_index and len(chunks_per_paper) < k and (
         (query_vec is not None and len(vector_hits) == pool)
         or len(bm25_hits) == pool
     ):
@@ -204,6 +207,7 @@ def search(
             pool=max(evidence_pool_per_paper, max_chunks_per_paper),
             limit=max_chunks_per_paper,
             rrf_k=rrf_k,
+            prefer_section_diversity=prefer_section_diversity,
         )
         selected_chunks = refined or candidates_for_paper
         h = selected_chunks[0].chunk
@@ -331,6 +335,7 @@ def _paper_local_chunks(
     pool: int,
     limit: int,
     rrf_k: int,
+    prefer_section_diversity: bool,
 ) -> list[_FusedChunk]:
     vector_hits = (
         embeddings_store.knn(query_vec, k=pool, paper_ids=[paper_id])
@@ -343,7 +348,12 @@ def _paper_local_chunks(
         else []
     )
     candidates = _fuse_hits(vector_hits, bm25_hits, rrf_k=rrf_k)
-    return _select_evidence_chunks(candidates, query_text=query_text, limit=limit)
+    return _select_evidence_chunks(
+        candidates,
+        query_text=query_text,
+        limit=limit,
+        prefer_section_diversity=prefer_section_diversity,
+    )
 
 
 def _select_evidence_chunks(
@@ -351,6 +361,7 @@ def _select_evidence_chunks(
     *,
     query_text: str | None,
     limit: int,
+    prefer_section_diversity: bool = False,
 ) -> list[_FusedChunk]:
     if limit <= 0:
         return []
@@ -377,6 +388,7 @@ def _select_evidence_chunks(
                     candidate,
                     selected=selected,
                     terms_by_chunk=terms_by_chunk,
+                    prefer_section_diversity=prefer_section_diversity,
                 ),
                 -candidate.sort_rank,
             ),
@@ -436,17 +448,27 @@ def _redundancy_penalty(
     *,
     selected: list[_FusedChunk],
     terms_by_chunk: dict[int, frozenset[str]],
+    prefer_section_diversity: bool,
 ) -> float:
     if not selected:
         return 0.0
     candidate_terms = terms_by_chunk[candidate.chunk.chunk_id]
-    if not candidate_terms:
-        return 0.0
-    max_overlap = max(
-        _jaccard(candidate_terms, terms_by_chunk[item.chunk.chunk_id])
-        for item in selected
+    max_overlap = (
+        max(
+            _jaccard(candidate_terms, terms_by_chunk[item.chunk.chunk_id])
+            for item in selected
+        )
+        if candidate_terms
+        else 0.0
     )
-    return _SELECTOR_REDUNDANCY_WEIGHT * max_overlap
+    penalty = _SELECTOR_REDUNDANCY_WEIGHT * max_overlap
+    candidate_section = " ".join(candidate.chunk.section.casefold().split())
+    if prefer_section_diversity and candidate_section and any(
+        " ".join(item.chunk.section.casefold().split()) == candidate_section
+        for item in selected
+    ):
+        penalty += _SELECTOR_SAME_SECTION_PENALTY
+    return penalty
 
 
 def _jaccard(left: frozenset[str], right: frozenset[str]) -> float:

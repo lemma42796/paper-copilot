@@ -9,8 +9,19 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from paper_copilot.agents.library_edit_tool import (
+    LibraryEditInput,
+    notes_input,
+)
+from paper_copilot.agents.notes_patch_tool import (
+    NotesPatchInput,
+    build_notes_patch_preview,
+    notes_target_snapshot,
+)
+
 ToolEffect = Literal[
     "read_library",
+    "execute_command",
     "write_library",
     "write_index",
     "spend_llm_budget",
@@ -43,6 +54,7 @@ class ToolApprovalRequest(BaseModel):
     tool_input: dict[str, Any]
     input_sha256: str = ""
     target_snapshot: list[dict[str, Any]] = Field(default_factory=list)
+    change_preview: dict[str, Any] | None = None
     requirement: ApprovalRequirement = "explicit_confirmation"
     auto_review_allowed: bool = False
 
@@ -73,6 +85,52 @@ def evaluate_tool_call(
     library_root: Path | None = None,
 ) -> ToolPolicyDecision:
     effects = definition.effects
+    if definition.name == "library_edit":
+        edit_input = LibraryEditInput.model_validate(
+            parsed_input.model_dump(mode="json")
+        )
+        tool_input = edit_input.model_dump(mode="json", exclude_none=True)
+        if edit_input.operation == "write_document":
+            note_input = notes_input(edit_input)
+            change_preview = build_notes_patch_preview(note_input, library_root)
+            preview_truncated = bool(change_preview["diff_truncated"])
+            approval = ToolApprovalRequest(
+                id=f"approval-{uuid4()}",
+                tool_call_id=tool_call_id,
+                tool_name=definition.name,
+                reason=(
+                    f"Markdown 笔记 `{note_input.path}` "
+                    "将按预览内容整体更新。"
+                ),
+                effects=["write_library"],
+                tool_input=tool_input,
+                input_sha256=tool_input_sha256(tool_input),
+                target_snapshot=notes_target_snapshot(note_input, library_root),
+                change_preview=change_preview,
+                requirement=(
+                    "explicit_confirmation" if preview_truncated else "approval"
+                ),
+                auto_review_allowed=False,
+            )
+        else:
+            requirement = _library_mutation_requirement(tool_input)
+            approval = ToolApprovalRequest(
+                id=f"approval-{uuid4()}",
+                tool_call_id=tool_call_id,
+                tool_name=definition.name,
+                reason=_library_mutation_reason(edit_input),
+                effects=["write_library"],
+                tool_input=tool_input,
+                input_sha256=tool_input_sha256(tool_input),
+                target_snapshot=_library_target_snapshot(tool_input, library_root),
+                requirement=requirement,
+                auto_review_allowed=requirement == "approval",
+            )
+        return ToolPolicyDecision(
+            kind="require_approval",
+            reason=approval.reason,
+            approval=approval,
+        )
     if definition.name == "library_files":
         operation = getattr(parsed_input, "operation", None)
         if operation in {"mkdir", "copy", "move", "trash", "restore"}:
@@ -89,6 +147,38 @@ def evaluate_tool_call(
                 target_snapshot=_library_target_snapshot(tool_input, library_root),
                 requirement=requirement,
                 auto_review_allowed=requirement == "approval",
+            )
+            return ToolPolicyDecision(
+                kind="require_approval",
+                reason=approval.reason,
+                approval=approval,
+            )
+    if definition.name == "notes_patch":
+        operation = getattr(parsed_input, "operation", None)
+        if operation == "write_document":
+            note_input = NotesPatchInput.model_validate(
+                parsed_input.model_dump(mode="json")
+            )
+            tool_input = note_input.model_dump(mode="json", exclude_none=True)
+            change_preview = build_notes_patch_preview(note_input, library_root)
+            preview_truncated = bool(change_preview["diff_truncated"])
+            approval = ToolApprovalRequest(
+                id=f"approval-{uuid4()}",
+                tool_call_id=tool_call_id,
+                tool_name=definition.name,
+                reason=(
+                    f"Markdown 笔记 `{note_input.path}` "
+                    "将按预览内容整体更新。"
+                ),
+                effects=["write_library"],
+                tool_input=tool_input,
+                input_sha256=tool_input_sha256(tool_input),
+                target_snapshot=notes_target_snapshot(note_input, library_root),
+                change_preview=change_preview,
+                requirement=(
+                    "explicit_confirmation" if preview_truncated else "approval"
+                ),
+                auto_review_allowed=False,
             )
             return ToolPolicyDecision(
                 kind="require_approval",
@@ -120,7 +210,16 @@ def approval_matches(
         approval.tool_call_id == tool_call_id
         and approval.input_sha256 == tool_input_sha256(tool_input)
         and approval.target_snapshot
-        == _library_target_snapshot(tool_input, library_root)
+        == _target_snapshot(
+            approval.tool_name,
+            parsed_input,
+            library_root,
+        )
+        and _change_preview_matches(
+            approval,
+            parsed_input,
+            library_root,
+        )
     )
 
 
@@ -199,3 +298,51 @@ def _library_target_snapshot(
             }
         )
     return snapshots
+
+
+def _target_snapshot(
+    tool_name: str,
+    parsed_input: BaseModel,
+    library_root: Path | None,
+) -> list[dict[str, Any]]:
+    if tool_name == "library_edit":
+        edit_input = LibraryEditInput.model_validate(
+            parsed_input.model_dump(mode="json")
+        )
+        if edit_input.operation == "write_document":
+            return notes_target_snapshot(notes_input(edit_input), library_root)
+        tool_input = edit_input.model_dump(mode="json", exclude_none=True)
+        return _library_target_snapshot(tool_input, library_root)
+    if tool_name == "notes_patch":
+        note_input = NotesPatchInput.model_validate(
+            parsed_input.model_dump(mode="json")
+        )
+        return notes_target_snapshot(note_input, library_root)
+    tool_input = parsed_input.model_dump(mode="json", exclude_none=True)
+    return _library_target_snapshot(tool_input, library_root)
+
+
+def _change_preview_matches(
+    approval: ToolApprovalRequest,
+    parsed_input: BaseModel,
+    library_root: Path | None,
+) -> bool:
+    if approval.tool_name == "library_edit":
+        edit_input = LibraryEditInput.model_validate(
+            parsed_input.model_dump(mode="json")
+        )
+        if edit_input.operation != "write_document":
+            return approval.change_preview is None
+        return approval.change_preview == build_notes_patch_preview(
+            notes_input(edit_input),
+            library_root,
+        )
+    if approval.tool_name != "notes_patch":
+        return approval.change_preview is None
+    note_input = NotesPatchInput.model_validate(
+        parsed_input.model_dump(mode="json")
+    )
+    return approval.change_preview == build_notes_patch_preview(
+        note_input,
+        library_root,
+    )
