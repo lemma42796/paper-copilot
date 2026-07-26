@@ -138,7 +138,7 @@ Prompt 可以降低字面错误，但无法稳定消除语义变体、非法状�
 
 ### 为什么不实现完整 Codex World State？
 
-项目目标规模是 50–100 篇个人论文库，单 Agent、最多 16 turns。完整 snapshot/diff/compaction 系统会增加同步复杂度；精简的后发权威快照已经覆盖当前会变化的关键约束。
+项目采用单 Agent、最多 16 turns。完整 snapshot/diff/compaction 系统会增加同步复杂度；精简的后发权威快照已经覆盖当前会变化的关键约束。
 
 ### 成本如何控制？
 

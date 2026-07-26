@@ -4,12 +4,12 @@
 > [AGENTS.md](AGENTS.md)，技术结构和稳定架构决策见
 > [ARCHITECTURE.md](ARCHITECTURE.md)，历史实现过程见 Git。
 
-更新于 2026-07-26。
+更新于 2026-07-27。
 
 ## Current Direction
 
-Paper Copilot 是本地优先的个人论文研究工具，面向约 50–100 篇论文的知识库。产品通过
-SwiftUI macOS 客户端和 Local MCP Server 两个入口复用同一 Python Core。
+Paper Copilot 是本地优先的个人论文研究工具。产品通过 SwiftUI macOS 客户端和 Local
+MCP Server 两个入口复用同一 Python Core。
 
 当前采用 BYOK。PDF、索引、结构化字段、session、报告和 trace 默认保存在本地；只有
 本地检索选出的必要文本可以发送给用户配置的云端模型。当前不建设账号、支付、托管模型
@@ -17,21 +17,21 @@ SwiftUI macOS 客户端和 Local MCP Server 两个入口复用同一 Python Core
 
 ## Current Work
 
-当前正在执行 command-first 工具系统评估的四轮多论文 pilot，尚未进入代码实现
-bounded slice。
+当前已完成 Codex 四轮基线并形成工具系统 v2 实施计划，尚未进入代码实现 bounded
+slice。计划见 `docs/design/tool_system_v2_plan.md`。
 
 已完成：
 
 - 冻结 14 篇硕士学位论文、四轮 query 和私有 Gold；
 - 完成原生 Codex 四轮盲测和基线评测；
 - 基线未发现作者—方法错配，主要失败类型为 `constraint_memory_failure`；
-- 给出一个优先工具方向：让 `paper_search` 返回可在后续轮次续用、并能报告遍历覆盖的
-  稳定结果集合。
+- 确认当前 `read_paper` 的单次全文结构化抽取不作为 v2 入库核心；
+- 规划 Poppler 候选底座、异常页本地恢复、能力自适应 `inspect_page`、稳定结果集合和
+  Codex-inspired 安全边界。
 
-当前停在工具改造决策门。上述方向尚未获得实现确认，也没有修改公开工具契约、
-`ARCHITECTURE.md` 或产品代码。Paper Copilot 盲测和最终对比评测尚未开始。下一步由
-用户决定是停止在基线报告，还是把唯一建议定义为独立 bounded slice，明确目标失败
-类型、工具契约、状态生命周期、非目标和验收方式后再实施。
+当前停在 v2 Slice 0 计划冻结门。v2 契约尚未写入 `ARCHITECTURE.md`，没有修改产品代码，
+也没有添加 Poppler/OCR 依赖。下一步在用户单独确认后只实施 Slice 1：确定性 PDF page
+manifest 和 native text evidence；不同时实现 OCR、检索重写或旧代码删除。
 
 ## Recently Completed
 
@@ -83,8 +83,9 @@ milestone。开始实现前需要先确定目标、范围、验收方式和明�
   组合方式。
 - 排查能力缺口、职责重叠、隐式耦合、安全策略不一致及难以评估的接口。
 - 评估仍保留的旧内部工具应继续复用、迁移还是删除。
-- 已完成四轮多论文 Codex 基线；是否实施稳定结果集合方向仍待用户确认。
-- 根据评估结论决定后续 bounded slice，不预设重构范围，也不在决策前修改工具。
+- 已完成四轮多论文 Codex 基线，并将稳定结果集合纳入 v2 Slice 5。
+- v2 按 `docs/design/tool_system_v2_plan.md` 的 bounded slices 实施；每个 slice 单独确认、
+  验收后再进入下一项。
 
 ### 2. 重新设计 Research Idea Composer
 

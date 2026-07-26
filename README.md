@@ -10,7 +10,7 @@
 
 简体中文 | [English](README.en.md)
 
-Paper Copilot 面向约 50–100 篇论文的个人知识库。它把 PDF 转为结构化报告，建立本地
+Paper Copilot 面向个人论文知识库。它把 PDF 转为结构化报告，建立本地
 SQLite / sqlite-vec 索引，并通过 macOS 客户端或 MCP 完成论文问答、跨论文检索、对比
 和研究方案组合。
 
