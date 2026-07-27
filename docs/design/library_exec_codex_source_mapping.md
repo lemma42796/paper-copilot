@@ -1,6 +1,6 @@
 # `library_exec` Codex 源码映射
 
-状态：已按映射回改，等待手工验收  
+状态：Runtime 手工验收通过，等待 `.app` 打包验收
 日期：2026-07-27  
 Codex source ref：`61a44880a85d2fd0d8770908dea5733495e571c8`  
 Codex worktree：审计时无本地修改
@@ -35,6 +35,7 @@ Codex worktree：审计时无本地修改
 | 返回结构 | `tools/context.rs::ExecCommandToolOutput::code_mode_result` | `output`、`exit_code`、`wall_time_seconds`，持续进程时另有 `session_id` 和 `chunk_id` | 直接采用 + 必要适配 | 返回 `output`、`exit_code`、`wall_time_seconds` 和截断元数据；不返回 session 字段 |
 | trace/hook | `unified_exec.rs`、`unified_exec/exec_command.rs` | pre/post tool payload 保存实际 command 和 response；审批 identity 使用 canonical command、cwd 和权限 | 直接采用 + 必要适配 | 完整输入/输出进入现有权威 trace；稳定 identity 放在 trace，不作为模型输出协议 |
 | PDF 缓存 | Codex source ref 中无论文 TXT 内容寻址缓存 | 无对应领域机制 | Codex 缺失 | 复用 Slice 1 `PdfTextCache`，只增加 `status/ensure/page` 窄化 broker |
+| 受控外部命令供应 | `core/src/exec_env.rs`、`sandboxing/src/seatbelt.rs` | Codex 构造执行环境和文件系统策略，但不负责 Paper Copilot `.app` 中的论文命令依赖 | 必要适配 + Codex 缺失 | PATH 只增加 Runtime 控制的调用级 `bin/`；仅解析 `rg`、`pdfinfo`、`pdftotext`，Seatbelt 只放行对应 Mach-O 文件、symlink chain、依赖目录项和动态库。`.app` 内嵌 `rg`、PCRE2 及许可证；Poppler 仍只使用用户安装后的固定 Homebrew 位置 |
 | CPU/file-size `ulimit` | Codex unified exec 未发现对应通用限制；`process-hardening` 只关闭 core dump | Codex 缺失 | Codex 缺失 | 用户已明确确认作为 Paper Copilot 一次性论文命令的额外资源边界保留 |
 
 ## 3. 当前实现复核
@@ -47,6 +48,7 @@ Codex worktree：审计时无本地修改
 - macOS Seatbelt、无网络和仅 scratch 可写；
 - deadline 后终止进程组；
 - `paper-cache` 作为窄化内部 broker；
+- Runtime 控制的 `rg`/`pdfinfo`/`pdftotext` 调用级命令目录；
 - tool input/result 写入现有 session 和 trace。
 
 ### 3.2 已按 Codex 回改
@@ -60,6 +62,9 @@ Codex worktree：审计时无本地修改
 6. `paper-cache` 在命令完成 shell resolution 后拦截，参照 `intercept_apply_patch`，
    不在入口处用独立解析路径抢先执行；
 7. 环境策略补齐 Codex 的非交互输出约束。
+8. 补齐 Codex restricted platform defaults 中用于获取 cwd 的根目录项读取规则；
+9. 不开放 Homebrew PATH，只把三个批准命令和精确 Mach-O 依赖加入声明式 Seatbelt
+   policy；可用命令名称进入权威 trace，外部真实路径不进入模型输出协议。
 
 ### 3.3 用户已确认的必要适配
 
@@ -70,5 +75,9 @@ Codex worktree：审计时无本地修改
 - 保留一次性命令的硬 `timeout_ms`；
 - 当前额外 CPU/file-size `limit` wrapper 是 Codex unified exec 中没有的设计，作为
   明确的 Paper Copilot 专用资源边界保留。
+- `rg` 作为受控 Runtime 依赖随 `.app` 分发；其 PCRE2 传递依赖使用 app 内
+  `@loader_path`，并携带许可证。Poppler 不随 `.app` 分发，只解析用户安装后的固定
+  Homebrew `pdfinfo`/`pdftotext`。
 
-上述差异已于 2026-07-27 获得用户确认。下一步是手工验收，不开始其他 v2 slice。
+上述差异已于 2026-07-27 获得用户确认。Runtime 手工验收已通过；下一步只进行
+`.app` 打包验收，不开始其他 v2 slice。

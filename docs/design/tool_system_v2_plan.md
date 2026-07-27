@@ -1,6 +1,6 @@
 # Paper Copilot 工具系统 v2 计划
 
-状态：方向已确认，Slice 1 已完成，Slice 2 实现中
+状态：方向已确认，Slice 1 已完成，Slice 2 Runtime 验收通过，等待 `.app` 打包验收
 日期：2026-07-27  
 取代范围：`docs/design/command_first_tool_redesign_handoff.md` 及本文档旧版中的下一代工具建议  
 历史文档：旧文档和 Git 历史只作为决策背景，不再作为 v2 实施依据
@@ -615,7 +615,7 @@ paper-cache page <paper-id> <page>
 Agent 通过 `library_exec` 对缓存 TXT 执行命令：
 
 ```text
-rg -l <query> <cache>
+rg --follow -l <query> cache/
 rg -n -C <context> <query> <text>
 awk with RS="\f" to compute PDF page
 paper-cache page <paper-id> <page>
@@ -852,7 +852,9 @@ v2 不以 embedding 消融为前置条件。只有文本命令检索未达到门
 当前状态：已按 1.1 节完成 schema、逻辑 workspace、sandbox、输出和 broker 的逐项
 源码复核，映射见 `docs/design/library_exec_codex_source_mapping.md`。未在 Codex 中
 找到对应机制的部分已标记为 Paper Copilot 专用适配，必要差异已获用户确认，现有实现
-也已按映射回改。下一步进行手工验收。
+也已按映射回改。Runtime 手工验收已覆盖普通命令、`rg`、`pdfinfo`、`pdftotext`、
+缓存搜索、权限拒绝、无网络、timeout、进程组终止、文件大小限制、head-tail 输出、
+broker 和权威 trace。下一步只进行 `.app` 打包验收。
 
 范围：
 

@@ -6,11 +6,13 @@ import json
 import os
 import shlex
 import signal
+import subprocess
 import sys
 import tempfile
 import time
 from collections import deque
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,7 @@ _MAX_TIMEOUT_MS = 30_000
 _CPU_LIMIT_SECONDS = 35
 _FILE_SIZE_LIMIT = "64m"
 _SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+_OTOOL = Path("/usr/bin/otool")
 _SCHEMA_VERSION = 2
 _SANDBOX_POLICY_ID = "library_workspace_v2"
 _BROKER_POLICY_ID = "paper_cache_broker_v1"
@@ -109,12 +112,21 @@ class _PaperCacheCommand:
 class _FileSystemSandboxPolicy:
     readable_roots: tuple[Path, ...]
     writable_roots: tuple[Path, ...]
+    external_executable_files: tuple[Path, ...]
+    external_dependency_directories: tuple[Path, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class _SandboxPolicy:
     file_system: _FileSystemSandboxPolicy
     network_access: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _ExternalCommandSet:
+    commands: tuple[tuple[str, Path], ...]
+    sandbox_files: tuple[Path, ...]
+    sandbox_directories: tuple[Path, ...]
 
 
 class _HeadTailBuffer:
@@ -215,9 +227,14 @@ async def run_library_exec(
         workspace = runtime_root / "workspace"
         scratch = runtime_root / "scratch"
         empty_cache = runtime_root / "empty-cache"
+        tool_bin = runtime_root / "bin"
         workspace.mkdir()
         scratch.mkdir()
         empty_cache.mkdir()
+        tool_bin.mkdir()
+        external_commands = await asyncio.to_thread(_resolve_external_commands)
+        for command_name, executable in external_commands.commands:
+            (tool_bin / command_name).symlink_to(executable)
         (workspace / "library").symlink_to(root, target_is_directory=True)
         visible_cache_root = cache_root if cache_root.is_dir() else empty_cache
         (workspace / "cache").symlink_to(
@@ -230,6 +247,10 @@ async def run_library_exec(
             file_system=_FileSystemSandboxPolicy(
                 readable_roots=(root, visible_cache_root, runtime_root),
                 writable_roots=(scratch,),
+                external_executable_files=external_commands.sandbox_files,
+                external_dependency_directories=(
+                    external_commands.sandbox_directories
+                ),
             ),
             network_access=False,
         )
@@ -242,7 +263,7 @@ async def run_library_exec(
             profile,
             *resolved_command.argv,
             cwd=workspace,
-            env=_command_environment(scratch),
+            env=_command_environment(scratch, tool_bin),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             start_new_session=True,
@@ -327,6 +348,9 @@ async def run_library_exec(
             "exit_code": exit_code,
             "output_bytes": output_buffer.total_bytes,
             "output_omitted_bytes": output_buffer.omitted_bytes,
+            "available_external_commands": [
+                command_name for command_name, _executable in external_commands.commands
+            ],
         },
     )
 
@@ -363,7 +387,7 @@ def _resolve_command(command: str) -> _ResolvedCommand:
     )
 
 
-def _command_environment(scratch: Path) -> dict[str, str]:
+def _command_environment(scratch: Path, tool_bin: Path) -> dict[str, str]:
     return {
         "NO_COLOR": "1",
         "TERM": "dumb",
@@ -374,9 +398,191 @@ def _command_environment(scratch: Path) -> dict[str, str]:
         "PAGER": "cat",
         "GIT_PAGER": "cat",
         "GH_PAGER": "cat",
-        "PATH": _SYSTEM_PATH,
+        "PATH": f"{tool_bin}:{_SYSTEM_PATH}",
         "TMPDIR": str(scratch),
     }
+
+
+def _resolve_external_commands() -> _ExternalCommandSet:
+    commands: list[tuple[str, Path]] = []
+    sandbox_files: set[Path] = set()
+    sandbox_directories: set[Path] = set()
+    for command_name in ("rg", "pdfinfo", "pdftotext"):
+        executable = _first_external_command_candidate(command_name)
+        if executable is None:
+            continue
+        try:
+            command_files = _macho_dependency_files(executable)
+        except (OSError, subprocess.SubprocessError, ValueError) as error:
+            _LOGGER.warning(
+                "library_external_command_unavailable",
+                command=command_name,
+                error_type=error.__class__.__name__,
+            )
+            continue
+        commands.append((command_name, executable))
+        sandbox_files.update(command_files)
+        sandbox_directories.update(path.parent for path in command_files)
+    return _ExternalCommandSet(
+        commands=tuple(commands),
+        sandbox_files=tuple(sorted(sandbox_files)),
+        sandbox_directories=tuple(sorted(sandbox_directories)),
+    )
+
+
+def _first_external_command_candidate(command_name: str) -> Path | None:
+    bundled_candidate = Path(sys.executable).resolve().parent / "bin" / command_name
+    candidates = (
+        bundled_candidate,
+        Path("/opt/homebrew/bin") / command_name,
+        Path("/usr/local/bin") / command_name,
+    )
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate.resolve()
+    return None
+
+
+def _macho_dependency_files(executable: Path) -> tuple[Path, ...]:
+    pending = [executable]
+    inspected: set[Path] = set()
+    sandbox_files: set[Path] = set()
+    while pending:
+        object_path = pending.pop()
+        resolved_object = object_path.resolve(strict=True)
+        if resolved_object in inspected:
+            continue
+        inspected.add(resolved_object)
+        sandbox_files.update(_path_resolution_chain(object_path))
+        for dependency in _otool_dependencies(resolved_object):
+            dependency_path = _resolve_macho_dependency(
+                dependency,
+                object_path=resolved_object,
+                main_executable=executable,
+            )
+            if dependency_path is None:
+                continue
+            normalized_dependency = Path(os.path.normpath(str(dependency_path)))
+            resolved_dependency = normalized_dependency.resolve(strict=True)
+            sandbox_files.update(_path_resolution_chain(normalized_dependency))
+            pending.append(resolved_dependency)
+    return tuple(sorted(sandbox_files))
+
+
+def _path_resolution_chain(path: Path) -> tuple[Path, ...]:
+    normalized_path = Path(os.path.normpath(str(path)))
+    if not normalized_path.is_absolute():
+        raise ValueError(f"Mach-O dependency path must be absolute: {path}")
+    chain: set[Path] = {normalized_path}
+    current = Path(normalized_path.anchor)
+    for part in normalized_path.parts[1:]:
+        candidate = current / part
+        if candidate.is_symlink():
+            chain.add(candidate)
+            target = Path(os.readlink(candidate))
+            current = (
+                target
+                if target.is_absolute()
+                else Path(os.path.normpath(str(candidate.parent / target)))
+            )
+        else:
+            current = candidate
+    chain.add(current)
+    return tuple(sorted(chain))
+
+
+@lru_cache(maxsize=256)
+def _otool_dependencies(object_path: Path) -> tuple[str, ...]:
+    completed = _run_otool("-L", object_path)
+    return tuple(
+        line.strip().split(" (", 1)[0]
+        for line in completed.stdout.splitlines()[1:]
+        if line.startswith("\t")
+    )
+
+
+@lru_cache(maxsize=256)
+def _otool_rpaths(object_path: Path) -> tuple[str, ...]:
+    completed = _run_otool("-l", object_path)
+    rpaths: list[str] = []
+    waiting_for_path = False
+    for line in completed.stdout.splitlines():
+        stripped = line.strip()
+        if stripped == "cmd LC_RPATH":
+            waiting_for_path = True
+        elif waiting_for_path and stripped.startswith("path "):
+            rpaths.append(stripped.removeprefix("path ").split(" (offset", 1)[0])
+            waiting_for_path = False
+    return tuple(rpaths)
+
+
+def _run_otool(option: str, object_path: Path) -> subprocess.CompletedProcess[str]:
+    if not _OTOOL.is_file():
+        raise OSError(f"Mach-O dependency inspector is missing: {_OTOOL}")
+    return subprocess.run(
+        [str(_OTOOL), option, str(object_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        env={
+            "LANG": "C",
+            "LC_ALL": "C",
+            "PATH": _SYSTEM_PATH,
+        },
+    )
+
+
+def _resolve_macho_dependency(
+    dependency: str,
+    *,
+    object_path: Path,
+    main_executable: Path,
+) -> Path | None:
+    if dependency.startswith(("/System/", "/usr/lib/")):
+        return None
+    if dependency.startswith("@loader_path/"):
+        return object_path.parent / dependency.removeprefix("@loader_path/")
+    if dependency.startswith("@executable_path/"):
+        return main_executable.parent / dependency.removeprefix("@executable_path/")
+    if dependency.startswith("@rpath/"):
+        suffix = dependency.removeprefix("@rpath/")
+        for raw_rpath in _otool_rpaths(object_path):
+            rpath = _expand_macho_loader_path(
+                raw_rpath,
+                object_path=object_path,
+                main_executable=main_executable,
+            )
+            candidate = Path(os.path.normpath(str(rpath / suffix)))
+            if candidate.exists():
+                return candidate
+        raise ValueError(
+            f"unable to resolve Mach-O dependency {dependency!r} for {object_path}"
+        )
+    if dependency.startswith("/"):
+        return Path(dependency)
+    raise ValueError(
+        f"unsupported Mach-O dependency {dependency!r} for {object_path}"
+    )
+
+
+def _expand_macho_loader_path(
+    path: str,
+    *,
+    object_path: Path,
+    main_executable: Path,
+) -> Path:
+    if path == "@loader_path":
+        return object_path.parent
+    if path.startswith("@loader_path/"):
+        return object_path.parent / path.removeprefix("@loader_path/")
+    if path == "@executable_path":
+        return main_executable.parent
+    if path.startswith("@executable_path/"):
+        return main_executable.parent / path.removeprefix("@executable_path/")
+    if path.startswith("/"):
+        return Path(path)
+    raise ValueError(f"unsupported Mach-O rpath {path!r} for {object_path}")
 
 
 def _intercept_paper_cache(
@@ -637,11 +843,27 @@ def _render_macos_seatbelt(policy: _SandboxPolicy) -> str:
         f"  (subpath {_sandbox_string(path)})"
         for path in policy.file_system.writable_roots
     )
+    external_executable_files = "\n".join(
+        f"  (literal {_sandbox_string(path)})"
+        for path in policy.file_system.external_executable_files
+    )
+    external_dependency_directories = "\n".join(
+        f"  (literal {_sandbox_string(path)})"
+        for path in policy.file_system.external_dependency_directories
+    )
+    external_dependency_policy = (
+        "(allow file-read* file-test-existence\n"
+        f"{external_dependency_directories})"
+        if external_dependency_directories
+        else ""
+    )
     root_ancestors = "\n".join(
         f"  (path-ancestors {_sandbox_string(path)})"
         for path in (
             *policy.file_system.readable_roots,
             *policy.file_system.writable_roots,
+            *policy.file_system.external_executable_files,
+            *policy.file_system.external_dependency_directories,
         )
     )
     network_policy = "(allow network*)" if policy.network_access else ""
@@ -675,7 +897,10 @@ def _render_macos_seatbelt(policy: _SandboxPolicy) -> str:
   (subpath "/sbin")
   (subpath "/private/etc")
   (subpath "/private/var/db/timezone")
+{external_executable_files}
 {readable_roots})
+
+{external_dependency_policy}
 
 (allow file-read-metadata file-test-existence
   (literal "/")
@@ -685,6 +910,10 @@ def _render_macos_seatbelt(policy: _SandboxPolicy) -> str:
   (literal "/private/var/folders")
 {root_ancestors})
 
+; Allow processes to resolve their current working directory.
+(allow file-read* file-test-existence
+  (literal "/"))
+
 (allow file-map-executable
   (subpath "/System")
   (subpath "/Library/Apple")
@@ -693,7 +922,8 @@ def _render_macos_seatbelt(policy: _SandboxPolicy) -> str:
   (subpath "/usr/libexec")
   (subpath "/usr/sbin")
   (subpath "/bin")
-  (subpath "/sbin"))
+  (subpath "/sbin")
+{external_executable_files})
 
 (allow file-read* file-test-existence file-write* file-ioctl
 {writable_roots}

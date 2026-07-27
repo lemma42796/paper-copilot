@@ -17,8 +17,8 @@ MCP Server 两个入口复用同一 Python Core。
 
 ## Current Work
 
-当前已完成 Codex 四轮基线、工具系统 v2 实施计划和 Slice 1，正在实现 Slice 2。
-计划见 `docs/design/tool_system_v2_plan.md`。
+当前已完成 Codex 四轮基线、工具系统 v2 实施计划和 Slice 1。Slice 2 Runtime 手工
+验收已通过，等待 `.app` 打包验收。计划见 `docs/design/tool_system_v2_plan.md`。
 
 已完成：
 
@@ -47,8 +47,11 @@ v2 Slice 2 已开始：`library_exec` 采用固定 Codex commit
 macOS Seatbelt renderer、Codex 非交互环境、聚合 head-tail buffer、token 截断、
 Codex-style 输出、内部权威 trace attributes，以及 command resolution 后的
 `paper-cache status/ensure/page` 拦截。用户已确认固定授权根、无 PTY/持续 session、
-无权限升级、硬 timeout 和额外 CPU/file-size limit。下一步是 Slice 2 手工验收；尚未
-开始其他三个 v2 工具。
+无权限升级、硬 timeout 和额外 CPU/file-size limit。Runtime 手工验收已通过普通命令、
+三项受控外部命令、权限拒绝、无网络、资源限制、输出截断、broker 和权威 trace。
+`rg` 与 PCRE2 随 `.app` 打包并携带许可证；Poppler 仍只解析用户安装后的固定 Homebrew
+位置，不开放完整 Homebrew PATH。下一步只进行 Slice 2 `.app` 打包验收；尚未开始其他
+三个 v2 工具。
 
 ## Recently Completed
 
