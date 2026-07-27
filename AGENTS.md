@@ -18,6 +18,15 @@ belong in `docs/design/`.
    stop and ask rather than hiding the dependency.
 5. **Advance one milestone or bounded slice at a time.** Do not begin the next
    slice after the current definition of done is met.
+6. **Use Codex-first design for Agent infrastructure.** For Agent tools,
+   command execution, sandboxing, approvals, process lifecycle, Skills, and
+   trace behavior, inspect the relevant Codex source before designing. When
+   Codex already implements the capability, follow its structure and semantics,
+   adapting only the product-specific authorization or domain boundary. Add a
+   Paper Copilot-specific mechanism only when no Codex equivalent exists, and
+   record the searched source, the missing capability, and the minimal added
+   design. Any intentional divergence from an existing Codex design requires
+   explicit user confirmation.
 
 ## Sources of truth
 

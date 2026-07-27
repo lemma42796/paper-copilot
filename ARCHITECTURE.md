@@ -111,9 +111,12 @@ Paper Copilot 根据用户请求选择工具、聚合证据并生成自然语言
 
 ### `library_exec`
 
-- 固定工作目录为用户授权的论文库。
+- 固定工作目录为 Runtime 创建的逻辑 workspace，其中 `library/` 和 `cache/` 只读，
+  只有调用级 `scratch/` 可写。
 - 用于列举、统计、哈希和读取等只读命令组合。
 - 通过 macOS sandbox 限制网络、库外读取和论文库写入，并限制时间与输出。
+- 不提供模型可选 shell、登录环境、远程环境或 sandbox 失败后的权限升级。
+- `paper-cache status/ensure/page` 由窄化 broker 调用内容寻址缓存服务，不能指定输出路径。
 - 命令结果是不可信、有界数据，不获得新的工具权限。
 
 ### `library_edit`

@@ -17,8 +17,8 @@ MCP Server 两个入口复用同一 Python Core。
 
 ## Current Work
 
-当前已完成 Codex 四轮基线并形成工具系统 v2 实施计划，尚未进入代码实现 bounded
-slice。计划见 `docs/design/tool_system_v2_plan.md`。
+当前已完成 Codex 四轮基线、工具系统 v2 实施计划和 Slice 1，正在实现 Slice 2。
+计划见 `docs/design/tool_system_v2_plan.md`。
 
 已完成：
 
@@ -29,9 +29,26 @@ slice。计划见 `docs/design/tool_system_v2_plan.md`。
 - 规划 Poppler 候选底座、异常页本地恢复、能力自适应 `inspect_page`、稳定结果集合和
   Codex-inspired 安全边界。
 
-当前停在 v2 Slice 0 计划冻结门。v2 契约尚未写入 `ARCHITECTURE.md`，没有修改产品代码，
-也没有添加 Poppler/OCR 依赖。下一步在用户单独确认后只实施 Slice 1：确定性 PDF page
-manifest 和 native text evidence；不同时实现 OCR、检索重写或旧代码删除。
+v2 Slice 1 已完成：已加入 Poppler adapter、内容寻址 TXT revision、manifest、
+cache hit/integrity 校验、原子 current 发布、进程内并发去重和页级文本读取接口。冻结
+的 14 篇、1169 页论文首次缓存全部生成，耗时 4.211 秒；新缓存实例二次检查 14/14
+命中，耗时 83 毫秒；三个同 key 并发请求只生成一个 revision。尚未接入公开工具或
+Runtime 打包，也没有添加 Poppler/OCR 依赖。Poppler 打包评估见
+`docs/design/poppler_packaging_assessment.md`。当前已选择不随 `.app` 分发 Poppler；
+未来论文研究 Skill 检测到缺失时，先征得用户明确同意，再执行
+`brew install poppler`。现有 PyMuPDF 同样采用 AGPL/商业双许可证，当前 MIT `.app` 的
+既有分发边界仍需单独解决。
+
+v2 Slice 2 已开始：`library_exec` 采用固定 Codex commit
+`61a44880a85d2fd0d8770908dea5733495e571c8` 的 command resolution、sandbox attempt
+和受控输出结构。源码映射见
+`docs/design/library_exec_codex_source_mapping.md`。当前已按映射回改：使用 `cmd`/
+`max_output_tokens` schema、固定逻辑 workspace、声明式 filesystem/network policy、
+macOS Seatbelt renderer、Codex 非交互环境、聚合 head-tail buffer、token 截断、
+Codex-style 输出、内部权威 trace attributes，以及 command resolution 后的
+`paper-cache status/ensure/page` 拦截。用户已确认固定授权根、无 PTY/持续 session、
+无权限升级、硬 timeout 和额外 CPU/file-size limit。下一步是 Slice 2 手工验收；尚未
+开始其他三个 v2 工具。
 
 ## Recently Completed
 

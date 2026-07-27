@@ -10,7 +10,7 @@ import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
 from paper_copilot.observability import current_llm_call_id, current_recorder
@@ -149,6 +149,7 @@ class ToolUseRequest:
 class ToolResultData:
     output: str
     is_error: bool = False
+    trace_attributes: dict[str, Any] = field(default_factory=dict)
 
 
 # ---- Events --------------------------------------------------------------
@@ -493,6 +494,7 @@ async def run_agent_loop(
                             attributes={
                                 "output_length": len(result.output),
                                 "is_error": result.is_error,
+                                **result.trace_attributes,
                             },
                         )
                 if loop_error is not None:

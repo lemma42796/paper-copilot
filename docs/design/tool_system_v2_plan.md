@@ -1,6 +1,6 @@
 # Paper Copilot 工具系统 v2 计划
 
-状态：方向已确认，尚未实现  
+状态：方向已确认，Slice 1 已完成，Slice 2 实现中
 日期：2026-07-27  
 取代范围：`docs/design/command_first_tool_redesign_handoff.md` 及本文档旧版中的下一代工具建议  
 历史文档：旧文档和 Git 历史只作为决策背景，不再作为 v2 实施依据
@@ -51,6 +51,27 @@ v2 模型只看到四个工具：
 本计划不修改当前 `ARCHITECTURE.md` 对已实现系统的描述。公开工具实际切换时，再把已
 落地且验收过的 v2 契约写入架构文档。
 
+### 1.1 Codex-first 参考原则
+
+Agent 工具、命令执行、sandbox、审批、进程生命周期、Skill 和 trace 的设计遵循以下
+优先级：
+
+1. 开始设计或编码前，先在固定 Codex source ref 中查找对应实现；
+2. Codex 已有对应机制时，参照其结构、数据流、状态语义和失败行为实现，不另行发明
+   平行机制；
+3. 只有产品授权边界或论文领域对象不同的部分，才允许做必要的窄化适配；
+4. Codex 没有对应机制时，才允许增加 Paper Copilot 专用设计，并记录已检索的源码位置、
+   缺失点和最小补充范围；
+5. 如果计划偏离 Codex 已有设计，必须先写明差异和理由，并取得用户明确确认。
+
+每个实施 slice 在写代码前必须形成一份源码映射，至少包括：
+
+```text
+需求 → Codex source ref → Codex 现有机制 → 直接采用/必要适配/确实缺失
+```
+
+未完成源码映射，不得以“Codex-style”或“Codex-inspired”为由自行补充设计。
+
 ## 2. 决策依据
 
 ### 2.1 当前实现的问题
@@ -86,7 +107,11 @@ read_paper
 
 ### 2.2 Codex 源码依据
 
-v2 借鉴以下 Codex Core 机制：
+Slice 2 的源码映射固定到本机 Codex commit
+`61a44880a85d2fd0d8770908dea5733495e571c8`，借鉴以下 Codex Core 机制：
+
+逐项审计见 `docs/design/library_exec_codex_source_mapping.md`。该映射是 Slice 2 的实现
+门槛；映射与本文冲突时先修订计划，不得静默选择其中一份。
 
 - `codex-rs/core/src/tools/handlers/unified_exec.rs`
   - 通用 `exec_command` 参数；
@@ -107,7 +132,9 @@ v2 借鉴以下 Codex Core 机制：
   - 网络和环境策略。
 
 Paper Copilot 不复制 Codex 的全部 Rust、远程环境、代码仓库权限或通用本机能力，只实现
-论文库需要的窄化子集。
+论文库需要的窄化子集。与 Codex 一致，安全边界以规范化命令、固定 cwd/environment、
+OS sandbox、timeout、输出预算和权威 trace 为核心；不另造一套容易与 sandbox 漂移的
+危险命令黑名单。
 
 ### 2.3 Codex 四轮实验依据
 
@@ -240,25 +267,27 @@ SQLite FTS、BM25、embedding 或向量索引只能作为后续独立实验候�
 ```yaml
 cmd: string
 timeout_ms: integer?
-max_output_chars: integer?
+max_output_tokens: integer?
 ```
 
 v2 初版不提供交互式 PTY 或任意长进程。命令必须在有界 deadline 内完成；超时后终止并
-返回 `timed_out`。如果真实论文任务证明需要持续进程，再单独评估 Codex `write_stdin`
+在输出中标记 `timed_out`。如果真实论文任务证明需要持续进程，再单独评估 Codex `write_stdin`
 模式，不在本计划中预先增加第五个工具。
 
 计划输出：
 
 ```yaml
-status: completed | failed | timed_out
+output: string
 exit_code: integer?
-stdout: string
-stderr: string
-truncated: boolean
-elapsed_ms: integer
-command_ref: string
-artifacts: [string]
+wall_time_seconds: number
+timed_out: boolean?
+original_token_count: integer?
+output_omitted_bytes: integer?
 ```
+
+该结构参照 Codex `ExecCommandToolOutput::code_mode_result`。完整命令、resolved argv、
+`command_ref`、sandbox policy/profile hash 和 artifact refs 只进入权威 trace，不作为
+模型输出协议。
 
 允许能力的目标范围：
 
@@ -272,8 +301,9 @@ artifacts: [string]
 - `awk`、`sed`、`sort`、`wc` 等有界文本处理；
 - 调用 Runtime 提供的确定性 `paper-cache` 命令。
 
-具体 executable 和参数 allowlist 在实现 slice 中依据 Codex exec policy 和实际论文任务
-冻结。模型不能：
+具体执行边界依据固定 Codex 源码版本的 command resolution 和 sandbox attempt 结构实现。
+Paper Copilot 固定系统 PATH、逻辑 cwd 和过滤后的环境，不提供模型可选 shell、登录
+shell、远程 environment、额外权限或失败后升级。模型不能：
 
 - 访问网络；
 - 读取论文库、受控缓存和允许临时目录之外的路径；
@@ -480,6 +510,9 @@ v2 提供一个论文研究 Skill，指导 Agent 组合四个工具。Skill 是�
 - 页面视觉关系未核验时标记 `unresolved`；
 - 不要求先生成 contributions/methods/experiments/limitations；
 - 不自动执行 embedding 或向量检索；
+- 检测到用户环境缺少 Poppler 时，先询问用户是否同意执行
+  `brew install poppler`；只有获得明确同意后才自动安装，拒绝或 Homebrew 缺失时停止
+  并说明原因；
 - 工具使用记录以 Runtime trace 为准，不以模型自报为准。
 
 ### 5.3 Skill 与源码依据
@@ -652,16 +685,15 @@ optional region
 
 ### 8.3 命令策略
 
-实现前冻结：
+采用 Codex 的分层执行方式：
 
-- executable allowlist；
-- argument policy；
-- shell control operator policy；
-- 环境变量过滤；
-- symlink 和 canonical path 规则；
-- 临时目录规则；
-- sandbox profile/hash；
-- escalation 与 approval 行为。
+- 输入使用 `cmd`，实际命令、cwd 和 sandbox policy 共同生成稳定 `command_ref`；
+- cwd 固定为逻辑 workspace，环境变量和 PATH 由 Runtime 完整构造；
+- 授权论文库和派生缓存只读，只有调用级 `scratch/` 可写；
+- OS sandbox 默认拒绝库外读取、授权根写入和网络访问；
+- sandbox profile 计算 hash 并随执行结果进入 trace；
+- 不提供模型可选 shell、登录 shell、远程环境、额外权限或 sandbox 失败后的升级路径；
+- timeout、进程组终止、聚合 head-tail 输出捕获和 token 截断由 Runtime 确定性执行。
 
 不得只用 Prompt 禁止危险命令。
 
@@ -791,6 +823,9 @@ v2 不以 embedding 消融为前置条件。只有文本命令检索未达到门
 
 目标：复现 Codex 的快速全文 TXT 提取，并提供跨会话复用。
 
+当前状态：已完成。冻结 14 篇、1169 页论文首次缓存全部生成，耗时 4.211 秒；新缓存
+实例二次检查 14/14 命中，耗时 83 毫秒；三个同 key 并发请求只生成一个 revision。
+
 范围：
 
 - Poppler packaging/licensing 评估；
@@ -814,10 +849,15 @@ v2 不以 embedding 消融为前置条件。只有文本命令检索未达到门
 
 目标：让模型使用少量通用命令原语读取论文库和缓存。
 
+当前状态：已按 1.1 节完成 schema、逻辑 workspace、sandbox、输出和 broker 的逐项
+源码复核，映射见 `docs/design/library_exec_codex_source_mapping.md`。未在 Codex 中
+找到对应机制的部分已标记为 Paper Copilot 专用适配，必要差异已获用户确认，现有实现
+也已按映射回改。下一步进行手工验收。
+
 范围：
 
 - v2 schema/dispatch；
-- executable/argument policy；
+- Codex-style command resolution 和 sandbox policy；
 - 固定授权根和只读缓存；
 - sandbox；
 - timeout/output caps；

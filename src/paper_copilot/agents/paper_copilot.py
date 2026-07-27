@@ -1447,7 +1447,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "query_paper": 60_000,
         "query_papers": 60_000,
         "library_files": 16_000,
-        "library_exec": 16_000,
+        "library_exec": 64_000,
         "library_edit": 40_000,
         "notes_patch": 40_000,
     }
@@ -1686,11 +1686,14 @@ async def dispatch_paper_copilot_tool_async(
             )
             tool_result = _ok(payload)
         elif req.name == "library_exec":
-            payload = await run_library_exec(
+            library_exec_run = await run_library_exec(
                 cast(LibraryExecInput, parsed_input),
                 context.pdf_dir,
             )
-            tool_result = _ok(payload)
+            tool_result = _ok(
+                library_exec_run.output,
+                trace_attributes=library_exec_run.trace_attributes,
+            )
         else:
             tool_result = _dispatch_parsed_tool(req.name, parsed_input, context)
         return _cap_tool_result(definition, tool_result)
@@ -1712,6 +1715,7 @@ def _cap_tool_result(
     return ToolResultData(
         output=cap_tool_output(tool_result.output, definition.output_max_chars),
         is_error=tool_result.is_error,
+        trace_attributes=tool_result.trace_attributes,
     )
 
 
@@ -3351,8 +3355,15 @@ def _tool_schema(name: str, description: str, model: type[BaseModel]) -> dict[st
     }
 
 
-def _ok(payload: dict[str, Any]) -> ToolResultData:
-    return ToolResultData(output=json.dumps(payload, ensure_ascii=False, indent=2))
+def _ok(
+    payload: dict[str, Any],
+    *,
+    trace_attributes: dict[str, Any] | None = None,
+) -> ToolResultData:
+    return ToolResultData(
+        output=json.dumps(payload, ensure_ascii=False, indent=2),
+        trace_attributes=dict(trace_attributes or {}),
+    )
 
 
 def _err(message: str) -> ToolResultData:
