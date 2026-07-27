@@ -161,19 +161,15 @@ _MAX_RELATED_K = 10
 _MAX_TOKENS = 3000
 _MODEL_TOOL_NAMES = (
     "library_exec",
+    "inspect_page",
+    "paper_set",
     "library_edit",
-    "paper_search",
-    "read_paper",
 )
 _RESEARCH_EVIDENCE_TOOL_NAMES = frozenset(
     {
-        "paper_search",
-        "read_paper",
-        "search_papers",
-        "query_paper",
-        "query_papers",
-        "compare_papers",
-        "find_related_papers",
+        "library_exec",
+        "inspect_page",
+        "paper_set",
     }
 )
 _COMPOSER_TOOL_NAMES = frozenset(
@@ -218,22 +214,23 @@ _BASE_SYSTEM_PROMPT = (
     "Never invent citations or claim that an unread PDF was analyzed. If required "
     "evidence is missing, say exactly what is missing. For synthesis or comparison, "
     "query enough relevant papers rather than stopping at the first result when "
-    "the paper budget allows it. Use library_exec for read-only filesystem work, "
-    "library_edit for every library mutation, paper_search for semantic retrieval "
-    "over one paper, named papers, or the library, and read_paper only when a local "
-    "PDF is not indexed. Generic command output is filesystem evidence, not "
-    "citation-grade paper-content evidence. A successful paper-cache page result is "
-    "citation-grade when Runtime trace binds it to a full PDF hash, page, cache "
-    "revision, and artifact hash. When the user asks for all matching papers, continue "
-    "paper_search pagination until next_cursor is null. Tool inputs must match their "
-    "JSON schemas exactly.\n\n"
+    "the paper budget allows it. The only available tools are library_exec for "
+    "bounded read-only command work and deterministic PDF text caching, inspect_page "
+    "for visual checks of one exact PDF page or region, paper_set for immutable "
+    "cross-turn paper scope and coverage, and library_edit for every user-visible "
+    "library mutation. Follow the bundled research-papers Skill to compose them. "
+    "Generic command output is filesystem evidence, not citation-grade paper-content "
+    "evidence. A successful paper-cache page result is citation-grade when Runtime "
+    "trace binds it to a full PDF hash, page, cache revision, and artifact hash. "
+    "Use paper_set whenever the request requires an explicit multi-paper set or "
+    "complete coverage, and do not claim completion until its coverage is complete "
+    "and no member is stale. Tool inputs must match their JSON schemas exactly.\n\n"
     "For a direct answer or a non-research library_exec/library_edit task, respond "
-    "naturally without forced report headings or citations. After using paper_search or "
-    "read_paper, write a concise Markdown report with Findings, Evidence, Gaps, "
-    "and Next Steps. Tie each concrete research claim to a bracket reference in "
-    "exact format [paper_id:field], such as [abc123:chunks[12]] or "
-    "[abc123:contributions[0].claim], or explicitly mark it as a gap. Write in the "
-    "user's language and keep the report under 900 words.\n\n"
+    "naturally without forced report headings or citations. After paper research, "
+    "write a concise Markdown report with Findings, Evidence, Gaps, and Next Steps. "
+    "Tie each concrete research claim to a page reference in exact format "
+    "[<pdf_sha256>:page[<page>]], or explicitly mark it as a gap. Write in the user's "
+    "language and keep the report under 900 words.\n\n"
     "Return the answer or report itself. Do not narrate the working process."
 )
 _EVIDENCE_REF_RE = re.compile(

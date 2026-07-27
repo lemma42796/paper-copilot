@@ -3,7 +3,7 @@
 > Paper Copilot 的当前架构、所有权和硬性边界。产品状态与待办见
 > [TASKS.md](TASKS.md)，工程执行规则见 [AGENTS.md](AGENTS.md)，具体接口以代码为准。
 
-更新于 2026-07-26。
+更新于 2026-07-27。
 
 ## Principles
 
@@ -109,6 +109,11 @@ Paper Copilot 根据用户请求选择工具、聚合证据并生成自然语言
 
 模型只看到四个工具：
 
+- `library_exec`
+- `inspect_page`
+- `paper_set`
+- `library_edit`
+
 运行时还会加载一个只读的内建 `research-papers` Skill，指导 Agent 组合工具完成缓存
 检查、全文命令搜索、PDF 页定位和有界证据绑定。Skill 以应用生成的受信任上下文进入
 首次运行、恢复和压缩后的 turn；名称、版本和正文 SHA-256 写入权威 trace。Skill 不
@@ -131,21 +136,24 @@ Paper Copilot 根据用户请求选择工具、聚合证据并生成自然语言
 - 删除进入 macOS 系统废纸篓；Markdown 写入使用完整文档和变更预览。
 - 所有修改先经过工具策略；需要批准时进入持久 job 审批状态。
 
-### `paper_search`
+### `inspect_page`
 
-- 统一单篇、多篇和全库的已索引论文检索。
-- 使用结构化字段、BM25/vector RRF、论文聚合和确定性 evidence 选择。
-- 多篇长论文采用论文、章节、chunk 的分层召回。
-- 全库遍历使用有界游标；调用方不能把单页结果解释为整个论文库。
+- 只接受授权 `paper_id`、一个 PDF 页码和可选归一化 region。
+- 仅在模型声明支持图像输入时使用 Poppler 渲染有界 PNG。
+- 结果绑定 PDF SHA-256、页码、region 和 render SHA-256；图像只进入当前模型上下文，
+  不写入 session、日志或 trace。
+- 不执行 OCR、批量页面处理、全文入库或纯文本模型回退。
 
-### `read_paper`
+### `paper_set`
 
-- 将授权论文目录内尚未入库的 PDF 送入单篇读取和索引链路。
-- 读取链路依次完成结构提取、字段提取、分块、embedding 和知识库更新。
-- 入库后的内容问答回到 `paper_search`，避免重复执行完整读取。
+- 通过 create、derive、record_evidence 和 status 保存不可变论文集合。
+- 集合成员绑定 PDF SHA-256、授权 locator、ingest revision 和当前 cache revision。
+- 只有每个成员都有可验证页级 evidence 且没有 stale 成员时 coverage 才能 complete。
+- 状态以 append-only application event 写入 session，并沿 recovery source session 重放；
+  不承担搜索、RAG、PDF 提取或回答生成。
 
-旧的专用查询、比较、文件和 Composer 实现可以作为内部能力继续存在，但不属于模型工具
-表面；Runtime 拒绝模型调用未公开的旧名称。
+旧的读取、搜索、查询、比较、文件、笔记和 Composer 实现作为不可调用的回滚代码继续
+存在，但不属于模型工具表面；Runtime 拒绝模型调用未公开的旧名称。
 
 ## Authorization and Trust
 
@@ -239,36 +247,28 @@ macOS client
   → chat.jobs creates attempt
   → chat.runtime
   → Paper Copilot bounded loop
-  → session / report / index updates
+  → session / report / derived cache or approved library updates
   → completed / failed / interrupted
 ```
 
 客户端优先通过 SSE 接收事件，断线后使用同一事件游标增量轮询。App 重启只恢复显示，
 不会自动重跑任务。
 
-### Read and index
+### Research and answer
 
 ```text
-read_paper
-  → ReadPaperTool
-  → skim / extract / related-link stages
-  → Pydantic validation
-  → append session
-  → update fields and embedding indexes
-```
-
-中间产物持续写入 session；失败不清除已经成功写入的历史。
-
-### Search and answer
-
-```text
-paper_search
-  → structured candidate filter
-  → BM25 / vector RRF
-  → paper and section aggregation
-  → bounded evidence with source locations
+research-papers Skill
+  → library_exec lists authorized PDFs
+  → paper-cache status / ensure
+  → rg / awk bounded search and PDF page location
+  → paper-cache page evidence
+  → inspect_page when visual verification is necessary
+  → paper_set coverage for explicit multi-paper scopes
   → grounded answer
 ```
+
+缓存是可重建派生状态；`paper_set` 事件和模型历史持续追加到 session。失败不清除已经成功
+写入的历史，也不把 partial 或 stale 集合报告为 complete。
 
 ### Library mutation
 

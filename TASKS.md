@@ -17,8 +17,8 @@ MCP Server 两个入口复用同一 Python Core。
 
 ## Current Work
 
-当前已完成 Codex 四轮基线、工具系统 v2 实施计划和 Slice 1–5。
-Slice 6 尚未开始，需要单独确认后实施。计划见
+当前已完成 Codex 四轮基线、工具系统 v2 实施计划和 Slice 1–6。
+Slice 7 冻结评测尚未开始，需要单独确认后实施。计划见
 `docs/design/tool_system_v2_plan.md`。
 
 已完成：
@@ -83,6 +83,14 @@ append-only application event 写入 session，并可沿 recovery source session
 Research Skill 更新和 macOS 兼容仍留待 Slice 6。源码映射见
 `docs/design/paper_set_codex_source_mapping.md`。
 
+v2 Slice 6 已完成实施：模型公开表面切换为 `library_exec`、`inspect_page`、`paper_set`
+和 `library_edit`；异步 Runtime 在 schema 解析和执行前拒绝未公开旧名称。内建
+`research-papers` Skill 更新为 version 2，加入不可变集合覆盖、视觉核验和不可信文件名
+处理规则。macOS 继续复用绑定 tool call、参数、目标快照和 diff 的通用审批协议，旧实现
+只作为不可由模型调用的回滚代码保留。架构说明和 Codex 源码映射已同步；Slice 7 的三次
+冻结评测与消融尚未开始。源码映射见
+`docs/design/tool_surface_v2_codex_source_mapping.md`。
+
 ## Recently Completed
 
 ### M20 — macOS Client Foundation
@@ -133,7 +141,7 @@ milestone。开始实现前需要先确定目标、范围、验收方式和明�
   组合方式。
 - 排查能力缺口、职责重叠、隐式耦合、安全策略不一致及难以评估的接口。
 - 评估仍保留的旧内部工具应继续复用、迁移还是删除。
-- 已完成四轮多论文 Codex 基线，并在 v2 Slice 5 实现稳定结果集合。
+- 已完成四轮多论文 Codex 基线、稳定结果集合和四工具公开表面切换。
 - v2 按 `docs/design/tool_system_v2_plan.md` 的 bounded slices 实施；每个 slice 单独确认、
   验收后再进入下一项。
 
@@ -151,7 +159,7 @@ milestone。开始实现前需要先确定目标、范围、验收方式和明�
 
 ### 4. 支持用户与第三方 Skill
 
-- 在工具系统 v2 完成并冻结后再规划，不并入当前 Slice 4–6。
+- 在工具系统 v2 完成并冻结后再规划，不并入当前 Slice 7。
 - 第一阶段只支持 instruction-only Skill，提供专用本地目录发现、内容查看、格式校验、
   启用、禁用和删除。
 - 用户或第三方 Skill 不能新增模型工具、扩大 Runtime sandbox、开放网络或路径，也不能

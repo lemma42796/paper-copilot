@@ -1,6 +1,6 @@
 # Paper Copilot 工具系统 v2 计划
 
-状态：方向已确认，Slice 1–5 已完成，Slice 6 尚未开始
+状态：方向已确认，Slice 1–6 已完成，Slice 7 尚未开始
 日期：2026-07-27  
 取代范围：`docs/design/command_first_tool_redesign_handoff.md` 及本文档旧版中的下一代工具建议  
 历史文档：旧文档和 Git 历史只作为决策背景，不再作为 v2 实施依据
@@ -953,6 +953,11 @@ session 重放；公开工具列表保持不变，留待 Slice 6 统一切换。
 - 回答生成。
 
 ### Slice 6：公开工具切换与安全收敛
+
+状态：已完成实施。模型公开表面已切换为四个 v2 工具，内建 Skill 已更新为 version 2，
+macOS 通用审批协议已核对兼容，异步 Runtime 拒绝未公开旧名称，架构和 Codex 源码映射
+已同步。旧实现按计划保留为不可由模型调用的回滚代码。源码映射见
+`docs/design/tool_surface_v2_codex_source_mapping.md`。
 
 目标：公开四个 v2 工具，并冻结统一安全边界。
 

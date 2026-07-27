@@ -10,7 +10,7 @@ from paper_copilot.shared.errors import AgentError
 __all__ = ["ResearchSkill", "load_research_skill"]
 
 _SKILL_NAME = "research-papers"
-_SKILL_VERSION = "1"
+_SKILL_VERSION = "2"
 _SKILL_RESOURCE_URI = (
     "resource://paper-copilot/agents/skills/research-papers/SKILL.md"
 )
