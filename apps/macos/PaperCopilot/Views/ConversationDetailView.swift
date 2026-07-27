@@ -1,6 +1,8 @@
 import AppKit
 import SwiftUI
 
+private let contextWindowBaselineTokens = 12_000
+
 struct ConversationDetailView: View {
     @EnvironmentObject private var appModel: AppModel
     @State private var draft = ""
@@ -303,14 +305,7 @@ private struct ContextUsageRing: View {
         guard let usage else {
             return 0
         }
-        return min(
-            max(
-                Double(usage.contextTokens)
-                    / Double(usage.contextWindowTokens),
-                0
-            ),
-            1
-        )
+        return contextWindowFractionUsed(usage)
     }
 
     var body: some View {
@@ -326,7 +321,7 @@ private struct ContextUsageRing: View {
                 .rotationEffect(.degrees(-90))
         }
         .frame(width: 13, height: 13)
-        .accessibilityLabel("背景信息窗口 token 消耗")
+        .accessibilityLabel("工作上下文窗口 token 消耗")
         .accessibilityValue(accessibilityValue)
     }
 
@@ -343,7 +338,7 @@ private struct ContextUsagePopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("背景信息窗口：")
+            Text("工作上下文窗口：")
                 .foregroundStyle(.secondary)
             if let usage {
                 Text("\(percentageUsed(usage))% 已用（剩余 \(percentageRemaining(usage))%）")
@@ -362,16 +357,7 @@ private struct ContextUsagePopover: View {
     }
 
     private func percentageUsed(_ usage: ChatContextUsage) -> Int {
-        min(
-            Int(
-                (
-                    Double(usage.contextTokens)
-                        / Double(usage.contextWindowTokens)
-                        * 100
-                ).rounded()
-            ),
-            100
-        )
+        Int((contextWindowFractionUsed(usage) * 100).rounded())
     }
 
     private func percentageRemaining(_ usage: ChatContextUsage) -> Int {
@@ -388,6 +374,15 @@ private struct ContextUsagePopover: View {
             .number.precision(.fractionLength(precision))
         ) + "k"
     }
+}
+
+private func contextWindowFractionUsed(_ usage: ChatContextUsage) -> Double {
+    guard usage.contextWindowTokens > contextWindowBaselineTokens else {
+        return 1
+    }
+    let effectiveWindow = usage.contextWindowTokens - contextWindowBaselineTokens
+    let used = max(usage.contextTokens - contextWindowBaselineTokens, 0)
+    return min(max(Double(used) / Double(effectiveWindow), 0), 1)
 }
 
 private struct MessageComposerTextView: NSViewRepresentable {

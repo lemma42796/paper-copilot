@@ -54,6 +54,7 @@ ActivityPhase = Literal["started", "delta", "completed", "failed", "cancelled"]
 
 _JOB_ID_RE = re.compile(r"^job-[0-9A-Za-z-]{8,80}$")
 _CONVERSATION_ID_RE = re.compile(r"^conversation-[0-9A-Za-z-]{8,80}$")
+_MAIN_CONTEXT_AGENT = "PaperCopilot"
 _REGISTRIES: dict[Path, ChatJobRegistry] = {}
 _REGISTRIES_LOCK = threading.Lock()
 
@@ -1143,15 +1144,17 @@ class ChatJobRegistry:
             if not session_path.is_file():
                 continue
             for entry in reversed(SessionStore(session_path, last_id="").read_all()):
-                if isinstance(entry, LLMCall):
+                if isinstance(entry, LLMCall) and entry.agent == _MAIN_CONTEXT_AGENT:
+                    total_context_tokens = (
+                        entry.input_tokens
+                        + entry.cache_creation_input_tokens
+                        + entry.cache_read_input_tokens
+                        + entry.output_tokens
+                    )
                     return record.model_copy(
                         update={
                             "context_usage": ChatContextUsage(
-                                context_tokens=(
-                                    entry.input_tokens
-                                    + entry.cache_creation_input_tokens
-                                    + entry.cache_read_input_tokens
-                                ),
+                                context_tokens=total_context_tokens,
                                 context_window_tokens=WORKING_CONTEXT_LIMIT_TOKENS,
                             )
                         }

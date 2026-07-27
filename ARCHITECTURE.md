@@ -230,8 +230,10 @@ Embedding 当前锁定 DashScope `text-embedding-v4`、1024 维；模型或维�
 - 一次任务使用客户端选择的同一模型，不做模型分层。
 - 支持 OpenAI-compatible endpoint；Paper Copilot 调用必须使用 provider 支持的
   Thinking 和流式输出，未知协议不能静默退化为非思考模式。
-- 按 256K input token 工作窗口管理：预计下一轮达到 200K 时压缩到不超过 80K，
-  240K 为普通调用硬门槛。
+- 按固定 Codex 模型配置的 272K 原始窗口管理：258.4K 为有效工作窗口，预计下一轮达到
+  244.8K 时压缩到不超过 80K，258.4K 为普通调用硬门槛。客户端工作窗口百分比采用
+  Codex 口径：主 Agent 最近一次模型调用的输入、缓存和输出 token 均计入；绝对用量和
+  有效窗口保持原值，仅在百分比计算时从分子和分母扣除 12K 固定基础预算。
 - `CompactionSummary` 保留请求、目标、约束、决策、证据、失败尝试、runtime state
   和近期完整 tool round；原始 session 保持 append-only。
 - 模型变更前运行 smoke eval，并同时比较质量、成本和延迟。零回归是必要条件，但必须

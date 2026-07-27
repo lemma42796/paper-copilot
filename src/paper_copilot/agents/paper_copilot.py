@@ -1259,7 +1259,7 @@ def _record_composer_repair_response(
         cost.record(response.usage)
     usage: UsageLike = response.usage if response.usage is not None else {}
     store.append_llm_call(
-        agent=_AGENT_NAME,
+        agent="ComposerRepair",
         model=DEFAULT_MODEL,
         usage=usage,
         latency_ms=response.latency_ms,
