@@ -18,8 +18,12 @@ MCP Server 两个入口复用同一 Python Core。
 ## Current Work
 
 当前已完成 Codex 四轮基线、工具系统 v2 实施计划和 Slice 1–6。
-Slice 7 冻结评测尚未开始，需要单独确认后实施。计划见
-`docs/design/tool_system_v2_plan.md`。
+下一步先执行一次完整 v2 四轮预检：使用全新 Paper Copilot 会话和冻结 query，复用
+既有 Codex 基线，保存完整工具 trace，并对照私有 Gold 报告质量、跨轮约束、遍历完成、
+引用和工具行为。当前不重复运行 Codex，也不执行完整消融。
+
+该预检不等于完成 Slice 7。三次重复、完整消融和正式冻结结论继续留在 Slice 7，是否
+投入由预检结果和后续用户确认决定。计划见 `docs/design/tool_system_v2_plan.md`。
 
 已完成：
 
@@ -142,6 +146,8 @@ milestone。开始实现前需要先确定目标、范围、验收方式和明�
 - 排查能力缺口、职责重叠、隐式耦合、安全策略不一致及难以评估的接口。
 - 评估仍保留的旧内部工具应继续复用、迁移还是删除。
 - 已完成四轮多论文 Codex 基线、稳定结果集合和四工具公开表面切换。
+- 已确认先运行一次完整 v2 四轮预检，复用既有 Codex 基线并暂缓完整消融；该预检不产生
+  Slice 7 已完成结论。
 - v2 按 `docs/design/tool_system_v2_plan.md` 的 bounded slices 实施；每个 slice 单独确认、
   验收后再进入下一项。
 
