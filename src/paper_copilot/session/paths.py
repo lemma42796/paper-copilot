@@ -22,6 +22,11 @@ def embedding_cache_file(root: Path | None = None) -> Path:
     return base / "embedding_cache.sqlite"
 
 
+def pdf_cache_dir(root: Path | None = None) -> Path:
+    base = root if root is not None else default_root()
+    return base / "paper-cache"
+
+
 def default_pdf_dir() -> Path | None:
     load_env()
     override = os.environ.get(_PDF_DIR_ENV_VAR)

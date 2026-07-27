@@ -42,6 +42,10 @@ class PdfError(PaperCopilotError):
     pass
 
 
+class PdfCacheError(PdfError):
+    pass
+
+
 class EvalError(PaperCopilotError):
     pass
 
