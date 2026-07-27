@@ -269,7 +269,7 @@ class LLMClient:
                 "llm_call",
                 llm_call_id,
                 attributes={"model": DEFAULT_MODEL, "endpoint": self._endpoint},
-                input_payload=payload,
+                input_payload=_redact_input_images(payload),
             )
             if recorder is not None
             else nullcontext()
@@ -493,23 +493,26 @@ def _convert_user_message(
         return [{"role": "user", "content": str(content)}]
 
     converted: list[dict[str, Any]] = []
-    text_blocks: list[dict[str, Any]] = []
+    user_blocks: list[dict[str, Any]] = []
 
-    def flush_text() -> None:
-        if text_blocks:
-            text_content: str | list[dict[str, Any]]
-            if preserve_cache_control:
-                text_content = [*text_blocks]
-            else:
-                text_content = "\n".join(str(block.get("text", "")) for block in text_blocks)
-            converted.append({"role": "user", "content": text_content})
-            text_blocks.clear()
+    def flush_user() -> None:
+        if not user_blocks:
+            return
+        has_image = any(block.get("type") == "image_url" for block in user_blocks)
+        user_content: str | list[dict[str, Any]]
+        if preserve_cache_control or has_image:
+            user_content = [*user_blocks]
+        else:
+            user_content = "\n".join(
+                str(block.get("text", "")) for block in user_blocks
+            )
+        converted.append({"role": "user", "content": user_content})
+        user_blocks.clear()
 
     for block in content:
         if not isinstance(block, dict):
             raise AgentError("message content block must be an object")
         if block.get("type") == "tool_result":
-            flush_text()
             converted.append(
                 {
                     "role": "tool",
@@ -518,10 +521,27 @@ def _convert_user_message(
                 }
             )
             continue
-        text_blocks.append(
+        if block.get("type") == "input_image":
+            image_url = block.get("image_url")
+            if not isinstance(image_url, str) or not image_url.startswith("data:image/"):
+                raise AgentError("input_image must contain an image data URL")
+            detail = block.get("detail", "high")
+            if detail != "high":
+                raise AgentError("input_image detail must be 'high'")
+            user_blocks.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": image_url,
+                        "detail": detail,
+                    },
+                }
+            )
+            continue
+        user_blocks.append(
             _strip_cache_control(block) if not preserve_cache_control else dict(block)
         )
-    flush_text()
+    flush_user()
     return converted
 
 
@@ -626,6 +646,24 @@ def _convert_tool_choice(tool_choice: dict[str, Any]) -> str | dict[str, Any]:
 
 def _strip_cache_control(block: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in block.items() if key != "cache_control"}
+
+
+def _redact_input_images(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            if (
+                key in {"url", "image_url"}
+                and isinstance(item, str)
+                and item.startswith("data:image/")
+            ):
+                redacted[key] = f"<image data URL omitted: {len(item)} chars>"
+            else:
+                redacted[key] = _redact_input_images(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_input_images(item) for item in value]
+    return value
 
 
 def _tool_result_text(content: Any) -> str:

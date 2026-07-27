@@ -603,6 +603,9 @@ final class AppModel: ObservableObject {
             "LLM_THINKING_PROTOCOL": thinkingProtocol.rawValue,
             "LLM_REASONING_EFFORT":
                 selectedModel.effectiveReasoningEffort.rawValue,
+            "LLM_INPUT_MODALITIES": selectedModel.effectiveInputModalities
+                .map(\.rawValue)
+                .joined(separator: ","),
         ]
         let selectedHost = URL(string: selectedModel.baseURL)?.host ?? ""
         let dashscopeAPIKey = selectedHost.contains("dashscope.aliyuncs.com")

@@ -235,6 +235,7 @@ private struct ModelEditorContext: Identifiable {
                 outputPricePerMillion: 0,
                 thinkingProtocol: .qwen,
                 reasoningEffort: .high,
+                inputModalities: [.text, .image],
                 isEnabled: true
             ),
             apiKey: ""
@@ -284,9 +285,13 @@ private struct ModelEditorView: View {
                     ) {
                         ForEach(configuration.availableReasoningEfforts) { effort in
                             Text(reasoningOptionTitle(effort))
-                                .tag(effort)
+                            .tag(effort)
                         }
                     }
+                    Toggle(
+                        "支持图像输入",
+                        isOn: supportsImageInputBinding
+                    )
                     Toggle("启用此模型", isOn: $configuration.isEnabled)
 
                     Button("填入 Qwen 3.6 Flash 预设") {
@@ -357,6 +362,17 @@ private struct ModelEditorView: View {
         )
     }
 
+    private var supportsImageInputBinding: Binding<Bool> {
+        Binding(
+            get: { configuration.supportsImageInput },
+            set: { supportsImageInput in
+                configuration.inputModalities = supportsImageInput
+                    ? [.text, .image]
+                    : [.text]
+            }
+        )
+    }
+
     private func reasoningOptionTitle(_ effort: ReasoningEffort) -> String {
         guard let detail = configuration.reasoningDetail(for: effort) else {
             return effort.displayName
@@ -389,6 +405,7 @@ private struct ModelEditorView: View {
         configuration.outputPricePerMillion = preset.outputPricePerMillion
         configuration.thinkingProtocol = preset.thinkingProtocol
         configuration.reasoningEffort = preset.reasoningEffort
+        configuration.inputModalities = preset.inputModalities
     }
 
     private func save() {

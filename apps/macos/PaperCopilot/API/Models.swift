@@ -159,6 +159,16 @@ enum ReasoningEffort: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum ModelInputModality: String, Codable, CaseIterable, Identifiable {
+    case text
+    case image
+    case audio
+
+    var id: String {
+        rawValue
+    }
+}
+
 struct ModelConfiguration: Codable, Identifiable, Equatable {
     let id: UUID
     var displayName: String
@@ -171,10 +181,19 @@ struct ModelConfiguration: Codable, Identifiable, Equatable {
     var outputPricePerMillion: Double
     var thinkingProtocol: ModelThinkingProtocol?
     var reasoningEffort: ReasoningEffort?
+    var inputModalities: [ModelInputModality]?
     var isEnabled: Bool
 
     var menuTitle: String {
         "\(displayName) · \(providerName)"
+    }
+
+    var effectiveInputModalities: [ModelInputModality] {
+        inputModalities ?? [.text, .image]
+    }
+
+    var supportsImageInput: Bool {
+        effectiveInputModalities.contains(.image)
     }
 
     var hasValidEndpoint: Bool {
@@ -200,6 +219,7 @@ struct ModelConfiguration: Codable, Identifiable, Equatable {
             && outputPricePerMillion >= 0
             && effectiveThinkingProtocol != nil
             && !availableReasoningEfforts.isEmpty
+            && effectiveInputModalities.contains(.text)
     }
 
     var effectiveThinkingProtocol: ModelThinkingProtocol? {
@@ -267,6 +287,7 @@ struct ModelConfiguration: Codable, Identifiable, Equatable {
             outputPricePerMillion: 7.2,
             thinkingProtocol: .qwen,
             reasoningEffort: .high,
+            inputModalities: [.text, .image],
             isEnabled: true
         )
     }

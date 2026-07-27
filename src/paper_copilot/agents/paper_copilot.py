@@ -47,6 +47,12 @@ from paper_copilot.agents.context_compaction import (
     estimate_history_tokens,
 )
 from paper_copilot.agents.context_fragments import TrustedRuntimeContext
+from paper_copilot.agents.inspect_page_tool import (
+    InspectPageInput,
+    configured_input_modalities,
+    inspect_page_tool_description,
+    run_inspect_page,
+)
 from paper_copilot.agents.llm_client import (
     AUTO_COMPACT_TRIGGER_TOKENS,
     COMPACTED_TARGET_TOKENS,
@@ -69,6 +75,7 @@ from paper_copilot.agents.loop import (
     TextBlock,
     ToolResult,
     ToolResultData,
+    ToolResultImage,
     ToolUse,
     ToolUseBlock,
     ToolUseRequest,
@@ -1412,6 +1419,11 @@ def _tool_schema_templates() -> list[dict[str, Any]]:
             LibraryExecInput,
         ),
         _tool_schema(
+            "inspect_page",
+            inspect_page_tool_description(),
+            InspectPageInput,
+        ),
+        _tool_schema(
             "library_edit",
             library_edit_tool_description(),
             LibraryEditInput,
@@ -1439,6 +1451,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "find_related_papers": _FindRelatedPapersInput,
         "library_files": LibraryFilesInput,
         "library_exec": LibraryExecInput,
+        "inspect_page": InspectPageInput,
         "library_edit": LibraryEditInput,
         "notes_patch": NotesPatchInput,
     }
@@ -1457,6 +1470,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "find_related_papers": frozenset({"read_library"}),
         "library_files": frozenset({"read_library", "write_library"}),
         "library_exec": frozenset({"read_library", "execute_command"}),
+        "inspect_page": frozenset({"read_library"}),
         "library_edit": frozenset({"read_library", "write_library"}),
         "notes_patch": frozenset({"read_library", "write_library"}),
     }
@@ -1467,6 +1481,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "query_papers": 60_000,
         "library_files": 16_000,
         "library_exec": 64_000,
+        "inspect_page": 16_000,
         "library_edit": 40_000,
         "notes_patch": 40_000,
     }
@@ -1571,6 +1586,8 @@ def _dispatch_parsed_tool(
             )
         case "library_exec":
             return _err("library_exec requires the asynchronous tool dispatcher")
+        case "inspect_page":
+            return _err("inspect_page requires the asynchronous tool dispatcher")
         case "library_edit":
             return _ok(
                 run_library_edit(
@@ -1713,6 +1730,17 @@ async def dispatch_paper_copilot_tool_async(
                 library_exec_run.output,
                 trace_attributes=library_exec_run.trace_attributes,
             )
+        elif req.name == "inspect_page":
+            inspect_page_run = await run_inspect_page(
+                cast(InspectPageInput, parsed_input),
+                context.pdf_dir,
+                input_modalities=configured_input_modalities(),
+            )
+            tool_result = _ok(
+                inspect_page_run.output,
+                images=inspect_page_run.images,
+                trace_attributes=inspect_page_run.trace_attributes,
+            )
         else:
             tool_result = _dispatch_parsed_tool(req.name, parsed_input, context)
         return _cap_tool_result(definition, tool_result)
@@ -1735,6 +1763,7 @@ def _cap_tool_result(
         output=cap_tool_output(tool_result.output, definition.output_max_chars),
         is_error=tool_result.is_error,
         trace_attributes=tool_result.trace_attributes,
+        images=tool_result.images,
     )
 
 
@@ -3377,11 +3406,13 @@ def _tool_schema(name: str, description: str, model: type[BaseModel]) -> dict[st
 def _ok(
     payload: dict[str, Any],
     *,
+    images: tuple[ToolResultImage, ...] = (),
     trace_attributes: dict[str, Any] | None = None,
 ) -> ToolResultData:
     return ToolResultData(
         output=json.dumps(payload, ensure_ascii=False, indent=2),
         trace_attributes=dict(trace_attributes or {}),
+        images=images,
     )
 
 

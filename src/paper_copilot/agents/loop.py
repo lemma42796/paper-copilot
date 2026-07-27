@@ -40,6 +40,7 @@ __all__ = [
     "TextBlock",
     "ToolResult",
     "ToolResultData",
+    "ToolResultImage",
     "ToolUse",
     "ToolUseBlock",
     "ToolUseRequest",
@@ -146,10 +147,17 @@ class ToolUseRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class ToolResultImage:
+    data_url: str
+    detail: Literal["high"] = "high"
+
+
+@dataclass(frozen=True, slots=True)
 class ToolResultData:
     output: str
     is_error: bool = False
     trace_attributes: dict[str, Any] = field(default_factory=dict)
+    images: tuple[ToolResultImage, ...] = ()
 
 
 # ---- Events --------------------------------------------------------------
@@ -493,6 +501,7 @@ async def run_agent_loop(
                             },
                             attributes={
                                 "output_length": len(result.output),
+                                "image_count": len(result.images),
                                 "is_error": result.is_error,
                                 **result.trace_attributes,
                             },
@@ -519,6 +528,14 @@ async def run_agent_loop(
                         "content": result.output,
                         "is_error": result.is_error,
                     }
+                )
+                tool_results.extend(
+                    {
+                        "type": "input_image",
+                        "image_url": image.data_url,
+                        "detail": image.detail,
+                    }
+                    for image in result.images
                 )
             if build_runtime_context is not None:
                 runtime_context = build_runtime_context()

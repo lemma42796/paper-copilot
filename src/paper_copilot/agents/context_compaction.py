@@ -105,6 +105,7 @@ async def compact_history(
     conversation_context: str | None = None,
     trusted_context_fragments: tuple[str, ...] = (),
 ) -> CompactionResult:
+    history = _without_input_images(history)
     history_to_compact, retained_history = _partition_history(
         history,
         recent_history_budget_tokens=recent_history_budget_tokens,
@@ -194,6 +195,31 @@ async def compact_history(
         estimated_after_tokens=estimated_after_tokens,
         estimated_retained_recent_tokens=estimated_retained_recent_tokens,
     )
+
+
+def _without_input_images(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    for message in history:
+        copied = dict(message)
+        content = message.get("content")
+        if isinstance(content, list):
+            copied["content"] = [
+                (
+                    {
+                        "type": "text",
+                        "text": (
+                            "[image content omitted during compaction; "
+                            "use the adjacent tool result metadata]"
+                        ),
+                    }
+                    if isinstance(block, dict)
+                    and block.get("type") == "input_image"
+                    else block
+                )
+                for block in content
+            ]
+        sanitized.append(copied)
+    return sanitized
 
 
 def compaction_validation_errors(

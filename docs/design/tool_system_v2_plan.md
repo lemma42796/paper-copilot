@@ -1,6 +1,6 @@
 # Paper Copilot 工具系统 v2 计划
 
-状态：方向已确认，Slice 1、Slice 2 和 Slice 3 已完成，Slice 4 尚未开始
+状态：方向已确认，Slice 1、Slice 2、Slice 3 和 Slice 4 已完成，Slice 5 尚未开始
 日期：2026-07-27  
 取代范围：`docs/design/command_first_tool_redesign_handoff.md` 及本文档旧版中的下一代工具建议  
 历史文档：旧文档和 Git 历史只作为决策背景，不再作为 v2 实施依据
@@ -348,15 +348,10 @@ paper_id
 多模态模型获得：
 
 - 页面或区域图像；
-- 同页已有文字层；
 - PDF 页码、render hash 和 evidence metadata。
 
-纯文本模型获得：
-
-- 同页原生文字；
-- 已存在的本地恢复文字；
-- 坐标和 reading order；
-- 无法可靠恢复的 `unresolved` 项。
+纯文本模型沿用固定 Codex `view_image` 的能力检查语义：Runtime 在解析 PDF 和渲染前
+明确拒绝调用，不执行文本回退，也不发送模型无法消费的 image content。
 
 计划输出：
 
@@ -883,7 +878,7 @@ Runtime 握手、真实 `library_exec rg`、broker 和权威 trace。Slice 2 已
 `src/paper_copilot/agents/skills/research-papers/SKILL.md`，Codex 源码映射见
 `docs/design/research_skill_codex_source_mapping.md`。Skill 在首次运行、恢复和
 context compaction 后注入，版本与正文 SHA-256 进入权威 trace 和 final payload。
-Slice 4 需要单独确认后开始。
+Slice 4 已按单独确认完成。
 
 目标：用可审查 Skill 复现 Codex 命令搜索和证据定位工作流。
 
@@ -906,6 +901,13 @@ Slice 4 需要单独确认后开始。
 
 ### Slice 4：`inspect_page`
 
+状态：已完成。实现位于
+`src/paper_copilot/agents/inspect_page_tool.py`，Codex 源码映射见
+`docs/design/inspect_page_codex_source_mapping.md`。当前只完成内部工具、模型
+modality、图像工具结果 transport 和权威 metadata；公开工具列表保持不变，留待
+Slice 6 统一切换。真实 134 页论文的整页、归一化区域、纯文本能力拒绝和越界页手工
+验收均已通过。Slice 5 需要单独确认后开始。
+
 目标：提供论文专用的单页视觉核验。
 
 范围：
@@ -913,7 +915,7 @@ Slice 4 需要单独确认后开始。
 - `paper_id + page + region`；
 - `pdftoppm`；
 - capability negotiation；
-- image/text adaptive output；
+- image output 和 unsupported-model rejection；
 - render/evidence metadata；
 - unresolved。
 
