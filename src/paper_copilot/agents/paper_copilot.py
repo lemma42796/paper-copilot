@@ -101,6 +101,11 @@ from paper_copilot.agents.notes_patch_tool import (
     notes_patch_tool_description,
     run_notes_patch,
 )
+from paper_copilot.agents.paper_set_tool import (
+    PaperSetInput,
+    paper_set_tool_description,
+    run_paper_set,
+)
 from paper_copilot.agents.read_pipeline import ReadPipelineRun, run_read_pipeline
 from paper_copilot.agents.research_skill import (
     ResearchSkill,
@@ -128,7 +133,7 @@ from paper_copilot.knowledge.hybrid_search import (
 from paper_copilot.observability import current_recorder
 from paper_copilot.schemas import CompactionSummary
 from paper_copilot.session import SessionStore
-from paper_copilot.session.paths import compute_paper_id, paper_dir
+from paper_copilot.session.paths import compute_paper_id, paper_dir, pdf_cache_dir
 from paper_copilot.shared.cache import cached_system, mark_tools_cached
 from paper_copilot.shared.cost import CostSnapshot, CostTracker, UsageLike, pricing_for_model
 from paper_copilot.shared.embedding_cache import EmbeddingEncoder
@@ -895,6 +900,7 @@ async def run_paper_copilot(
             approval_llm=llm,
             user_request=prompt,
             store=store,
+            data_root=root,
             approval_review_callback=approval_review_callback,
         )
 
@@ -1424,6 +1430,11 @@ def _tool_schema_templates() -> list[dict[str, Any]]:
             InspectPageInput,
         ),
         _tool_schema(
+            "paper_set",
+            paper_set_tool_description(),
+            PaperSetInput,
+        ),
+        _tool_schema(
             "library_edit",
             library_edit_tool_description(),
             LibraryEditInput,
@@ -1452,6 +1463,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "library_files": LibraryFilesInput,
         "library_exec": LibraryExecInput,
         "inspect_page": InspectPageInput,
+        "paper_set": PaperSetInput,
         "library_edit": LibraryEditInput,
         "notes_patch": NotesPatchInput,
     }
@@ -1471,6 +1483,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "library_files": frozenset({"read_library", "write_library"}),
         "library_exec": frozenset({"read_library", "execute_command"}),
         "inspect_page": frozenset({"read_library"}),
+        "paper_set": frozenset({"read_library", "update_job_state"}),
         "library_edit": frozenset({"read_library", "write_library"}),
         "notes_patch": frozenset({"read_library", "write_library"}),
     }
@@ -1482,6 +1495,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "library_files": 16_000,
         "library_exec": 64_000,
         "inspect_page": 16_000,
+        "paper_set": 40_000,
         "library_edit": 40_000,
         "notes_patch": 40_000,
     }
@@ -1588,6 +1602,8 @@ def _dispatch_parsed_tool(
             return _err("library_exec requires the asynchronous tool dispatcher")
         case "inspect_page":
             return _err("inspect_page requires the asynchronous tool dispatcher")
+        case "paper_set":
+            return _err("paper_set requires the asynchronous tool dispatcher")
         case "library_edit":
             return _ok(
                 run_library_edit(
@@ -1618,6 +1634,7 @@ async def dispatch_paper_copilot_tool_async(
     approval_llm: LLMClientProtocol | None = None,
     user_request: str = "",
     store: SessionStore | None = None,
+    data_root: Path | None = None,
     approval_review_callback: ToolApprovalReviewCallback | None = None,
 ) -> ToolResultData:
     if req.name not in _MODEL_TOOL_NAMES:
@@ -1740,6 +1757,19 @@ async def dispatch_paper_copilot_tool_async(
                 inspect_page_run.output,
                 images=inspect_page_run.images,
                 trace_attributes=inspect_page_run.trace_attributes,
+            )
+        elif req.name == "paper_set":
+            if store is None:
+                return _err("paper_set requires an active session")
+            paper_set_run = await run_paper_set(
+                cast(PaperSetInput, parsed_input),
+                context.pdf_dir,
+                pdf_cache_dir(data_root),
+                store,
+            )
+            tool_result = _ok(
+                paper_set_run.output,
+                trace_attributes=paper_set_run.trace_attributes,
             )
         else:
             tool_result = _dispatch_parsed_tool(req.name, parsed_input, context)

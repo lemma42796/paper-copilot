@@ -15,6 +15,7 @@ EntryType = Literal[
     "llm_call",
     "compaction",
     "runtime_state",
+    "application_event",
     "recovery_base",
     "turn_aborted",
     "branch_summary",
@@ -147,6 +148,17 @@ class RuntimeState(BaseModel):
     state: dict[str, Any]
 
 
+class ApplicationEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    ts: str
+    type: Literal["application_event"] = "application_event"
+    parent_id: str | None
+    namespace: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=100)
+    payload: dict[str, Any]
+
+
 class RecoveryBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
@@ -180,6 +192,7 @@ SessionEntry = Annotated[
     | LLMCall
     | Compaction
     | RuntimeState
+    | ApplicationEvent
     | RecoveryBase
     | TurnAborted,
     Field(discriminator="type"),

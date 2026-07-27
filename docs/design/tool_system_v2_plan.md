@@ -1,6 +1,6 @@
 # Paper Copilot 工具系统 v2 计划
 
-状态：方向已确认，Slice 1、Slice 2、Slice 3 和 Slice 4 已完成，Slice 5 尚未开始
+状态：方向已确认，Slice 1–5 已完成，Slice 6 尚未开始
 日期：2026-07-27  
 取代范围：`docs/design/command_first_tool_redesign_handoff.md` 及本文档旧版中的下一代工具建议  
 历史文档：旧文档和 Git 历史只作为决策背景，不再作为 v2 实施依据
@@ -906,7 +906,7 @@ Slice 4 已按单独确认完成。
 `docs/design/inspect_page_codex_source_mapping.md`。当前只完成内部工具、模型
 modality、图像工具结果 transport 和权威 metadata；公开工具列表保持不变，留待
 Slice 6 统一切换。真实 134 页论文的整页、归一化区域、纯文本能力拒绝和越界页手工
-验收均已通过。Slice 5 需要单独确认后开始。
+验收均已通过。
 
 目标：提供论文专用的单页视觉核验。
 
@@ -927,6 +927,12 @@ Slice 6 统一切换。真实 134 页论文的整页、归一化区域、纯文�
 - 全文入库。
 
 ### Slice 5：`paper_set`
+
+状态：已完成。实现位于
+`src/paper_copilot/agents/paper_set_tool.py`，Codex 源码映射见
+`docs/design/paper_set_codex_source_mapping.md`。当前已完成内部工具、append-only
+application event、PDF/cache revision 快照、coverage/stale 和 recovery source
+session 重放；公开工具列表保持不变，留待 Slice 6 统一切换。
 
 目标：修复跨轮集合遗忘和遍历完成性。
 

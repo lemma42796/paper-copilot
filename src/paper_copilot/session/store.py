@@ -15,6 +15,7 @@ from paper_copilot.shared.logging import get_logger
 
 from .paths import paper_dir, session_file
 from .types import (
+    ApplicationEvent,
     Compaction,
     FinalOutput,
     LLMCall,
@@ -249,6 +250,24 @@ class SessionStore:
             ts=_now_ts(),
             parent_id=self._last_id,
             state=state,
+        )
+        self._write(entry)
+        return entry.id
+
+    def append_application_event(
+        self,
+        *,
+        namespace: str,
+        name: str,
+        payload: dict[str, Any],
+    ) -> str:
+        entry = ApplicationEvent(
+            id=_new_id(),
+            ts=_now_ts(),
+            parent_id=self._last_id,
+            namespace=namespace,
+            name=name,
+            payload=payload,
         )
         self._write(entry)
         return entry.id

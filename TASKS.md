@@ -17,8 +17,8 @@ MCP Server 两个入口复用同一 Python Core。
 
 ## Current Work
 
-当前已完成 Codex 四轮基线、工具系统 v2 实施计划和 Slice 1–4。
-Slice 5 尚未开始，需要单独确认后实施。计划见
+当前已完成 Codex 四轮基线、工具系统 v2 实施计划和 Slice 1–5。
+Slice 6 尚未开始，需要单独确认后实施。计划见
 `docs/design/tool_system_v2_plan.md`。
 
 已完成：
@@ -56,7 +56,7 @@ Apple Silicon `rg` 和许可证。该二进制自包含 PCRE2，不再复制 Hom
 PCRE2 dylib 或重写 install name。`.app` 验收已通过签名、固定 artifact 校验、PCRE2
 搜索、Runtime 握手、真实 `library_exec rg`、broker 和权威 trace；trace 中三项外部
 命令均可用。Poppler 仍只解析用户安装后的固定 Homebrew 位置，不开放完整 Homebrew
-PATH。尚未开始 `paper_set`，公开工具切换仍留待 Slice 6。
+PATH。`paper_set` 已在 Slice 5 完成，公开工具切换仍留待 Slice 6。
 
 v2 Slice 3 已完成：加入可审查的内建 `research-papers` Skill，覆盖缓存检查、确定性
 全文提取、`rg`/`awk` 搜索、PDF 页定位、`paper-cache page` 有界证据以及
@@ -73,8 +73,15 @@ v2 Slice 4 已完成：加入内部 `inspect_page`，使用授权 `paper_id`、�
 和渲染前明确拒绝，不执行文本回退。图像 data URL 只进入当前模型上下文，不写入
 session、日志或 trace。真实 134 页论文的整页、局部区域、纯文本能力拒绝和越界页
 手工验收已通过。公开工具列表仍未切换，OCR、批量页面、第二模型和全文入库均未加入。
-源码映射见 `docs/design/inspect_page_codex_source_mapping.md`。Slice 5 需要单独确认后
-开始。
+源码映射见 `docs/design/inspect_page_codex_source_mapping.md`。
+
+v2 Slice 5 已完成：加入内部 `paper_set`，提供 create/derive/record_evidence/status，
+以不可变集合绑定 PDF SHA-256、授权 locator 和当前 cache revision；coverage 只有在
+每篇成员均记录可验证页级 evidence 且没有 stale 成员时才 complete。状态通过通用
+append-only application event 写入 session，并可沿 recovery source session 顺序重放
+重建。cache 缺失时不会触发提取，需先显式运行 `paper-cache ensure`。公开工具列表、
+Research Skill 更新和 macOS 兼容仍留待 Slice 6。源码映射见
+`docs/design/paper_set_codex_source_mapping.md`。
 
 ## Recently Completed
 
@@ -126,7 +133,7 @@ milestone。开始实现前需要先确定目标、范围、验收方式和明�
   组合方式。
 - 排查能力缺口、职责重叠、隐式耦合、安全策略不一致及难以评估的接口。
 - 评估仍保留的旧内部工具应继续复用、迁移还是删除。
-- 已完成四轮多论文 Codex 基线，并将稳定结果集合纳入 v2 Slice 5。
+- 已完成四轮多论文 Codex 基线，并在 v2 Slice 5 实现稳定结果集合。
 - v2 按 `docs/design/tool_system_v2_plan.md` 的 bounded slices 实施；每个 slice 单独确认、
   验收后再进入下一项。
 

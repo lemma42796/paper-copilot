@@ -2,6 +2,7 @@ from .paths import compute_paper_id, paper_dir, session_file
 from .recovery import RecoveredRollout, reconstruct_rollout
 from .store import SessionStore
 from .types import (
+    ApplicationEvent,
     Compaction,
     FinalOutput,
     LLMCall,
@@ -18,6 +19,7 @@ from .types import (
 )
 
 __all__ = [
+    "ApplicationEvent",
     "Compaction",
     "FinalOutput",
     "LLMCall",
