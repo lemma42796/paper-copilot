@@ -1,6 +1,6 @@
 # Paper Copilot 工具系统 v2 计划
 
-状态：方向已确认，Slice 1 和 Slice 2 已完成，Slice 3 尚未开始
+状态：方向已确认，Slice 1、Slice 2 和 Slice 3 已完成，Slice 4 尚未开始
 日期：2026-07-27  
 取代范围：`docs/design/command_first_tool_redesign_handoff.md` 及本文档旧版中的下一代工具建议  
 历史文档：旧文档和 Git 历史只作为决策背景，不再作为 v2 实施依据
@@ -878,6 +878,12 @@ Runtime 握手、真实 `library_exec rg`、broker 和权威 trace。Slice 2 已
 - 其他三个 v2 工具。
 
 ### Slice 3：论文研究 Skill
+
+状态：已完成。实现位于
+`src/paper_copilot/agents/skills/research-papers/SKILL.md`，Codex 源码映射见
+`docs/design/research_skill_codex_source_mapping.md`。Skill 在首次运行、恢复和
+context compaction 后注入，版本与正文 SHA-256 进入权威 trace 和 final payload。
+Slice 4 需要单独确认后开始。
 
 目标：用可审查 Skill 复现 Codex 命令搜索和证据定位工作流。
 

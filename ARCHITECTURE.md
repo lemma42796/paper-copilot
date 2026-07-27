@@ -109,6 +109,11 @@ Paper Copilot 根据用户请求选择工具、聚合证据并生成自然语言
 
 模型只看到四个工具：
 
+运行时还会加载一个只读的内建 `research-papers` Skill，指导 Agent 组合工具完成缓存
+检查、全文命令搜索、PDF 页定位和有界证据绑定。Skill 以应用生成的受信任上下文进入
+首次运行、恢复和压缩后的 turn；名称、版本和正文 SHA-256 写入权威 trace。Skill 不
+授予工具、路径、网络、安装或写入权限。
+
 ### `library_exec`
 
 - 固定工作目录为 Runtime 创建的逻辑 workspace，其中 `library/` 和 `cache/` 只读，

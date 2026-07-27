@@ -21,6 +21,7 @@ uv run pyinstaller \
     --onedir \
     --name "$HELPER_NAME" \
     --paths "$REPO_ROOT/src" \
+    --add-data "$REPO_ROOT/src/paper_copilot/agents/skills:paper_copilot/agents/skills" \
     --collect-all sqlite_vec \
     --exclude-module pandas \
     --exclude-module pytest \

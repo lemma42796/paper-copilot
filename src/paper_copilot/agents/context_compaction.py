@@ -103,6 +103,7 @@ async def compact_history(
     cost: CostTracker,
     store: SessionStore,
     conversation_context: str | None = None,
+    trusted_context_fragments: tuple[str, ...] = (),
 ) -> CompactionResult:
     history_to_compact, retained_history = _partition_history(
         history,
@@ -159,6 +160,7 @@ async def compact_history(
     compacted_history = _build_compacted_history(
         original_request=original_request,
         latest_runtime_context=build_runtime_context(),
+        trusted_context_fragments=trusted_context_fragments,
         summary=validated.parsed,
         retained_history=retained_history,
     )
@@ -345,6 +347,7 @@ def _build_compacted_history(
     latest_runtime_context: str,
     summary: CompactionSummary,
     retained_history: list[dict[str, Any]],
+    trusted_context_fragments: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     anchor = {
         "role": "user",
@@ -366,6 +369,10 @@ def _build_compacted_history(
                 ),
             },
             {"type": "text", "text": latest_runtime_context},
+            *(
+                {"type": "text", "text": fragment}
+                for fragment in trusted_context_fragments
+            ),
         ],
     }
     return [anchor, *retained_history]

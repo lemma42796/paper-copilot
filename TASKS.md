@@ -17,8 +17,9 @@ MCP Server 两个入口复用同一 Python Core。
 
 ## Current Work
 
-当前已完成 Codex 四轮基线、工具系统 v2 实施计划、Slice 1 和 Slice 2。Slice 3
-尚未开始，需要单独确认后实施。计划见 `docs/design/tool_system_v2_plan.md`。
+当前已完成 Codex 四轮基线、工具系统 v2 实施计划、Slice 1、Slice 2 和 Slice 3。
+Slice 4 尚未开始，需要单独确认后实施。计划见
+`docs/design/tool_system_v2_plan.md`。
 
 已完成：
 
@@ -56,6 +57,14 @@ PCRE2 dylib 或重写 install name。`.app` 验收已通过签名、固定 artif
 搜索、Runtime 握手、真实 `library_exec rg`、broker 和权威 trace；trace 中三项外部
 命令均可用。Poppler 仍只解析用户安装后的固定 Homebrew 位置，不开放完整 Homebrew
 PATH。尚未开始其他三个 v2 工具。
+
+v2 Slice 3 已完成：加入可审查的内建 `research-papers` Skill，覆盖缓存检查、确定性
+全文提取、`rg`/`awk` 搜索、PDF 页定位、`paper-cache page` 有界证据以及
+`incomplete`/`unresolved` 表述。Skill 在首次运行、恢复和 context compaction 后重新
+注入，版本和正文 SHA-256 进入权威 trace 与 final payload，并随 `.app` Runtime
+打包。源码映射见 `docs/design/research_skill_codex_source_mapping.md`。当前没有新增
+宿主软件安装能力；Poppler 缺失时 Skill 先请求明确同意，宿主能力不可用时明确停止，
+不会借 `library_exec` 绕过无网络和无权限升级边界。Slice 4 需要单独确认后开始。
 
 ## Recently Completed
 
@@ -122,6 +131,18 @@ milestone。开始实现前需要先确定目标、范围、验收方式和明�
 - 盘点现有 eval suite、golden、retrieval gate、质量启发式和趋势报告的覆盖范围。
 - 检查指标是否对应真实用户任务、证据质量、工具选择、安全性、成本和延迟。
 - 识别不稳定、可被投机优化或缺少判别力的指标，并提出校准、替换或新增方案。
+
+### 4. 支持用户与第三方 Skill
+
+- 在工具系统 v2 完成并冻结后再规划，不并入当前 Slice 4–6。
+- 第一阶段只支持 instruction-only Skill，提供专用本地目录发现、内容查看、格式校验、
+  启用、禁用和删除。
+- 用户或第三方 Skill 不能新增模型工具、扩大 Runtime sandbox、开放网络或路径，也不能
+  获得软件安装和论文库写入权限。
+- 明确 Skill 名称冲突、版本、更新、损坏文件、恢复、trace attribution 和用户信任
+  边界，并设计对应验收。
+- 带脚本、依赖、MCP、connector 或其他可执行能力的 Skill，以及 Plugin 分发，作为后续
+  独立阶段评估，不与 instruction-only 支持同时落地。
 
 ## Deferred
 

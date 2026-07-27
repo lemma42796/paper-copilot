@@ -1,0 +1,5 @@
+interface:
+  display_name: "Research Papers"
+  short_description: "Search PDFs and ground claims in exact pages"
+  default_prompt: "Use $research-papers to investigate my local papers with page-grounded evidence."
+
