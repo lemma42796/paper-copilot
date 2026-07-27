@@ -1,0 +1,20 @@
+#!/usr/bin/env dotslash
+
+{
+  "name": "rg",
+  "source_ref": "openai/codex@61a44880a85d2fd0d8770908dea5733495e571c8",
+  "platforms": {
+    "macos-aarch64": {
+      "size": 1764284,
+      "hash": "sha256",
+      "digest": "3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4",
+      "format": "tar.gz",
+      "path": "ripgrep-15.2.0-aarch64-apple-darwin/rg",
+      "providers": [
+        {
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-apple-darwin.tar.gz"
+        }
+      ]
+    }
+  }
+}

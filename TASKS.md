@@ -17,8 +17,8 @@ MCP Server 两个入口复用同一 Python Core。
 
 ## Current Work
 
-当前已完成 Codex 四轮基线、工具系统 v2 实施计划和 Slice 1。Slice 2 Runtime 手工
-验收已通过，等待 `.app` 打包验收。计划见 `docs/design/tool_system_v2_plan.md`。
+当前已完成 Codex 四轮基线、工具系统 v2 实施计划、Slice 1 和 Slice 2。Slice 3
+尚未开始，需要单独确认后实施。计划见 `docs/design/tool_system_v2_plan.md`。
 
 已完成：
 
@@ -39,7 +39,7 @@ Runtime 打包，也没有添加 Poppler/OCR 依赖。Poppler 打包评估见
 `brew install poppler`。现有 PyMuPDF 同样采用 AGPL/商业双许可证，当前 MIT `.app` 的
 既有分发边界仍需单独解决。
 
-v2 Slice 2 已开始：`library_exec` 采用固定 Codex commit
+v2 Slice 2 已完成：`library_exec` 采用固定 Codex commit
 `61a44880a85d2fd0d8770908dea5733495e571c8` 的 command resolution、sandbox attempt
 和受控输出结构。源码映射见
 `docs/design/library_exec_codex_source_mapping.md`。当前已按映射回改：使用 `cmd`/
@@ -49,9 +49,13 @@ Codex-style 输出、内部权威 trace attributes，以及 command resolution �
 `paper-cache status/ensure/page` 拦截。用户已确认固定授权根、无 PTY/持续 session、
 无权限升级、硬 timeout 和额外 CPU/file-size limit。Runtime 手工验收已通过普通命令、
 三项受控外部命令、权限拒绝、无网络、资源限制、输出截断、broker 和权威 trace。
-`rg` 与 PCRE2 随 `.app` 打包并携带许可证；Poppler 仍只解析用户安装后的固定 Homebrew
-位置，不开放完整 Homebrew PATH。下一步只进行 Slice 2 `.app` 打包验收；尚未开始其他
-三个 v2 工具。
+`.app` 按同一 Codex commit 的 package builder 固定 ripgrep 15.2.0 官方发布包，通过
+manifest 记录 archive size 和 SHA-256，下载缓存命中前必须重新校验，只提取指定
+Apple Silicon `rg` 和许可证。该二进制自包含 PCRE2，不再复制 Homebrew ripgrep、
+PCRE2 dylib 或重写 install name。`.app` 验收已通过签名、固定 artifact 校验、PCRE2
+搜索、Runtime 握手、真实 `library_exec rg`、broker 和权威 trace；trace 中三项外部
+命令均可用。Poppler 仍只解析用户安装后的固定 Homebrew 位置，不开放完整 Homebrew
+PATH。尚未开始其他三个 v2 工具。
 
 ## Recently Completed
 

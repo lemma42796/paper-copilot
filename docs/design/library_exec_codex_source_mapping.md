@@ -1,6 +1,6 @@
 # `library_exec` Codex 源码映射
 
-状态：Runtime 手工验收通过，等待 `.app` 打包验收
+状态：Slice 2 Runtime 与 `.app` 打包验收通过
 日期：2026-07-27  
 Codex source ref：`61a44880a85d2fd0d8770908dea5733495e571c8`  
 Codex worktree：审计时无本地修改
@@ -35,7 +35,7 @@ Codex worktree：审计时无本地修改
 | 返回结构 | `tools/context.rs::ExecCommandToolOutput::code_mode_result` | `output`、`exit_code`、`wall_time_seconds`，持续进程时另有 `session_id` 和 `chunk_id` | 直接采用 + 必要适配 | 返回 `output`、`exit_code`、`wall_time_seconds` 和截断元数据；不返回 session 字段 |
 | trace/hook | `unified_exec.rs`、`unified_exec/exec_command.rs` | pre/post tool payload 保存实际 command 和 response；审批 identity 使用 canonical command、cwd 和权限 | 直接采用 + 必要适配 | 完整输入/输出进入现有权威 trace；稳定 identity 放在 trace，不作为模型输出协议 |
 | PDF 缓存 | Codex source ref 中无论文 TXT 内容寻址缓存 | 无对应领域机制 | Codex 缺失 | 复用 Slice 1 `PdfTextCache`，只增加 `status/ensure/page` 窄化 broker |
-| 受控外部命令供应 | `core/src/exec_env.rs`、`sandboxing/src/seatbelt.rs` | Codex 构造执行环境和文件系统策略，但不负责 Paper Copilot `.app` 中的论文命令依赖 | 必要适配 + Codex 缺失 | PATH 只增加 Runtime 控制的调用级 `bin/`；仅解析 `rg`、`pdfinfo`、`pdftotext`，Seatbelt 只放行对应 Mach-O 文件、symlink chain、依赖目录项和动态库。`.app` 内嵌 `rg`、PCRE2 及许可证；Poppler 仍只使用用户安装后的固定 Homebrew 位置 |
+| 受控外部命令供应 | `core/src/exec_env.rs`、`sandboxing/src/seatbelt.rs`、`scripts/codex_package/{README.md,rg,dotslash.py,ripgrep.py}` | Codex 构造受控 PATH；package builder 从固定 DotSlash manifest 下载官方 ripgrep 发布包，命中缓存前校验 archive size 和 SHA-256，并只提取目标平台 `rg` | 直接采用 + 必要适配 | `.app` 使用同一 Codex source ref 的 ripgrep 15.2.0 macOS ARM64 artifact、size/SHA-256 和缓存语义；PATH 仅增加 Runtime 控制的调用级 `bin/`。`pdfinfo`/`pdftotext` 仍只解析用户安装后的固定 Homebrew 位置，Seatbelt 只放行已解析命令的精确 Mach-O 闭包 |
 | CPU/file-size `ulimit` | Codex unified exec 未发现对应通用限制；`process-hardening` 只关闭 core dump | Codex 缺失 | Codex 缺失 | 用户已明确确认作为 Paper Copilot 一次性论文命令的额外资源边界保留 |
 
 ## 3. 当前实现复核
@@ -75,9 +75,10 @@ Codex worktree：审计时无本地修改
 - 保留一次性命令的硬 `timeout_ms`；
 - 当前额外 CPU/file-size `limit` wrapper 是 Codex unified exec 中没有的设计，作为
   明确的 Paper Copilot 专用资源边界保留。
-- `rg` 作为受控 Runtime 依赖随 `.app` 分发；其 PCRE2 传递依赖使用 app 内
-  `@loader_path`，并携带许可证。Poppler 不随 `.app` 分发，只解析用户安装后的固定
-  Homebrew `pdfinfo`/`pdftotext`。
+- `rg` 作为受控 Runtime 依赖随 `.app` 分发，供应方式直接采用 Codex package builder
+  的固定官方 artifact、archive size/SHA-256 校验和临时缓存。该 artifact 自包含
+  PCRE2，并携带 ripgrep 与 PCRE2 许可证。Poppler 不随 `.app` 分发，只解析用户安装后
+  的固定 Homebrew `pdfinfo`/`pdftotext`。
 
-上述差异已于 2026-07-27 获得用户确认。Runtime 手工验收已通过；下一步只进行
-`.app` 打包验收，不开始其他 v2 slice。
+上述差异已于 2026-07-27 获得用户确认。Runtime 手工验收与 `.app` 打包验收均已通过；
+Slice 2 完成，不自动开始其他 v2 slice。

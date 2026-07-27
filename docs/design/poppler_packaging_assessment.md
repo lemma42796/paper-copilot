@@ -38,9 +38,10 @@ Homebrew Poppler keg 本身约 33 MB，动态库 install name 指向
 `/opt/homebrew/opt/...`。直接复制两个命令不会形成可运行的独立包；需要收集依赖、
 重写 install name、固定配置文件和字体发现行为，并对完整闭包重新签名。
 
-现有 `scripts/build_macos_app.sh` 只使用 PyInstaller 收集 Python Runtime 和
-`sqlite_vec`，没有第三方 Mach-O 依赖闭包收集、install-name 重写、许可证清单或对应
-源码发布流程。
+现有 `scripts/build_macos_app.sh` 使用 PyInstaller 收集 Python Runtime 和
+`sqlite_vec`，并按固定 Codex package manifest 下载、校验和打包自包含的 `rg`。
+这不提供 Poppler 的第三方 Mach-O 依赖闭包收集、install-name 重写或对应源码发布
+流程，也不改变本评估的 Poppler 分发结论。
 
 ## 已完成的运行时验证
 

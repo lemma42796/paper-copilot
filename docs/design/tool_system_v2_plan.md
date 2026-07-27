@@ -1,6 +1,6 @@
 # Paper Copilot 工具系统 v2 计划
 
-状态：方向已确认，Slice 1 已完成，Slice 2 Runtime 验收通过，等待 `.app` 打包验收
+状态：方向已确认，Slice 1 和 Slice 2 已完成，Slice 3 尚未开始
 日期：2026-07-27  
 取代范围：`docs/design/command_first_tool_redesign_handoff.md` 及本文档旧版中的下一代工具建议  
 历史文档：旧文档和 Git 历史只作为决策背景，不再作为 v2 实施依据
@@ -854,7 +854,10 @@ v2 不以 embedding 消融为前置条件。只有文本命令检索未达到门
 找到对应机制的部分已标记为 Paper Copilot 专用适配，必要差异已获用户确认，现有实现
 也已按映射回改。Runtime 手工验收已覆盖普通命令、`rg`、`pdfinfo`、`pdftotext`、
 缓存搜索、权限拒绝、无网络、timeout、进程组终止、文件大小限制、head-tail 输出、
-broker 和权威 trace。下一步只进行 `.app` 打包验收。
+broker 和权威 trace。`.app` 使用 Codex package builder 同源的固定 ripgrep 15.2.0
+官方发布包、archive size/SHA-256 校验和临时缓存，打包验收已通过签名、PCRE2 搜索、
+Runtime 握手、真实 `library_exec rg`、broker 和权威 trace。Slice 2 已完成；Slice 3
+需要单独确认后开始。
 
 范围：
 
