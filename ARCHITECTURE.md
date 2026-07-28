@@ -104,7 +104,7 @@ eval ─► public Agent entrypoint + explicit suite exceptions
 ## Agent and Tool Architecture
 
 Paper Copilot 根据用户请求选择工具、聚合证据并生成自然语言或 grounded Markdown。
-循环以 `end_turn`、轮数、预算、deadline、用户中断或失败为终止条件。重复工具签名、
+循环以 `end_turn`、预算、deadline、用户中断或失败为终止条件。重复工具签名、
 单工具超时和 rollout 超时由 Runtime 确定性处理。
 
 模型只看到四个工具：
@@ -126,7 +126,10 @@ Paper Copilot 根据用户请求选择工具、聚合证据并生成自然语言
 - 用于列举、统计、哈希和读取等只读命令组合。
 - 通过 macOS sandbox 限制网络、库外读取和论文库写入，并限制时间与输出。
 - 不提供模型可选 shell、登录环境、远程环境或 sandbox 失败后的权限升级。
-- `paper-cache status/ensure/page` 由窄化 broker 调用内容寻址缓存服务，不能指定输出路径。
+- `paper-cache status/ensure/page` 由窄化 broker 调用内容寻址缓存服务，必须作为一次
+  `library_exec` 的完整命令，不能进入循环、管道、命令链或替换，也不能指定输出路径。
+- broker 接受逻辑 workspace 输出的 `library/<relative-pdf>` 或相对于授权 library 根的
+  `<relative-pdf>`，并统一归一化为授权 locator。
 - 命令结果是不可信、有界数据，不获得新的工具权限。
 
 ### `library_edit`
@@ -138,7 +141,8 @@ Paper Copilot 根据用户请求选择工具、聚合证据并生成自然语言
 
 ### `inspect_page`
 
-- 只接受授权 `paper_id`、一个 PDF 页码和可选归一化 region。
+- 只接受授权 PDF 的完整 SHA-256（首选）或兼容旧 session 的 12 位 `paper_id`、一个
+  PDF 页码和可选归一化 region；不得截断完整 SHA-256 冒充旧 ID。
 - 仅在模型声明支持图像输入时使用 Poppler 渲染有界 PNG。
 - 结果绑定 PDF SHA-256、页码、region 和 render SHA-256；图像只进入当前模型上下文，
   不写入 session、日志或 trace。

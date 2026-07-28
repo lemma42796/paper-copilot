@@ -39,7 +39,7 @@ def test_end_turn_terminates_with_cost_snapshot() -> None:
         ]
     )
     cost = CostTracker()
-    cfg = LoopConfig(max_turns=5, max_budget_cny=10.0)
+    cfg = LoopConfig(max_budget_cny=10.0)
 
     async def dispatch_tool(req: ToolUseRequest) -> ToolResultData:
         raise AssertionError("dispatch_tool must not be called on end_turn path")
@@ -68,53 +68,6 @@ def test_end_turn_terminates_with_cost_snapshot() -> None:
     assert term.cost.output_tokens == 10
 
 
-def test_max_turns_terminates() -> None:
-    def tool_use_response(idx: int) -> MockResponse:
-        return MockResponse(
-            content=[
-                TextBlock(text=f"turn {idx}"),
-                ToolUseBlock(id=f"t{idx}", name="search", input={"i": idx}),
-            ],
-            stop_reason="tool_use",
-            usage={"input_tokens": 10, "output_tokens": 2},
-        )
-
-    llm = MockLLM([tool_use_response(1), tool_use_response(2), tool_use_response(3)])
-    cfg = LoopConfig(max_turns=2, max_budget_cny=10.0)
-
-    async def dispatch_tool(req: ToolUseRequest) -> ToolResultData:
-        return ToolResultData(output=f"ok-{req.id}")
-
-    async def run() -> list[Event]:
-        collected: list[Event] = []
-        async for event in run_agent_loop(
-            messages=[{"role": "user", "content": "go"}],
-            tools=[],
-            config=cfg,
-            llm=llm,
-            dispatch_tool=dispatch_tool,
-            cost=None,
-        ):
-            collected.append(event)
-        return collected
-
-    events = asyncio.run(run())
-
-    assert [type(e).__name__ for e in events] == [
-        "AssistantMessage",
-        "ToolUse",
-        "ToolResult",
-        "AssistantMessage",
-        "ToolUse",
-        "ToolResult",
-        "Terminated",
-    ]
-    term = events[-1]
-    assert isinstance(term, Terminated)
-    assert term.reason == "max_turns"
-    assert term.cost is None
-
-
 def test_max_budget_terminates_at_exact_threshold() -> None:
     boundary_usage = {"input_tokens": 100_000, "output_tokens": 0}
     probe = CostTracker()
@@ -138,7 +91,7 @@ def test_max_budget_terminates_at_exact_threshold() -> None:
         ]
     )
     cost = CostTracker()
-    cfg = LoopConfig(max_turns=10, max_budget_cny=budget_at_exactly_one_turn)
+    cfg = LoopConfig(max_budget_cny=budget_at_exactly_one_turn)
 
     async def dispatch_tool(req: ToolUseRequest) -> ToolResultData:
         return ToolResultData(output="ok")
@@ -188,7 +141,7 @@ def test_cancel_midflight_yields_terminated() -> None:
             ),
         ]
     )
-    cfg = LoopConfig(max_turns=10, max_budget_cny=10.0)
+    cfg = LoopConfig(max_budget_cny=10.0)
 
     async def dispatch_tool(req: ToolUseRequest) -> ToolResultData:
         return ToolResultData(output="ok")
@@ -245,7 +198,7 @@ def test_tool_use_round_trip_preserves_ids_and_error_flag() -> None:
             ),
         ]
     )
-    cfg = LoopConfig(max_turns=5, max_budget_cny=10.0)
+    cfg = LoopConfig(max_budget_cny=10.0)
 
     async def dispatch_tool(req: ToolUseRequest) -> ToolResultData:
         if req.id == "t-err":
@@ -324,7 +277,7 @@ def test_tool_use_history_is_serialized_for_next_llm_call() -> None:
         async for event in run_agent_loop(
             messages=[{"role": "user", "content": "go"}],
             tools=[],
-            config=LoopConfig(max_turns=3, max_budget_cny=10.0),
+            config=LoopConfig(max_budget_cny=10.0),
             llm=llm,
             dispatch_tool=dispatch_tool,
         ):
@@ -370,7 +323,7 @@ def test_loop_config_passes_max_tokens_to_llm() -> None:
         async for event in run_agent_loop(
             messages=[{"role": "user", "content": "go"}],
             tools=[],
-            config=LoopConfig(max_turns=3, max_budget_cny=10.0, max_tokens=3000),
+            config=LoopConfig(max_budget_cny=10.0, max_tokens=3000),
             llm=llm,
             dispatch_tool=dispatch_tool,
         ):
@@ -428,7 +381,7 @@ def test_repeated_identical_tool_call_is_aborted_before_third_dispatch(
             async for _ in run_agent_loop(
                 messages=[{"role": "user", "content": "repeat"}],
                 tools=[],
-                config=LoopConfig(max_turns=5, max_budget_cny=10.0),
+                config=LoopConfig(max_budget_cny=10.0),
                 llm=llm,
                 dispatch_tool=dispatch_tool,
             ):
@@ -488,7 +441,7 @@ def test_different_tool_input_resets_consecutive_repeat_guard() -> None:
         async for event in run_agent_loop(
             messages=[{"role": "user", "content": "repeat safely"}],
             tools=[],
-            config=LoopConfig(max_turns=6, max_budget_cny=10.0),
+            config=LoopConfig(max_budget_cny=10.0),
             llm=llm,
             dispatch_tool=dispatch_tool,
         ):
@@ -541,7 +494,6 @@ def test_tool_timeout_records_failed_tool_trace(tmp_path: Path) -> None:
                 messages=[{"role": "user", "content": "read"}],
                 tools=[],
                 config=LoopConfig(
-                    max_turns=3,
                     max_budget_cny=10.0,
                     tool_timeout_seconds=0.01,
                 ),

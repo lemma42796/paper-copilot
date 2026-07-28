@@ -18,9 +18,20 @@ MCP Server 两个入口复用同一 Python Core。
 ## Current Work
 
 当前已完成 Codex 四轮基线、工具系统 v2 实施计划和 Slice 1–6。
-下一步先执行一次完整 v2 四轮预检：使用全新 Paper Copilot 会话和冻结 query，复用
-既有 Codex 基线，保存完整工具 trace，并对照私有 Gold 报告质量、跨轮约束、遍历完成、
-引用和工具行为。当前不重复运行 Codex，也不执行完整消融。
+首次 v2 Query 1 预检在进入质量评测前暴露了 Unicode 论文目录 sandbox 授权、
+macOS 客户端沿用默认五篇预算，以及空 `paper_set` 真空完成三个阻塞问题。纠正实现
+已落地。第二次 Query 1 证明目录和 14 篇预算已生效，但被 Paper Copilot 专有的固定
+`max_turns` 截断；该非 Codex 终止条件现已从 API、job、Runtime、Agent loop 和 trace
+删除。第三次 Query 1 随后暴露 Poppler 解析规则分裂、broker 复合命令误用、
+`inspect_page` ID 协议不一致和 Skill 版本常量漂移；对应修正已落地。第四次 Query 1
+中 Skill v4 已生效，但 broker 将模型从 workspace 发现的
+`library/<relative-pdf>` 错误地再次拼到 library 根，导致模型绕过 cache 并输出无页码
+猜测。路径现已归一化，Skill 更新为 version 5，明确 call-local scratch、broker 失败
+不得退化为临时全文脚本、全量 coverage 未完成不得输出填充后的分类表。确定性
+end-turn coverage guard 尚待按 Codex-first 设计确认。下一步先用同一冻结 Query 1 和
+全新 Paper Copilot 会话重跑端到端验收。通过后再继续完整四轮预检，复用既有 Codex
+基线，保存完整工具 trace，并对照私有 Gold 报告质量、跨轮约束、遍历完成、引用和工具
+行为。当前不重复运行 Codex，也不执行完整消融。
 
 该预检不等于完成 Slice 7。三次重复、完整消融和正式冻结结论继续留在 Slice 7，是否
 投入由预检结果和后续用户确认决定。计划见 `docs/design/tool_system_v2_plan.md`。
@@ -87,12 +98,15 @@ append-only application event 写入 session，并可沿 recovery source session
 Research Skill 更新和 macOS 兼容仍留待 Slice 6。源码映射见
 `docs/design/paper_set_codex_source_mapping.md`。
 
-v2 Slice 6 已完成实施：模型公开表面切换为 `library_exec`、`inspect_page`、`paper_set`
-和 `library_edit`；异步 Runtime 在 schema 解析和执行前拒绝未公开旧名称。内建
-`research-papers` Skill 更新为 version 2，加入不可变集合覆盖、视觉核验和不可信文件名
-处理规则。macOS 继续复用绑定 tool call、参数、目标快照和 diff 的通用审批协议，旧实现
-只作为不可由模型调用的回滚代码保留。架构说明和 Codex 源码映射已同步；Slice 7 的三次
-冻结评测与消融尚未开始。源码映射见
+v2 Slice 6 已完成公开表面实施：模型公开表面切换为 `library_exec`、`inspect_page`、
+`paper_set` 和 `library_edit`；异步 Runtime 在 schema 解析和执行前拒绝未公开旧名称。
+首次 Query 1 端到端预检后已修正 Unicode sandbox 路径、客户端论文预算传递和空集合
+完成语义。第二次预检确认宿主 Poppler 可用，但 cache、命令 sandbox 与页渲染各自使用
+不同的可执行文件解析规则，模型还把 broker 当成 PATH 命令写入循环，并截断 SHA-256
+调用 `inspect_page`；现已统一解析规则、拒绝复合 broker 命令，并允许页检查直接接收
+完整 SHA-256。内建 `research-papers` Skill 当前更新为 version 5，版本从同一正文解析，
+不再维护重复常量。该纠正版本尚待用冻结 Query 1 重跑验收，因此 Slice 6 尚未重新冻结。
+旧实现只作为不可由模型调用的回滚代码保留；Slice 7 的三次冻结评测与消融尚未开始。源码映射见
 `docs/design/tool_surface_v2_codex_source_mapping.md`。
 
 ## Recently Completed

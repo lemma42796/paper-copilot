@@ -648,12 +648,14 @@ struct ChatJobCreateRequest: Encodable {
     let pdfDir: String
     let conversationID: String?
     let approvalMode: ApprovalMode
+    let maxPapers: Int
 
     enum CodingKeys: String, CodingKey {
         case message
         case pdfDir = "pdf_dir"
         case conversationID = "conversation_id"
         case approvalMode = "approval_mode"
+        case maxPapers = "max_papers"
     }
 }
 

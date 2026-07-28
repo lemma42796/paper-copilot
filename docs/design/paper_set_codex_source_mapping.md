@@ -3,7 +3,8 @@
 状态：Slice 5 实现完成
 日期：2026-07-27  
 Codex source ref：`61a44880a85d2fd0d8770908dea5733495e571c8`  
-Codex worktree：审计时使用该 commit 的 GitHub archive，无本地修改
+Codex worktree：当前固定为 `/Users/a123/Documents/agent学习/codex`；Slice 5 审计时
+使用该 commit 的 GitHub archive，无本地修改
 
 ## 1. 目的
 

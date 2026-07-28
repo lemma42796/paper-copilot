@@ -3,7 +3,7 @@
 状态：Slice 4 实现与手工验收完成
 日期：2026-07-27  
 Codex source ref：`61a44880a85d2fd0d8770908dea5733495e571c8`  
-Codex worktree：审计时无本地修改
+Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地修改
 
 ## 1. 目的
 
@@ -25,14 +25,15 @@ Codex worktree：审计时无本地修改
 | 调用前能力检查 | `core/src/tools/handlers/view_image.rs` | handler 在读取文件前检查 `model_info.input_modalities`；不支持图像时返回明确错误 | 直接采用 | `inspect_page` 在解析授权 PDF 和渲染前检查 `image` capability；纯文本模型不执行文本回退 |
 | 图像工具结果 | `core/src/tools/handlers/view_image.rs::ViewImageOutput` | 返回 `FunctionCallOutputContentItem::InputImage`，使用 data URL；日志预览不包含图像正文 | 直接采用 + 必要适配 | Agent 内部工具结果增加有界 image content；Chat Completions transport 在对应 tool result 后追加 image user content；session、日志和 trace 不保存 base64 |
 | 图像 detail | `core/src/tools/handlers/view_image.rs`、`core/src/original_image_detail.rs` | 默认 `high`，只有模型能力允许时接受 `original` | 必要适配 | Slice 4 只提供固定有界渲染，不开放 `detail` 参数或原图无界传输 |
-| 文件授权 | `core/src/tools/handlers/view_image.rs` | 相对 environment cwd 解析路径，并通过 filesystem sandbox 读取 | 必要适配 | 模型不提供路径；`paper_id` 只能解析到 macOS 已授权论文库内的 PDF |
+| 文件授权 | `core/src/tools/handlers/view_image.rs` | 相对 environment cwd 解析路径，并通过 filesystem sandbox 读取 | 必要适配 | 模型不提供路径；首选完整 PDF SHA-256，兼容旧 session 的 12 位 `paper_id`，两者都只能解析到 macOS 已授权论文库内的 PDF |
 | UI/trace 事件 | `core/src/tools/handlers/view_image.rs` | 图像查看作为独立 turn item，trace/log 只记录路径或有界预览，不记录 data URL | 必要适配 | 复用现有 tool call/session/trace；记录 paper、page、region、PDF/render hash、尺寸和字节数，不记录图片正文或完整本地路径 |
 | 单页 PDF 渲染 | 固定 Codex source ref 无论文 PDF 页面渲染工具 | 无对应领域机制 | Codex 缺失 | 使用既有 Poppler substrate 的 `pdftoppm`，只渲染一个已验证页码和可选归一化区域 |
 | 论文证据 | 固定 Codex source ref 无 `paper_id`、PDF revision 或页级 evidence | 无对应领域机制 | Codex 缺失 | 返回绑定 PDF SHA-256、页码、可选区域和 render SHA-256 的最小 evidence metadata |
 
 ## 3. Slice 4 固定边界
 
-- 单次只处理一个 `paper_id` 的一页；
+- 单次只处理一个完整 PDF SHA-256（首选）或旧 12 位 `paper_id` 的一页；不得截断
+  SHA-256 冒充旧 ID；
 - `region` 使用归一化页面坐标；
 - 渲染像素、字节数、执行时间和模型输入大小均有硬上限；
 - 不接受任意路径，不读取授权论文库之外的 PDF；

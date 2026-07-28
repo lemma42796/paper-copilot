@@ -339,7 +339,8 @@ final class AppModel: ObservableObject {
                     message: trimmed,
                     pdfDir: libraryURL.path,
                     conversationID: conversationID,
-                    approvalMode: approvalMode
+                    approvalMode: approvalMode,
+                    maxPapers: paperBudget(for: libraryURL)
                 )
                 upsert(record)
                 selectedConversationID = record.spec.conversationID ?? record.id
@@ -350,6 +351,26 @@ final class AppModel: ObservableObject {
             isSubmitting = false
         }
         return true
+    }
+
+    private func paperBudget(for libraryURL: URL) -> Int {
+        guard let enumerator = FileManager.default.enumerator(
+            at: libraryURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else {
+            return 1
+        }
+        let pdfCount = enumerator.reduce(into: 0) { count, entry in
+            guard
+                let url = entry as? URL,
+                url.pathExtension.caseInsensitiveCompare("pdf") == .orderedSame
+            else {
+                return
+            }
+            count += 1
+        }
+        return max(pdfCount, 1)
     }
 
     func interrupt(_ jobID: String) {

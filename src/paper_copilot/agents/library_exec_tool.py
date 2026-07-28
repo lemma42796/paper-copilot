@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -22,6 +23,7 @@ from paper_copilot.session.paths import pdf_cache_dir
 from paper_copilot.shared.errors import KnowledgeError, PaperCopilotError
 from paper_copilot.shared.logging import get_logger
 from paper_copilot.shared.pdf_cache import PdfCacheLookup, PdfTextCache
+from paper_copilot.shared.poppler import find_poppler_executable
 
 _SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
 _SHELL = Path("/bin/zsh")
@@ -29,6 +31,9 @@ _COMMAND_MAX_CHARS = 8_000
 _RAW_OUTPUT_MAX_BYTES = 64_000
 _DEFAULT_OUTPUT_MAX_TOKENS = 10_000
 _MAX_OUTPUT_MAX_TOKENS = 10_000
+_PAPER_CACHE_COMMAND_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_.-])paper-cache(?![A-Za-z0-9_.-])"
+)
 _APPROX_BYTES_PER_TOKEN = 4
 _READ_CHUNK_BYTES = 8_192
 _DEFAULT_TIMEOUT_MS = 15_000
@@ -408,7 +413,11 @@ def _resolve_external_commands() -> _ExternalCommandSet:
     sandbox_files: set[Path] = set()
     sandbox_directories: set[Path] = set()
     for command_name in ("rg", "pdfinfo", "pdftotext"):
-        executable = _first_external_command_candidate(command_name)
+        executable = (
+            find_poppler_executable(command_name)
+            if command_name in {"pdfinfo", "pdftotext"}
+            else _first_external_command_candidate(command_name)
+        )
         if executable is None:
             continue
         try:
@@ -591,10 +600,16 @@ def _intercept_paper_cache(
     try:
         arguments = shlex.split(resolved_command.source_cmd, posix=True)
     except ValueError as error:
-        if resolved_command.source_cmd.lstrip().startswith("paper-cache"):
+        if _PAPER_CACHE_COMMAND_PATTERN.search(resolved_command.source_cmd):
             raise KnowledgeError(f"invalid paper-cache command: {error}") from error
         return None
     if not arguments or arguments[0] != "paper-cache":
+        if _PAPER_CACHE_COMMAND_PATTERN.search(resolved_command.source_cmd):
+            raise KnowledgeError(
+                "paper-cache must be the entire library_exec cmd; do not place it "
+                "inside a shell loop, pipeline, chained command, substitution, or "
+                "find -exec"
+            )
         return None
     if len(arguments) < 2:
         raise KnowledgeError("paper-cache requires status, ensure, or page")
@@ -705,7 +720,13 @@ def _resolve_library_pdf(
 ) -> tuple[Path, str]:
     locator = Path(relative_pdf)
     if locator.is_absolute() or ".." in locator.parts:
-        raise KnowledgeError("paper-cache requires a library-relative PDF path")
+        raise KnowledgeError(
+            "paper-cache requires a PDF path relative to the authorized library"
+        )
+    if locator.parts[:1] == ("library",):
+        locator = Path(*locator.parts[1:])
+    if not locator.parts:
+        raise KnowledgeError("paper-cache requires a PDF path")
     candidate = (library_root / locator).resolve()
     try:
         source_locator = candidate.relative_to(library_root).as_posix()
@@ -946,4 +967,4 @@ def _render_macos_seatbelt(policy: _SandboxPolicy) -> str:
 
 
 def _sandbox_string(path: Path) -> str:
-    return json.dumps(str(path), ensure_ascii=True)
+    return json.dumps(str(path), ensure_ascii=False)

@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import os
-import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -16,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from paper_copilot.agents.loop import ToolResultImage
 from paper_copilot.session.paths import compute_paper_id
 from paper_copilot.shared.errors import KnowledgeError
+from paper_copilot.shared.poppler import find_poppler_executable
 
 __all__ = [
     "InspectPageInput",
@@ -57,9 +56,12 @@ class InspectPageInput(BaseModel):
 
     paper_id: str = Field(
         min_length=12,
-        max_length=12,
-        pattern=r"^[0-9a-f]{12}$",
-        description="Stable paper_id returned by a Paper Copilot tool.",
+        max_length=64,
+        pattern=r"^(?:[0-9a-f]{12}|[0-9a-f]{64})$",
+        description=(
+            "Full PDF SHA-256 returned by paper-cache or paper_set. Legacy "
+            "12-character Paper Copilot IDs remain accepted."
+        ),
     )
     page: int = Field(
         ge=1,
@@ -107,10 +109,12 @@ def configured_input_modalities() -> frozenset[str]:
 def inspect_page_tool_description() -> str:
     return (
         "Visually inspect one page or normalized region of an authorized local PDF. "
-        "Use this only after another tool has identified an exact paper_id and PDF "
-        "page. The Runtime renders a bounded PNG with Poppler and binds it to the "
-        "PDF hash, page, region, and render hash. The configured model must support "
-        "image inputs. This tool does not perform OCR or whole-document ingestion."
+        "Use this only after another tool has identified the full PDF SHA-256 "
+        "(preferred) or a legacy 12-character paper_id, plus the exact PDF page. "
+        "Do not truncate a SHA-256. The Runtime renders a bounded PNG with Poppler "
+        "and binds it to the PDF hash, page, region, and render hash. The configured "
+        "model must support image inputs. This tool does not perform OCR or "
+        "whole-document ingestion."
     )
 
 
@@ -228,7 +232,12 @@ def _resolve_paper_path(paper_id: str, library_root: Path) -> Path:
             resolved_path.relative_to(library_root)
         except ValueError:
             continue
-        if compute_paper_id(resolved_path) == paper_id:
+        resolved_paper_id = (
+            _sha256_file(resolved_path)
+            if len(paper_id) == 64
+            else compute_paper_id(resolved_path)
+        )
+        if resolved_paper_id == paper_id:
             matches.append(resolved_path)
     if not matches:
         raise KnowledgeError(f"no authorized PDF matched paper_id {paper_id}")
@@ -240,15 +249,11 @@ def _resolve_paper_path(paper_id: str, library_root: Path) -> Path:
 
 
 def _resolve_poppler_executable(name: str) -> Path:
-    bundled_candidate = Path(sys.executable).resolve().parent / "bin" / name
-    candidates = (
-        bundled_candidate,
-        Path("/opt/homebrew/bin") / name,
-        Path("/usr/local/bin") / name,
-    )
-    for candidate in candidates:
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return candidate.resolve()
+    if name not in {"pdfinfo", "pdftoppm"}:
+        raise KnowledgeError(f"unsupported inspect_page Poppler command: {name}")
+    executable = find_poppler_executable(name)
+    if executable is not None:
+        return executable
     raise KnowledgeError(
         f"{name} is unavailable; inspect_page requires a user-installed Poppler"
     )

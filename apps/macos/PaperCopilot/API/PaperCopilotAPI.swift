@@ -51,7 +51,8 @@ final class PaperCopilotAPI {
         message: String,
         pdfDir: String,
         conversationID: String?,
-        approvalMode: ApprovalMode
+        approvalMode: ApprovalMode,
+        maxPapers: Int
     ) async throws -> ChatJobRecord {
         var request = URLRequest(url: try url(path: ["jobs"]))
         request.httpMethod = "POST"
@@ -61,7 +62,8 @@ final class PaperCopilotAPI {
                 message: message,
                 pdfDir: pdfDir,
                 conversationID: conversationID,
-                approvalMode: approvalMode
+                approvalMode: approvalMode,
+                maxPapers: maxPapers
             )
         )
         return try await send(request)

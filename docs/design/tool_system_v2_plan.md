@@ -109,6 +109,8 @@ read_paper
 
 Slice 2 的源码映射固定到本机 Codex commit
 `61a44880a85d2fd0d8770908dea5733495e571c8`，借鉴以下 Codex Core 机制：
+固定本机 worktree 为 `/Users/a123/Documents/agent学习/codex`；设计或实现 Agent
+基础设施前应先在该路径检查对应源码，不再重新猜测或下载 source ref。
 
 逐项审计见 `docs/design/library_exec_codex_source_mapping.md`。该映射是 Slice 2 的实现
 门槛；映射与本文冲突时先修订计划，不得静默选择其中一份。
@@ -569,7 +571,7 @@ manifest 至少记录：
 
 ### 6.3 缓存命令
 
-Runtime 在 `library_exec` 的受限 PATH 中提供确定性 `paper-cache` 命令：
+Runtime 在 `library_exec` 完成 shell resolution 后拦截确定性 `paper-cache` 命令：
 
 ```text
 paper-cache status <relative-pdf>
@@ -577,8 +579,12 @@ paper-cache ensure <relative-pdf>
 paper-cache page <paper-id> <page>
 ```
 
-这些是命令行原语，不是模型工具。`ensure` 只负责 hash、缓存命中判断、确定性文字提取和
-原子发布，不执行 OCR、LLM、切片、embedding、结构化字段或论文搜索。
+这些是 broker 命令原语，不是模型工具或 sandbox PATH 中的可执行文件。每次操作必须
+占据一次 `library_exec.cmd` 的完整命令，不允许放入循环、管道、命令链、命令替换或
+`find -exec`。`ensure` 只负责 hash、缓存命中判断、确定性文字提取和原子发布，不执行
+OCR、LLM、切片、embedding、结构化字段或论文搜索。
+`status/ensure` 同时接受 workspace 列举返回的 `library/<relative-pdf>` 和 library-root
+relative 的 `<relative-pdf>`，归一化后仍必须解析在授权根内。
 
 `library_exec` 对缓存只有读取能力；缓存写入由 `paper-cache` 的窄化 broker 完成，模型
 不能指定应用数据输出路径。
@@ -677,6 +683,10 @@ optional region
 - 渲染像素和图片字节；
 - 命令长度与管道复杂度；
 - attempt 总预算。
+
+Agent loop 不设置固定模型回合数。它与 Codex 一样由模型 `end_turn`、总预算、job
+deadline、用户中断、确定性 guard 或失败终止；工具调用次数只进入 trace 和评测指标，
+不作为运行时截断条件。
 
 ### 8.3 命令策略
 
@@ -972,9 +982,13 @@ session 重放；公开工具列表保持不变，留待 Slice 6 统一切换。
 
 ### Slice 6：公开工具切换与安全收敛
 
-状态：已完成实施。模型公开表面已切换为四个 v2 工具，内建 Skill 已更新为 version 2，
-macOS 通用审批协议已核对兼容，异步 Runtime 拒绝未公开旧名称，架构和 Codex 源码映射
-已同步。旧实现按计划保留为不可由模型调用的回滚代码。源码映射见
+状态：已完成公开表面实施。两次 Query 1 端到端预检后已修正 Unicode sandbox 路径、
+客户端论文预算传递、空集合完成语义、Poppler 解析规则分裂、broker 复合命令误用和
+`inspect_page` 完整 SHA-256 传递。第四次 Query 1 又修正了 `library/` 逻辑路径重复
+拼接以及 broker 失败后退化为临时全文脚本的问题。内建 Skill 已更新为 version 5，
+版本直接从正文解析。
+纠正版本尚待用冻结 Query 1 重跑验收，因此本 Slice 尚未重新冻结。macOS 通用审批协议已
+核对兼容，异步 Runtime 拒绝未公开旧名称，旧实现按计划保留为不可由模型调用的回滚代码。源码映射见
 `docs/design/tool_surface_v2_codex_source_mapping.md`。
 
 目标：公开四个 v2 工具，并冻结统一安全边界。

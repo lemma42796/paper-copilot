@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,6 +15,7 @@ __all__ = [
     "PopplerExtraction",
     "PopplerIdentity",
     "PopplerTextExtractor",
+    "find_poppler_executable",
 ]
 
 _DEFAULT_TIMEOUT_SECONDS = 120.0
@@ -22,6 +25,27 @@ _EXTRACTION_PARAMETERS = {
     "eol": "unix",
     "page_breaks": "form_feed",
 }
+
+
+def find_poppler_executable(name: str) -> Path | None:
+    if name not in {"pdfinfo", "pdftotext", "pdftoppm"}:
+        return None
+    discovered = shutil.which(name)
+    bundled_candidate = Path(sys.executable).resolve().parent / "bin" / name
+    candidates = (
+        Path(discovered) if discovered is not None else None,
+        bundled_candidate,
+        Path("/opt/homebrew/bin") / name,
+        Path("/usr/local/bin") / name,
+    )
+    for candidate in candidates:
+        if (
+            candidate is not None
+            and candidate.is_file()
+            and os.access(candidate, os.X_OK)
+        ):
+            return candidate.resolve()
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,10 +141,12 @@ class PopplerTextExtractor:
             if candidate.is_file():
                 return candidate
             raise PdfCacheError(f"configured {name} executable does not exist")
-        discovered = shutil.which(name)
+        if name not in {"pdfinfo", "pdftotext"}:
+            raise PdfCacheError(f"unsupported Poppler executable: {name}")
+        discovered = find_poppler_executable(name)
         if discovered is None:
-            raise PdfCacheError(f"{name} is not available on the runtime PATH")
-        return Path(discovered).resolve()
+            raise PdfCacheError(f"{name} is not available to the runtime")
+        return discovered
 
     async def _read_version(self, executable: Path) -> str:
         _stdout, stderr = await self._run(executable, "-v")

@@ -54,8 +54,10 @@ class PaperSetInput(BaseModel):
         min_length=1,
         max_length=2_000,
         description=(
-            "Discovery query for create, or the narrowed constraint for derive. "
-            "Omit on derive to inherit the parent fingerprint."
+            "Scope description for create, or the narrowed constraint for derive. "
+            "This records a fingerprint and does not discover papers; create must "
+            "also provide every authorized paper ID. Omit on derive to inherit the "
+            "parent fingerprint."
         ),
     )
     paper_ids: list[str] = Field(
@@ -275,6 +277,11 @@ async def _create_set(
     _reject_nonempty(args.evidence_refs, "evidence_refs", "create")
     _reject_present(args.reason, "reason", "create")
     query = _required(args.query, "query")
+    if not args.paper_ids:
+        raise KnowledgeError(
+            "paper_set create requires at least one paper_id; discover authorized "
+            "PDFs with library_exec first"
+        )
     papers = await _snapshot_papers(args.paper_ids, library_root, cache)
     result_set_id = _new_result_set_id(states)
     payload = _SetEventPayload(

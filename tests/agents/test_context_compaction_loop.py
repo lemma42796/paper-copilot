@@ -38,7 +38,6 @@ def test_loop_does_not_compact_below_trigger() -> None:
             messages=[{"role": "user", "content": "original"}],
             tools=[],
             config=LoopConfig(
-                max_turns=2,
                 max_budget_cny=10.0,
                 auto_compact_trigger_tokens=200_000,
                 compacted_target_tokens=80_000,
@@ -77,7 +76,6 @@ def test_loop_compacts_at_trigger_before_model_call() -> None:
             messages=[{"role": "user", "content": "original"}],
             tools=[],
             config=LoopConfig(
-                max_turns=2,
                 max_budget_cny=10.0,
                 auto_compact_trigger_tokens=200_000,
                 compacted_target_tokens=80_000,
@@ -111,7 +109,6 @@ def test_loop_rejects_compaction_above_target() -> None:
             messages=[{"role": "user", "content": "original"}],
             tools=[],
             config=LoopConfig(
-                max_turns=2,
                 max_budget_cny=10.0,
                 auto_compact_trigger_tokens=200_000,
                 compacted_target_tokens=80_000,
@@ -137,7 +134,6 @@ def test_loop_blocks_emergency_context_without_compaction() -> None:
             messages=[{"role": "user", "content": "original"}],
             tools=[],
             config=LoopConfig(
-                max_turns=2,
                 max_budget_cny=10.0,
                 emergency_compact_tokens=240_000,
             ),
@@ -184,7 +180,6 @@ def test_loop_uses_actual_usage_plus_appended_history_for_trigger() -> None:
             messages=[{"role": "user", "content": "original"}],
             tools=[],
             config=LoopConfig(
-                max_turns=3,
                 max_budget_cny=10.0,
                 auto_compact_trigger_tokens=200_000,
                 compacted_target_tokens=80_000,

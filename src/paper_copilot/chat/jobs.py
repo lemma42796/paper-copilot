@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from paper_copilot.agents.loop import (
     AssistantMessage,
@@ -68,7 +68,6 @@ class ChatJobSpec(BaseModel):
         pattern=_CONVERSATION_ID_RE.pattern,
     )
     pdf_dir: str | None = None
-    max_turns: int = Field(default=16, ge=1)
     budget_cny: float = Field(default=2.0, gt=0)
     max_papers: int = Field(default=5, ge=1)
     record_quality: bool = True
@@ -76,6 +75,15 @@ class ChatJobSpec(BaseModel):
     recovery_mode: Literal["restart_from_request", "rollout_replay"] = "rollout_replay"
     rollout_timeout_seconds: float | None = Field(default=3600.0, gt=0)
     approval_mode: ApprovalMode = "ask"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _discard_legacy_max_turns(cls, value: object) -> object:
+        if not isinstance(value, dict) or "max_turns" not in value:
+            return value
+        migrated = dict(value)
+        migrated.pop("max_turns", None)
+        return migrated
 
 
 class ChatJobResult(BaseModel):
@@ -711,7 +719,6 @@ class ChatJobRegistry:
                             if record.spec.pdf_dir is not None
                             else None
                         ),
-                        max_turns=record.spec.max_turns,
                         budget_cny=record.spec.budget_cny,
                         max_papers=record.spec.max_papers,
                         root=self._root,

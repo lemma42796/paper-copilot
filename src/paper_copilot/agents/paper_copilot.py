@@ -812,7 +812,6 @@ async def run_paper_copilot(
     llm: LLMClientProtocol,
     context: PaperCopilotContext,
     root: Path | None = None,
-    max_turns: int = 16,
     max_budget_cny: float = 2.0,
     read_llm: LLMClient | None = None,
     session_id: str | None = None,
@@ -974,7 +973,6 @@ async def run_paper_copilot(
             attributes={
                 "agent": _AGENT_NAME,
                 "model": DEFAULT_MODEL,
-                "max_turns": max_turns,
                 "max_budget_cny": max_budget_cny,
                 **research_skill.trace_attributes(),
             },
@@ -987,7 +985,6 @@ async def run_paper_copilot(
             messages=messages,
             tools=tools,
             config=LoopConfig(
-                max_turns=max_turns,
                 max_budget_cny=max_budget_cny,
                 max_tokens=_MAX_TOKENS,
                 model_context_window_tokens=MODEL_CONTEXT_WINDOW_TOKENS,
@@ -1061,8 +1058,6 @@ async def run_paper_copilot(
             proposal_check,
             context=context,
             termination_reason=termination_reason,
-            events=events,
-            max_turns=max_turns,
             cost=cost,
             max_budget_cny=max_budget_cny,
         )
@@ -1198,8 +1193,6 @@ def _composer_repair_skip_reason(
     *,
     context: PaperCopilotContext,
     termination_reason: str,
-    events: list[Event],
-    max_turns: int,
     cost: CostTracker,
     max_budget_cny: float,
 ) -> str | None:
@@ -1209,9 +1202,6 @@ def _composer_repair_skip_reason(
         return f"termination_{termination_reason}"
     if not context.composer_plan.report_ready():
         return "plan_not_ready"
-    turns_used = sum(isinstance(event, AssistantMessage) for event in events)
-    if turns_used >= max_turns:
-        return "max_turns_exhausted"
     if cost.total_cost_cny >= max_budget_cny:
         return "max_budget_exhausted"
     return None

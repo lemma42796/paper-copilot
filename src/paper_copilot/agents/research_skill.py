@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -10,9 +11,12 @@ from paper_copilot.shared.errors import AgentError
 __all__ = ["ResearchSkill", "load_research_skill"]
 
 _SKILL_NAME = "research-papers"
-_SKILL_VERSION = "2"
 _SKILL_RESOURCE_URI = (
     "resource://paper-copilot/agents/skills/research-papers/SKILL.md"
+)
+_SKILL_VERSION_PATTERN = re.compile(
+    r"^Skill version: (?P<version>[1-9][0-9]*)$",
+    re.MULTILINE,
 )
 
 
@@ -56,9 +60,12 @@ def load_research_skill() -> ResearchSkill:
     expected_frontmatter = f"---\nname: {_SKILL_NAME}\n"
     if not contents.startswith(expected_frontmatter):
         raise AgentError("bundled research Skill has invalid frontmatter")
+    version_matches = _SKILL_VERSION_PATTERN.findall(contents)
+    if len(version_matches) != 1:
+        raise AgentError("bundled research Skill must declare exactly one version")
     return ResearchSkill(
         name=_SKILL_NAME,
-        version=_SKILL_VERSION,
+        version=version_matches[0],
         sha256=hashlib.sha256(contents.encode("utf-8")).hexdigest(),
         resource_uri=_SKILL_RESOURCE_URI,
         contents=contents,

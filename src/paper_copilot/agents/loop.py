@@ -185,7 +185,7 @@ class ToolResult:
     type: Literal["tool_result"] = "tool_result"
 
 
-type TerminateReason = Literal["end_turn", "max_turns", "max_budget", "cancelled"]
+type TerminateReason = Literal["end_turn", "max_budget", "cancelled"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,7 +206,6 @@ _log = get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class LoopConfig:
-    max_turns: int
     max_budget_cny: float
     max_tokens: int | None = None
     model_context_window_tokens: int | None = None
@@ -243,7 +242,7 @@ async def run_agent_loop(
     | None = None,
     stream_event_callback: LLMStreamEventCallback | None = None,
 ) -> AsyncIterator[Event]:
-    """Drive an LLM with tools until it stops or a limit fires.
+    """Drive an LLM with tools until it stops or a budget, deadline, or guard fires.
 
     Cancellation semantics: when the consumer calls `.athrow(CancelledError)`,
     the loop yields exactly one `Terminated(reason="cancelled")` event and
@@ -277,9 +276,6 @@ async def run_agent_loop(
         while True:
             await asyncio.sleep(0)
 
-            if turns >= config.max_turns:
-                yield Terminated(reason="max_turns", cost=_cost_snapshot(cost))
-                return
             if cost is not None and cost.total_cost_cny >= config.max_budget_cny:
                 yield Terminated(reason="max_budget", cost=cost.snapshot())
                 return

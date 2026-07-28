@@ -202,7 +202,6 @@ def _run_ready_composer(
                 llm=llm,
                 context=context,
                 root=tmp_path,
-                max_turns=4,
                 max_budget_cny=max_budget_cny,
             )
         )
@@ -1092,7 +1091,6 @@ def test_run_paper_copilot_uses_tool_loop_and_records_trace(tmp_path: Path) -> N
                 llm=llm,
                 context=context,
                 root=tmp_path,
-                max_turns=4,
                 max_budget_cny=1.0,
             )
         )
@@ -1182,7 +1180,6 @@ def test_run_paper_copilot_activates_composer_after_model_uses_tool(tmp_path: Pa
                 llm=llm,
                 context=context,
                 root=tmp_path,
-                max_turns=2,
                 max_budget_cny=1.0,
             )
         )
@@ -1366,7 +1363,6 @@ def test_run_paper_copilot_can_answer_from_read_paper_summary(tmp_path: Path) ->
                 llm=llm,
                 context=context,
                 root=tmp_path,
-                max_turns=4,
                 max_budget_cny=1.0,
             )
         )
@@ -1477,7 +1473,6 @@ def test_run_paper_copilot_synthesis_path_uses_related_and_compare(tmp_path: Pat
                 llm=llm,
                 context=context,
                 root=tmp_path,
-                max_turns=8,
                 max_budget_cny=1.0,
             )
         )
@@ -1543,7 +1538,6 @@ def test_run_paper_copilot_summary_records_last_tool_error(tmp_path: Path) -> No
                 llm=llm,
                 context=context,
                 root=tmp_path,
-                max_turns=4,
                 max_budget_cny=1.0,
             )
         )

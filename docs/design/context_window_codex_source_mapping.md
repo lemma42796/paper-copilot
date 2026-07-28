@@ -3,6 +3,7 @@
 状态：已实施  
 日期：2026-07-27  
 Codex source ref：`61a44880a85d2fd0d8770908dea5733495e571c8`
+Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地修改
 
 ## 目的
 

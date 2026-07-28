@@ -26,7 +26,6 @@ class JobCreateHttpRequest(BaseModel):
 
     message: str = Field(min_length=1)
     pdf_dir: Path | None = None
-    max_turns: int = Field(default=16, ge=1)
     budget_cny: float = Field(default=2.0, gt=0)
     max_papers: int = Field(default=5, ge=1)
     root: Path | None = None
@@ -264,7 +263,6 @@ class _ChatHandler(BaseHTTPRequestHandler):
                     request=request.message,
                     conversation_id=request.conversation_id,
                     pdf_dir=str(request.pdf_dir) if request.pdf_dir is not None else None,
-                    max_turns=request.max_turns,
                     budget_cny=request.budget_cny,
                     max_papers=request.max_papers,
                     record_quality=request.record_quality,
