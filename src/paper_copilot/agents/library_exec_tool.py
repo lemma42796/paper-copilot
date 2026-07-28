@@ -195,8 +195,10 @@ def library_exec_tool_description() -> str:
         "Run a bounded command in a Codex-style macOS sandbox. The fixed logical "
         "workspace exposes the configured paper library as read-only library/, "
         "derived text cache as read-only cache/, and only scratch/ as writable "
-        "temporary storage. Use paper-cache status/ensure/page for deterministic PDF "
-        "text cache access. The environment contains no user credentials; sandboxing "
+        "temporary storage. Runtime normally provides prepared cache paths in "
+        "research_cache_index; paper-cache remains available for bounded page reads "
+        "and on-demand preparation outside that index. The environment contains no "
+        "user credentials; sandboxing "
         "blocks network access, library/cache writes, and reads outside authorized "
         "roots. The tool has no permission-escalation path."
     )

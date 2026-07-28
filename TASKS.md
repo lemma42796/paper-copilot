@@ -33,6 +33,12 @@ end-turn coverage guard 尚待按 Codex-first 设计确认。下一步先用同�
 基线，保存完整工具 trace，并对照私有 Gold 报告质量、跨轮约束、遍历完成、引用和工具
 行为。当前不重复运行 Codex，也不执行完整消融。
 
+第五次 Query 1 触发 3000-token 客户端输出上限且工具编排显著重于 Codex 基线后，用户
+确认启动 Codex 风格简化重构。第一 bounded slice 已把预算内 PDF 的 cache ensure
+移到模型循环前的 Runtime preflight，并通过受信任 `research_cache_index` 一次提供
+逻辑 TXT 路径；Skill 不再要求模型逐篇调用 `paper-cache status/ensure`。`paper_set`
+和页级 evidence 协议本 slice 保持不变，尚待后续 slice 与冻结 Query 1 验收。
+
 该预检不等于完成 Slice 7。三次重复、完整消融和正式冻结结论继续留在 Slice 7，是否
 投入由预检结果和后续用户确认决定。计划见 `docs/design/tool_system_v2_plan.md`。
 
@@ -104,8 +110,9 @@ v2 Slice 6 已完成公开表面实施：模型公开表面切换为 `library_ex
 完成语义。第二次预检确认宿主 Poppler 可用，但 cache、命令 sandbox 与页渲染各自使用
 不同的可执行文件解析规则，模型还把 broker 当成 PATH 命令写入循环，并截断 SHA-256
 调用 `inspect_page`；现已统一解析规则、拒绝复合 broker 命令，并允许页检查直接接收
-完整 SHA-256。内建 `research-papers` Skill 当前更新为 version 5，版本从同一正文解析，
-不再维护重复常量。该纠正版本尚待用冻结 Query 1 重跑验收，因此 Slice 6 尚未重新冻结。
+完整 SHA-256。Slice 6 的内建 `research-papers` Skill 修正版本为 version 5；当前简化
+slice 已更新为 version 6，版本均从同一正文解析，不维护重复常量。该简化版本尚待用
+冻结 Query 1 重跑验收，因此 Slice 6 尚未重新冻结。
 旧实现只作为不可由模型调用的回滚代码保留；Slice 7 的三次冻结评测与消融尚未开始。源码映射见
 `docs/design/tool_surface_v2_codex_source_mapping.md`。
 

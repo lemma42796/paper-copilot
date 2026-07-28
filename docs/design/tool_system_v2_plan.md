@@ -1053,6 +1053,26 @@ session 重放；公开工具列表保持不变，留待 Slice 6 统一切换。
 - 数据迁移、保留或明确重建策略；
 - 用户明确确认删除 slice。
 
+### 11.1 v2 简化重构（2026-07-28）
+
+冻结 Query 1 暴露出模型可见 cache/paper-set 协议的协调成本：DeepSeek 在没有生成最终
+答案前已执行 103 次工具调用，其中 88 次为 `library_exec`。对照 Codex 基线后，用户
+确认改为 Codex 风格的模型表面，并将安全、缓存和覆盖记账收回 Runtime。
+
+简化重构仍按 bounded slice 实施。第一 slice 只改变缓存准备：
+
+- Runtime 在模型循环前对论文预算内的授权 PDF 调用内容寻址 cache `ensure`；
+- 一次性生成只读 `research_cache_index`，只暴露逻辑 locator、完整 PDF SHA-256、
+  页数和精确 `cache/.../layout.txt` 路径，不暴露宿主绝对路径；
+- 索引作为应用生成的受信任上下文进入首次运行、恢复和 compaction 后的上下文；
+- 模型直接批量搜索索引中的 TXT，不再逐篇调用 `paper-cache status/ensure`；
+- broker 暂时保留，服务索引因论文预算截断后的按需准备以及页级读取；
+- preflight 写入权威 trace，但不产生模型调用或模型可见工具调用。
+
+本 slice 不删除 `paper_set`，不改变页级 evidence 协议，不引入持久 scratch，也不删除
+旧工具。后续 slice 是否继续缩减模型表面，取决于同一冻结 Query 1 的工具数、token、
+完整答案和引用结果。
+
 ## 12. 依赖与成本
 
 本计划不新增 LLM call site，不增加每篇论文的固定模型调用，也不预设 embedding 成本。

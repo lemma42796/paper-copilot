@@ -1243,7 +1243,7 @@ base1 is reproducible [base1:methods[0]].
     assert len(llm.calls) == 3
     repair_call = llm.calls[2]
     assert repair_call.tools == []
-    assert repair_call.max_tokens == 3000
+    assert repair_call.max_tokens is None
     assert len(repair_call.messages) == 1
     repair_blocks = repair_call.messages[0]["content"]
     assert isinstance(repair_blocks, list)

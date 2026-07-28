@@ -119,6 +119,12 @@ Paper Copilot 根据用户请求选择工具、聚合证据并生成自然语言
 首次运行、恢复和压缩后的 turn；名称、版本和正文 SHA-256 写入权威 trace。Skill 不
 授予工具、路径、网络、安装或写入权限。
 
+Runtime 在模型循环前按本轮论文预算批量准备内容寻址文本缓存，并通过受信任的
+`research_cache_index` 提供授权 PDF locator、完整 SHA-256、页数和逻辑 `cache/`
+文本路径。该索引在 attempt 内只读，并在恢复和 context compaction 后重新注入。模型
+直接对这些逻辑路径执行批量搜索，不再逐篇调用 `paper-cache status/ensure`；未被预算
+纳入索引的论文仍可使用兼容 broker 按需准备。
+
 ### `library_exec`
 
 - 固定工作目录为 Runtime 创建的逻辑 workspace，其中 `library/` 和 `cache/` 只读，
@@ -126,7 +132,8 @@ Paper Copilot 根据用户请求选择工具、聚合证据并生成自然语言
 - 用于列举、统计、哈希和读取等只读命令组合。
 - 通过 macOS sandbox 限制网络、库外读取和论文库写入，并限制时间与输出。
 - 不提供模型可选 shell、登录环境、远程环境或 sandbox 失败后的权限升级。
-- `paper-cache status/ensure/page` 由窄化 broker 调用内容寻址缓存服务，必须作为一次
+- `paper-cache status/ensure/page` 作为兼容和按需路径，由窄化 broker 调用内容寻址
+  缓存服务，必须作为一次
   `library_exec` 的完整命令，不能进入循环、管道、命令链或替换，也不能指定输出路径。
 - broker 接受逻辑 workspace 输出的 `library/<relative-pdf>` 或相对于授权 library 根的
   `<relative-pdf>`，并统一归一化为授权 locator。
@@ -232,6 +239,8 @@ Embedding 当前锁定 DashScope `text-embedding-v4`、1024 维；模型或维�
 
 - 所有 LLM 调用经过 `agents/llm_client.py`。
 - 一次任务使用客户端选择的同一模型，不做模型分层。
+- 主 Agent 和回答修复调用不设置客户端 `max_tokens`，由模型/API 决定单次输出上限；
+  压缩、审批审核和结构化抽取等专用调用可以按其有界契约显式设置。
 - 支持 OpenAI-compatible endpoint；Paper Copilot 调用必须使用 provider 支持的
   Thinking 和流式输出，未知协议不能静默退化为非思考模式。
 - 按固定 Codex 模型配置的 272K 原始窗口管理：258.4K 为有效工作窗口，预计下一轮达到
@@ -264,8 +273,8 @@ macOS client
 
 ```text
 research-papers Skill
-  → library_exec lists authorized PDFs
-  → paper-cache status / ensure
+  → Runtime preflight prepares bounded cache index
+  → library_exec searches prepared cache paths in batches
   → rg / awk bounded search and PDF page location
   → paper-cache page evidence
   → inspect_page when visual verification is necessary

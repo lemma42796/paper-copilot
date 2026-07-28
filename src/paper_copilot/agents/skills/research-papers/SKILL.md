@@ -5,7 +5,7 @@ description: Investigate local PDF papers with bounded command search and page-g
 
 # Research Papers
 
-Skill version: 5
+Skill version: 6
 
 ## Work within the boundary
 
@@ -24,10 +24,12 @@ Skill version: 5
 
 ## Establish the paper scope
 
-1. List the authorized PDFs under `library/`.
+1. Use the application-generated `research_cache_index` as the authoritative inventory of PDFs
+   prepared for this attempt. List `library/` only when the user asks about files outside that index
+   or when the index says it was truncated by the paper budget.
 2. Resolve the requested papers before drawing conclusions. Do not classify a paper from its filename
    alone.
-3. After listing and caching the authorized PDFs, create a `paper_set` for any explicit multi-paper
+3. After resolving the authorized PDFs, create a `paper_set` for any explicit multi-paper
    scope and for requests containing “all”, “each”, “every”, “逐篇”, “全部”, or an equivalent
    completeness constraint. Pass every in-scope `paper_id` explicitly; `paper_set.query` only records
    the scope fingerprint and never discovers papers. Use full PDF SHA-256 values when they are
@@ -39,25 +41,16 @@ Skill version: 5
 
 ## Prepare deterministic text
 
-For each in-scope relative PDF path:
+Runtime prepares deterministic text before the model loop and provides, for each successful entry,
+the authorized PDF locator, full PDF SHA-256, page count, and exact `cache/.../layout.txt` path in
+`research_cache_index`. Use those paths directly in one or more bounded `library_exec` commands. Do
+not issue `paper-cache status` or `paper-cache ensure` for a prepared entry.
 
-1. Run `paper-cache status '<relative-pdf>'` as the entire `library_exec.cmd`. The broker accepts
-   either the path printed by a workspace listing (`library/<relative-pdf>`) or the path relative to
-   the library root (`<relative-pdf>`); preserve the filename exactly.
-2. Reuse a valid `hit`. Run `paper-cache ensure '<relative-pdf>'` for a miss, corrupt revision, or
-   incompatible revision, again as the entire command.
-3. Record the returned full `pdf_sha256`, `extractor_fingerprint`, `revision_id`, page count, cache
-   status, and unresolved pages.
-4. Address the current text artifact as
-   `cache/<pdf_sha256>/<extractor_fingerprint>/revisions/<revision_id>/layout.txt`.
-
-Do not rebuild a valid hit. `paper-cache ensure` performs only deterministic text extraction and cache
-publication; it does not run OCR, embedding, vector search, or an LLM.
-`paper-cache` is a Runtime broker rather than a sandbox executable. Never place it inside a shell
-loop, pipeline, chained command, `find -exec`, or command substitution. Invoke one direct
-`library_exec` call per `paper-cache` operation.
-If a direct broker call fails, report that failure as a gap. Do not replace the deterministic cache
-workflow with ad hoc full-PDF extraction, copied PDFs, Python scripts, or one-off shell classifiers.
+If an index entry reports a preparation failure, report that paper as a gap. Do not replace the
+deterministic cache workflow with ad hoc full-PDF extraction, copied PDFs, Python scripts, or one-off
+shell classifiers. The legacy direct broker remains available only for an authorized PDF that was
+not prepared because the index was truncated; invoke it as one complete `library_exec.cmd`, never
+inside a loop, pipeline, command chain, `find -exec`, or command substitution.
 
 If Poppler is unavailable, do not attempt installation through `library_exec`. Ask for explicit user
 consent to run `brew install poppler`. After consent, use a separately provided host installation

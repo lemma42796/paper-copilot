@@ -54,7 +54,6 @@ COMPACTED_TARGET_TOKENS: Final[int] = 80_000
 RECENT_HISTORY_BUDGET_TOKENS: Final[int] = 40_000
 COMPACTION_MAX_OUTPUT_TOKENS: Final[int] = 8_000
 EMERGENCY_COMPACT_TOKENS: Final[int] = WORKING_CONTEXT_LIMIT_TOKENS
-_DEFAULT_MAX_TOKENS: Final[int] = 1500
 _DEFAULT_TIMEOUT_S: Final[float] = 60.0
 _DEFAULT_BASE_URL: Final[str] = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 _STREAM_FLUSH_CHARS: Final[int] = 96
@@ -236,9 +235,6 @@ class LLMClient:
         thinking_budget = _QWEN_THINKING_BUDGETS[self._reasoning_effort]
         payload: dict[str, Any] = {
             "model": DEFAULT_MODEL,
-            "max_tokens": (
-                max_tokens if max_tokens is not None else _DEFAULT_MAX_TOKENS
-            ),
             "messages": _convert_messages(
                 messages,
                 system=system,
@@ -247,6 +243,8 @@ class LLMClient:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         if tools:
             payload["tools"] = _convert_tools(
                 tools,
