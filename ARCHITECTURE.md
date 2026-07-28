@@ -1,23 +1,25 @@
 # ARCHITECTURE
 
-> Paper Copilot 的当前架构、所有权和硬性边界。产品状态与待办见
-> [TASKS.md](TASKS.md)，工程执行规则见 [AGENTS.md](AGENTS.md)，具体接口以代码为准。
+> Paper Copilot 当前已实现的架构、所有权和硬边界。产品状态见
+> [TASKS.md](TASKS.md)，工程规则见 [AGENTS.md](AGENTS.md)，详细决策见
+> [docs/design/](docs/design/)；具体接口以代码为准。
 
-更新于 2026-07-27。
+更新于 2026-07-28。
 
-## Principles
+## 1. 原则
 
-- **Single Agent:** 系统只有一个 Paper Copilot bounded tool loop；论文读取是有界
-  工具链，不做多 Agent 编排。
-- **Local first:** PDF、索引、session、报告和 trace 默认保存在本地。只有完成本地
-  选择后的必要文本可以发送给用户配置的云端模型。
-- **One Core:** macOS 客户端和 MCP Server 复用同一 Python Core，不复制论文处理、
-  检索、任务或恢复逻辑。
-- **Personal use:** 不建设多租户、分布式存储或托管论文库。
-- **Least privilege:** 模型提出工具调用，应用完成参数校验、授权和副作用审批。Prompt
-  不是安全边界。
+- **Single Agent：**只有一个 Paper Copilot bounded tool loop，不做多 Agent 编排。
+- **Local first：**PDF、索引、session、报告和 trace 默认保存在本地；仅将完成本地
+  选择后的必要上下文发送给用户配置的模型。
+- **One Core：**macOS 客户端和 MCP 复用 Python Core，不复制论文处理、检索、job 或
+  恢复逻辑。
+- **Least privilege：**模型提出调用，Runtime 校验 schema、路径、授权和副作用；
+  Prompt 与 Skill 都不是安全边界。
+- **Append only：**session、job event 和 trace 保留原始历史；派生状态可重建，不反向
+  改写源记录。
+- **Personal use：**不建设多租户、分布式存储或托管论文库。
 
-## Product Surfaces
+## 2. 产品表面
 
 ```text
 SwiftUI macOS Client ──► local HTTP Runtime ──► chat/jobs ──┐
@@ -26,53 +28,41 @@ Local MCP Server ──────► bounded MCP services ──────�
                                                     Python Paper Core
 ```
 
-- `apps/macos/`：界面、security-scoped 论文目录、本地凭据、模型设置、审批交互和
-  Runtime 生命周期。
-- `api/`：只服务本地 macOS Runtime 的 JSON/HTTP、SSE 和 diagnostics 边界。
-- `mcp/`：本地 `stdio` 查询与长任务边界。
+| 表面 | 所有权 |
+|---|---|
+| `apps/macos/` | UI、security-scoped 目录、凭据、模型设置、审批和 Runtime 生命周期 |
+| `api/` | 本地 JSON/HTTP、SSE 和 diagnostics transport |
+| `mcp/` | 本地 stdio 查询及长任务协议 |
+| Python Core | Agent、PDF、检索、索引、job、session、恢复、eval 和 observability |
 
-SwiftUI 和 MCP 负责协议与产品表面；Python Core 负责 Agent、PDF、RAG、索引、job、
-session、恢复、eval 和 observability。
+SwiftUI 与 MCP 是协议边界。MCP 工具不是内部 Agent 工具；长任务复用 `chat.jobs`。
 
-## Module Ownership
+## 3. 模块所有权
 
 ```text
-apps/macos/
-
 src/paper_copilot/
-├── api/            # macOS Runtime HTTP transport
-├── chat/           # chat runtime、conversation 和持久 job
-├── mcp/            # stdio MCP services
-├── agents/         # bounded loop、模型工具和读论文工具链
-├── schemas/        # Pydantic 跨边界契约
+├── api/            # macOS Runtime transport
+├── chat/           # conversation、job、attempt、approval、interrupt、resume
+├── mcp/            # stdio services
+├── agents/         # bounded loop、LLM client、模型可见工具和 Skill
+├── schemas/        # 跨 LLM、文件和模块边界的 Pydantic 契约
 ├── session/        # append-only model/session history
 ├── retrieval/      # 单篇论文章节切分
-├── knowledge/      # 跨论文字段、索引和 hybrid retrieval
-├── observability/  # job attempt rollout trace
-├── eval/           # 回归、retrieval gate 和趋势评估
-└── shared/         # 无上层依赖的公共原语
+├── knowledge/      # 字段、chunks、embedding、图关系和跨论文检索
+├── observability/  # attempt rollout trace
+├── eval/           # 回归、检索 gate 和趋势评估
+└── shared/         # 无上层依赖的错误、日志、成本、环境和纯函数
 ```
 
-### Transport and orchestration
+关键职责：
 
-- `api/` 解析本地 HTTP 请求并输出协议响应，不拥有业务编排。
-- `chat/` 组装请求上下文、调用 Paper Copilot 公开入口，并管理 conversation、job、
-  attempt、事件、interrupt、resume 和 approval 生命周期。
-- `mcp/` 的只读查询直接复用 knowledge/evidence 服务；长任务复用 `chat.jobs`。
-  MCP 工具不是内部 Agent 工具。
+- `api/` 只翻译本地协议；`chat/` 负责业务编排和持久 job 生命周期。
+- `agents/` 拥有唯一自主循环、模型工具、工具策略和论文读取编排。
+- `session/` 不理解 Agent 或论文 schema；`observability/` 不决定业务状态。
+- `retrieval/` 只负责单篇切分；`knowledge/` 负责持久跨论文知识。
+- `eval/` 通过公开 Agent 入口评测，不成为产品运行依赖。
 
-### Paper Core
-
-- `agents/` 拥有唯一自主循环、模型可见工具、工具策略和单篇论文读取编排。
-- `schemas/` 定义 LLM、文件和模块边界上的结构化契约。
-- `session/` 只负责 append-only session tree，不理解 Agent 或论文 schema 语义。
-- `retrieval/` 只负责单篇论文章节切分，不维护持久索引。
-- `knowledge/` 拥有结构化字段、chunks、embedding、图关系和跨论文检索。
-- `observability/` 记录 attempt rollout，不参与业务状态决策。
-- `eval/` 在隔离数据目录复用公开读取链路，记录质量、成本、延迟和趋势。
-- `shared/` 只放无上层业务依赖的日志、错误、成本、cache、环境和纯函数原语。
-
-## Dependency Rules
+## 4. 依赖边界
 
 ```text
 apps/macos ─► api ─► chat ─► agents ◄── schemas
@@ -91,213 +81,139 @@ eval ─► public Agent entrypoint + explicit suite exceptions
 
 硬性规则：
 
-- `schemas/` 不能导入其他 `paper_copilot` 模块。
-- `session/`、`retrieval/`、`knowledge/`、`shared/` 不能导入 `agents/`、`chat/`
-  或 `api/`。
-- `retrieval/` 与 `knowledge/` 不能互相导入；共享纯函数放入 `shared/`。
-- `eval/` 可调用 `agents/` 的公开 run 入口；`eval/suite.py` 还可使用 `LLMClient`
-  和 `ReadPaperTool`，但不能依赖其他 Agent 内部实现或 `retrieval/`。
+- `schemas/` 不导入其他 `paper_copilot` 模块。
+- `session/`、`retrieval/`、`knowledge/`、`shared/` 不导入 `agents/`、`chat/` 或
+  `api/`。
+- `retrieval/` 与 `knowledge/` 不互相导入；共享原语放入 `shared/`。
+- `eval/` 可调用公开 Agent run 入口；`eval/suite.py` 可额外使用 `LLMClient` 和
+  `ReadPaperTool`，但不依赖其他 Agent internals 或 `retrieval/`。
 - SwiftUI 和 MCP 不复制 Python Core 业务逻辑。
 
-违反任一规则都是 code review blocker。
+违反这些规则是 code review blocker。
 
-## Agent and Tool Architecture
+## 5. Agent 与工具
 
-Paper Copilot 根据用户请求选择工具、聚合证据并生成自然语言或 grounded Markdown。
-循环以 `end_turn`、预算、deadline、用户中断或失败为终止条件。重复工具签名、
-单工具超时和 rollout 超时由 Runtime 确定性处理。
+Agent loop 根据请求调用工具、聚合证据并生成自然语言或 grounded Markdown。终止条件为
+模型 `end_turn`、预算、deadline、用户中断或失败；Runtime 处理重复签名、工具超时和
+rollout deadline。
 
-模型只看到四个工具：
+当前模型只看到四个工具：
 
-- `library_exec`
-- `inspect_page`
-- `paper_set`
-- `library_edit`
+| 工具 | 当前职责与边界 |
+|---|---|
+| `library_exec` | 在逻辑 workspace 中执行有界只读命令；`library/`、`cache/` 只读，调用级 `scratch/` 可写；无网络、无权限升级 |
+| `read_page` | 从 Runtime preflight 冻结的 cache revision 读取一页文本，并产生页证据事实 |
+| `inspect_page` | 按授权 PDF SHA-256、页码和可选 region 渲染单页图像；不做 OCR、批量处理或文本回退 |
+| `library_edit` | 授权论文库内的用户可见写操作；禁止静默覆盖和永久删除，需要时持久审批 |
 
-运行时还会加载一个只读的内建 `research-papers` Skill，指导 Agent 组合工具完成缓存
-检查、全文命令搜索、PDF 页定位和有界证据绑定。Skill 以应用生成的受信任上下文进入
-首次运行、恢复和压缩后的 turn；名称、版本和正文 SHA-256 写入权威 trace。Skill 不
-授予工具、路径、网络、安装或写入权限。
+### 5.1 研究上下文与缓存
 
-Runtime 在模型循环前按本轮论文预算批量准备内容寻址文本缓存，并通过受信任的
-`research_cache_index` 提供授权 PDF locator、完整 SHA-256、页数和逻辑 `cache/`
-文本路径。该索引在 attempt 内只读，并在恢复和 context compaction 后重新注入。模型
-直接对这些逻辑路径执行批量搜索，不再逐篇调用 `paper-cache status/ensure`；未被预算
-纳入索引的论文仍可使用兼容 broker 按需准备。
+内建只读 `research-papers` Skill 在首次运行、恢复和 compaction 后注入；名称、版本和
+正文 SHA-256 进入 trace。Skill 只指导缓存搜索、页定位和证据工作流，不授予权限。
 
-### `library_exec`
+Runtime 在模型循环前按论文预算准备内容寻址文本缓存，并注入只读
+`research_cache_index`：
 
-- 固定工作目录为 Runtime 创建的逻辑 workspace，其中 `library/` 和 `cache/` 只读，
-  只有调用级 `scratch/` 可写。
-- 用于列举、统计、哈希和读取等只读命令组合。
-- 通过 macOS sandbox 限制网络、库外读取和论文库写入，并限制时间与输出。
-- 不提供模型可选 shell、登录环境、远程环境或 sandbox 失败后的权限升级。
-- `paper-cache status/ensure/page` 作为兼容和按需路径，由窄化 broker 调用内容寻址
-  缓存服务，必须作为一次
-  `library_exec` 的完整命令，不能进入循环、管道、命令链或替换，也不能指定输出路径。
-- broker 接受逻辑 workspace 输出的 `library/<relative-pdf>` 或相对于授权 library 根的
-  `<relative-pdf>`，并统一归一化为授权 locator。
-- 命令结果是不可信、有界数据，不获得新的工具权限。
+- 授权 PDF locator；
+- 完整 PDF SHA-256；
+- 页数；
+- 逻辑 `cache/.../layout.txt` 路径。
 
-### `library_edit`
+模型通过 `library_exec` 批量搜索逻辑路径；`paper-cache status/ensure/page` 不再暴露。
+页文本只能通过 `read_page` 按完整 PDF SHA-256 和正整数页码读取。
 
-- 承担模型发起的论文库目录、PDF 和 Markdown 写操作。
-- 路径必须解析在授权论文库内；不允许静默覆盖或永久删除。
-- 删除进入 macOS 系统废纸篓；Markdown 写入使用完整文档和变更预览。
-- 所有修改先经过工具策略；需要批准时进入持久 job 审批状态。
+### 5.2 页面证据与完成校验
 
-### `inspect_page`
+`inspect_page` 只在模型支持图像输入时渲染 PNG。结果绑定 PDF SHA-256、页码、region
+和 render SHA-256；图像只进入当前模型上下文，不写入 session、日志或 trace。
 
-- 只接受授权 PDF 的完整 SHA-256（首选）或兼容旧 session 的 12 位 `paper_id`、一个
-  PDF 页码和可选归一化 region；不得截断完整 SHA-256 冒充旧 ID。
-- 仅在模型声明支持图像输入时使用 Poppler 渲染有界 PNG。
-- 结果绑定 PDF SHA-256、页码、region 和 render SHA-256；图像只进入当前模型上下文，
-  不写入 session、日志或 trace。
-- 不执行 OCR、批量页面处理、全文入库或纯文本模型回退。
+成功 `read_page` 或 `inspect_page` 后，Runtime 追加不含正文的
+`research_evidence.page_observed` event。Query 1 的 active set 是 preflight 成功准备的
+全部论文；`end_turn` 前 validator 要求每篇都有观察页面和完整 SHA-256/page 引用。
+失败草稿在同一 Agent loop 中继续修复，预算或 deadline 先结束时只发布 Runtime 生成的
+Incomplete 结果。验证通过后，Runtime 把用户可见引用渲染为
+`《论文题目》第 N 页`；完整 SHA-256/page 只保留在结构化 `evidence_refs`、session
+和 trace 中。设计见
+[runtime_research_evidence_codex_source_mapping.md](docs/design/runtime_research_evidence_codex_source_mapping.md)。
 
-### `paper_set`
+Query 2–4 的派生集合尚无确定性 scope-transition 接口。旧 `paper_set` 事件和代码仅供
+历史 session 兼容，不再属于模型工具表面或 citation-grade coverage。其他旧读取、
+搜索、查询、比较、文件、笔记和 Composer 实现也仅作为不可调用回滚代码存在。
 
-- 通过 create、derive、record_evidence 和 status 保存不可变论文集合。
-- 集合成员绑定 PDF SHA-256、授权 locator、ingest revision 和当前 cache revision。
-- 只有每个成员都有可验证页级 evidence 且没有 stale 成员时 coverage 才能 complete。
-- 状态以 append-only application event 写入 session，并沿 recovery source session 重放；
-  不承担搜索、RAG、PDF 提取或回答生成。
+## 6. 授权与信任
 
-旧的读取、搜索、查询、比较、文件、笔记和 Composer 实现作为不可调用的回滚代码继续
-存在，但不属于模型工具表面；Runtime 拒绝模型调用未公开的旧名称。
-
-## Authorization and Trust
-
-用户输入、PDF 文本、文件名、检索片段、既有字段和工具输出均为不可信数据。只有 system
-prompt、应用注入的 runtime context、Pydantic tool schema 和应用策略可以定义行为。
-
-每次模型工具调用按以下顺序处理：
+用户输入、PDF、文件名、检索片段、已有字段和工具输出均为不可信数据。只有 system
+prompt、Runtime context、Pydantic tool schema 和应用策略能够定义行为。
 
 ```text
 model request
   → schema validation
-  → capability and path policy
+  → capability and canonical path policy
   → allow / deny / require approval
-  → exact approval binding when required
+  → exact approval binding
   → tool execution
   → bounded untrusted output
-  → authoritative runtime-state refresh
+  → authoritative state refresh
 ```
 
-批准绑定 tool call、已校验参数摘要、目标快照和变更预览。执行前任一绑定条件发生变化，
-批准即失效。拒绝不产生磁盘修改；中断、失败和恢复不会自动重放缺少结果的副作用工具。
-高影响操作必须由用户显式确认，不能由自动审核代替。
+- dispatch 前创建 lifecycle trace；schema/payload 失败记录 failed 终态。
+- approval 绑定 tool call、已校验参数、目标快照和预览；执行前变化会使批准失效。
+- 拒绝不修改磁盘；中断、失败和恢复不自动重放缺少结果的副作用工具。
+- 高影响操作必须由用户明确确认，不能由自动审核替代。
+- 模型自报工具调用不是权威 trace。
 
-## State and Recovery
+## 7. 状态、恢复与存储
 
-三个状态真源相互独立：
+| 真源 | 职责 |
+|---|---|
+| session | 模型历史、工具调用和恢复上下文 |
+| job | 调度、attempt、审批、客户端事件和最终结果 |
+| trace | rollout 诊断；不决定 job 或 session 状态 |
 
-- **session:** 模型历史、工具调用与恢复上下文的 append-only 真源。
-- **job:** 调度状态、attempt、审批、最终结果和客户端事件的真源。
-- **trace:** rollout 诊断真源，不决定 job 或 session 状态。
+一个 job 可有多个 attempt。客户端断线不终止任务；服务重启后遗留的 queued/running job
+转为 interrupted。Resume 在同一 job 下创建新 attempt，并从最近可恢复历史构造上下文；
+只有 completed conversation 轮次进入后续对话。
 
-一个 job 可以有多个 attempt。客户端断线不终止后台任务；服务重启后遗留的
-queued/running job 转为 interrupted。Resume 在同一 job 下创建新 attempt，并从最近
-可恢复历史构造上下文；只有 completed conversation 轮次进入后续对话上下文。
+每个 attempt 有独立 observability bundle。Reducer 只消费完整事件前缀，忽略 torn
+tail，并校验事件顺序、父子关系和 payload 引用。
 
-每个 attempt 写入独立 observability bundle。Trace reducer 只从完整事件前缀构造可重建
-状态，忽略 torn tail，并校验事件顺序、父子关系和 payload 引用。
-
-## Storage
-
-用户授权的论文目录保存原始 PDF 及用户创建的文档。应用数据默认位于：
+用户授权目录保存原始 PDF 和用户文档。应用数据默认位于
+`~/.paper-copilot/`：
 
 ```text
-~/.paper-copilot/
-├── papers/<paper_id>/session.jsonl
-├── jobs/<job_id>/
-│   ├── job.json
-│   ├── events.jsonl
-│   └── attempts/<n>/
-│       ├── manifest.json
-│       ├── trace.jsonl
-│       ├── state.json
-│       └── payloads/
-├── fields.db
-├── embeddings.db
-├── embeddings_meta.json
-├── embedding_cache.sqlite
-├── graph/cross-paper-links.jsonl
-└── eval/
+papers/<paper_id>/session.jsonl
+jobs/<job_id>/{job.json,events.jsonl,attempts/<n>/{manifest.json,trace.jsonl,state.json,payloads/}}
+fields.db / embeddings.db / embeddings_meta.json / embedding_cache.sqlite
+graph/cross-paper-links.jsonl / eval/
 ```
 
-`paper_id = SHA1(PDF bytes)[:12]`，移动或重命名 PDF 不改变 ID。Session 和事件只追加；
-derived state 可以重建，不能反向覆盖源记录。模型凭据由 macOS 客户端保存在权限受限的
-Application Support 文件中，通过 Runtime 环境变量传入，不进入论文库、session 或
-trace。
+`paper_id = SHA1(PDF bytes)[:12]`，移动或重命名不改变 ID。模型凭据由 macOS 客户端保存
+在权限受限的 Application Support 中，经 Runtime 环境变量传入，不进入论文库、
+session 或 trace。
 
-Embedding 当前锁定 DashScope `text-embedding-v4`、1024 维；模型或维度变化时必须重建
-索引，不允许多种 embedding 在同一索引中共存。具体约束见
-[docs/design/dashscope_text_embedding.md](docs/design/dashscope_text_embedding.md)。
+客户端优先通过 SSE 接收 job 事件，断线后按同一游标增量轮询。App 重启只恢复显示，
+不自动重跑任务。
 
-## Model and Context Policy
+Embedding 当前固定为 DashScope `text-embedding-v4`、1024 维；模型或维度变化必须
+重建索引，不允许在同一索引混用。详见
+[dashscope_text_embedding.md](docs/design/dashscope_text_embedding.md)。
+
+## 8. 模型与上下文
 
 - 所有 LLM 调用经过 `agents/llm_client.py`。
 - 一次任务使用客户端选择的同一模型，不做模型分层。
-- 主 Agent 和回答修复调用不设置客户端 `max_tokens`，由模型/API 决定单次输出上限；
-  压缩、审批审核和结构化抽取等专用调用可以按其有界契约显式设置。
-- 支持 OpenAI-compatible endpoint；Paper Copilot 调用必须使用 provider 支持的
-  Thinking 和流式输出，未知协议不能静默退化为非思考模式。
-- 按固定 Codex 模型配置的 272K 原始窗口管理：258.4K 为有效工作窗口，预计下一轮达到
-  244.8K 时压缩到不超过 80K，258.4K 为普通调用硬门槛。客户端工作窗口百分比采用
-  Codex 口径：主 Agent 最近一次模型调用的输入、缓存和输出 token 均计入；绝对用量和
-  有效窗口保持原值，仅在百分比计算时从分子和分母扣除 12K 固定基础预算。
-- `CompactionSummary` 保留请求、目标、约束、决策、证据、失败尝试、runtime state
-  和近期完整 tool round；原始 session 保持 append-only。
-- 模型变更前运行 smoke eval，并同时比较质量、成本和延迟。零回归是必要条件，但必须
-  有可测量收益才能改变默认模型。
+- 主 Agent 和回答修复不设置客户端 `max_tokens`；有界专用调用可按契约设置。
+- OpenAI-compatible endpoint 必须支持所选 Thinking 与流式协议，不能静默退化。
+- 原始窗口为 272K：258.4K 有效工作窗口；预计下一轮达到 244.8K 时压缩至不超过
+  80K；258.4K 是普通调用硬门槛。
+- UI 工作窗口百分比沿用 Codex 口径，主 Agent 最近调用的输入、缓存和输出 token 均
+  计入；仅百分比计算从分子、分母扣除 12K 固定基础预算。
+- `CompactionSummary` 保留请求、目标、约束、决策、证据、失败尝试、Runtime state
+  和近期完整 tool round；原始 session 不变。
+- 默认模型变更前必须运行 smoke eval；零回归只是必要条件，还需有质量、成本或延迟的
+  可测量收益。
 
-## Main Flows
-
-### Client job
-
-```text
-macOS client
-  → local HTTP job API
-  → chat.jobs creates attempt
-  → chat.runtime
-  → Paper Copilot bounded loop
-  → session / report / derived cache or approved library updates
-  → completed / failed / interrupted
-```
-
-客户端优先通过 SSE 接收事件，断线后使用同一事件游标增量轮询。App 重启只恢复显示，
-不会自动重跑任务。
-
-### Research and answer
-
-```text
-research-papers Skill
-  → Runtime preflight prepares bounded cache index
-  → library_exec searches prepared cache paths in batches
-  → rg / awk bounded search and PDF page location
-  → paper-cache page evidence
-  → inspect_page when visual verification is necessary
-  → paper_set coverage for explicit multi-paper scopes
-  → grounded answer
-```
-
-缓存是可重建派生状态；`paper_set` 事件和模型历史持续追加到 session。失败不清除已经成功
-写入的历史，也不把 partial 或 stale 集合报告为 complete。
-
-### Library mutation
-
-```text
-library_exec discovers current state
-  → library_edit proposes exact mutation
-  → policy and impact classification
-  → approval when required
-  → precondition recheck
-  → atomic write or move to Trash
-  → job event and Agent result
-```
-
-## Non-goals
+## 9. 非目标
 
 - 多 Agent 协商或分布式执行。
 - 云端多租户、账号、支付、ACL、托管模型或云端论文库。

@@ -66,6 +66,7 @@ from paper_copilot.agents.llm_client import (
 )
 from paper_copilot.agents.loop import (
     AssistantMessage,
+    EndTurnValidation,
     Event,
     LLMClientProtocol,
     LLMResponse,
@@ -106,7 +107,22 @@ from paper_copilot.agents.paper_set_tool import (
     paper_set_tool_description,
     run_paper_set,
 )
+from paper_copilot.agents.read_page_tool import (
+    ReadPageInput,
+    read_page_tool_description,
+    run_read_page,
+)
 from paper_copilot.agents.read_pipeline import ReadPipelineRun, run_read_pipeline
+from paper_copilot.agents.research_evidence import (
+    ActivePaperSnapshot,
+    ResearchValidationResult,
+    append_page_evidence,
+    build_validation_continuation,
+    incomplete_research_report,
+    load_page_evidence,
+    render_research_citations,
+    validate_research_report,
+)
 from paper_copilot.agents.research_skill import (
     ResearchSkill,
     load_research_skill,
@@ -161,15 +177,14 @@ _MAX_EVIDENCE_POOL_PER_PAPER = 50
 _MAX_RELATED_K = 10
 _MODEL_TOOL_NAMES = (
     "library_exec",
+    "read_page",
     "inspect_page",
-    "paper_set",
     "library_edit",
 )
 _RESEARCH_EVIDENCE_TOOL_NAMES = frozenset(
     {
-        "library_exec",
+        "read_page",
         "inspect_page",
-        "paper_set",
     }
 )
 _COMPOSER_TOOL_NAMES = frozenset(
@@ -216,18 +231,16 @@ _BASE_SYSTEM_PROMPT = (
     "evidence is missing, say exactly what is missing. For synthesis or comparison, "
     "query enough relevant papers rather than stopping at the first result when "
     "the paper budget allows it. The only available tools are library_exec for "
-    "bounded read-only command work over the Runtime-prepared text cache, inspect_page "
-    "for visual checks of one exact PDF page or region, paper_set for immutable "
-    "cross-turn paper scope and coverage, and library_edit for every user-visible "
-    "library mutation. Follow the bundled research-papers Skill to compose them. "
-    "Use the application-generated research_cache_index directly instead of issuing "
-    "paper-cache status or ensure calls for entries it already prepared. Generic "
-    "command output is filesystem evidence, not citation-grade paper-content "
-    "evidence. A successful paper-cache page result is citation-grade when Runtime "
-    "trace binds it to a full PDF hash, page, cache revision, and artifact hash. "
-    "Use paper_set whenever the request requires an explicit multi-paper set or "
-    "complete coverage, and do not claim completion until its coverage is complete "
-    "and no member is stale. Tool inputs must match their JSON schemas exactly.\n\n"
+    "bounded read-only command work over the Runtime-prepared text cache, read_page "
+    "for citation-grade text from one exact PDF page, inspect_page for visual checks "
+    "of one exact PDF page or region, and library_edit for every user-visible library "
+    "mutation. Follow the bundled research-papers Skill to compose them. Use the "
+    "application-generated research_cache_index directly; paper-cache commands are "
+    "not available. Generic command output is filesystem evidence, not citation-grade "
+    "paper-content evidence. Only successful read_page and inspect_page results create "
+    "page evidence. For an all-paper request, read and cite every Runtime active-set "
+    "member before ending the turn. Tool inputs must match their JSON schemas exactly."
+    "\n\n"
     "For a direct answer or a non-research library_exec/library_edit task, respond "
     "naturally without forced report headings or citations. After paper research, "
     "write a concise Markdown report with Findings, Evidence, Gaps, and Next Steps. "
@@ -254,6 +267,9 @@ class _PreparedPaperCache:
     paper_id: str
     page_count: int
     text_path: str
+    extractor_fingerprint: str
+    cache_revision_id: str
+    artifact_sha256: str
 
     def to_payload(self) -> dict[str, str | int]:
         return {
@@ -262,6 +278,16 @@ class _PreparedPaperCache:
             "pages": self.page_count,
             "text": self.text_path,
         }
+
+    def active_snapshot(self) -> ActivePaperSnapshot:
+        return ActivePaperSnapshot(
+            source_locator=self.source_locator,
+            pdf_sha256=self.paper_id,
+            page_count=self.page_count,
+            extractor_fingerprint=self.extractor_fingerprint,
+            cache_revision_id=self.cache_revision_id,
+            artifact_sha256=self.artifact_sha256,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -918,6 +944,17 @@ async def run_paper_copilot(
                 },
             )
     cache_context_fragment = cache_preflight.context_fragment()
+    active_papers = tuple(
+        entry.active_snapshot() for entry in cache_preflight.prepared
+    )
+    active_papers_by_id = {
+        paper.pdf_sha256: paper for paper in active_papers
+    }
+    preflight_complete = (
+        cache_preflight.total_pdf_count > 0
+        and cache_preflight.total_pdf_count == len(cache_preflight.prepared)
+        and not cache_preflight.failures
+    )
     research_skill = load_research_skill()
     system_prompt = _BASE_SYSTEM_PROMPT
     tools = mark_tools_cached(paper_copilot_tools())
@@ -961,8 +998,16 @@ async def run_paper_copilot(
     events: list[Event] = []
     termination_reason = "unknown"
     report_markdown = _REPORT_FALLBACK
+    research_activity: set[str] = set()
+    if load_page_evidence(store) or _history_uses_research_evidence(
+        resume_history or []
+    ):
+        research_activity.add("recovered_research")
+    last_research_validation: ResearchValidationResult | None = None
 
     async def dispatch(req: ToolUseRequest) -> ToolResultData:
+        if _tool_request_uses_research_evidence(req):
+            research_activity.add(req.name)
         return await dispatch_paper_copilot_tool_async(
             req,
             context,
@@ -975,7 +1020,37 @@ async def run_paper_copilot(
             user_request=prompt,
             store=store,
             data_root=root,
+            active_papers=active_papers_by_id,
             approval_review_callback=approval_review_callback,
+        )
+
+    async def on_tool_result_persisted(
+        req: ToolUseRequest,
+        result: ToolResultData,
+    ) -> None:
+        append_page_evidence(
+            store,
+            tool_call_id=req.id,
+            trace_attributes=result.trace_attributes,
+        )
+
+    def validate_end_turn(candidate_markdown: str) -> EndTurnValidation:
+        nonlocal last_research_validation
+        last_research_validation = validate_research_report(
+            candidate_markdown,
+            active_papers=active_papers,
+            evidence_facts=load_page_evidence(store),
+            preflight_complete=preflight_complete,
+            stale_paper_ids=_stale_active_paper_ids(active_papers, context.pdf_dir),
+            enabled=bool(research_activity),
+        )
+        if last_research_validation.passed:
+            return EndTurnValidation(passed=True)
+        return EndTurnValidation(
+            passed=False,
+            continuation_message=build_validation_continuation(
+                last_research_validation
+            ),
         )
 
     def build_runtime_context() -> str:
@@ -1088,6 +1163,8 @@ async def run_paper_copilot(
             build_recovery_state=build_recovery_state,
             context_token_estimator=estimate_history_tokens,
             compact_history_callback=compact_main_history,
+            on_tool_result_persisted=on_tool_result_persisted,
+            validate_end_turn=validate_end_turn,
             stream_event_callback=stream_event_callback,
         ):
             events.append(event)
@@ -1122,6 +1199,17 @@ async def run_paper_copilot(
             ]
         )
     )
+    if last_research_validation is None or not last_research_validation.enabled:
+        last_research_validation = validate_research_report(
+            report_markdown,
+            active_papers=active_papers,
+            evidence_facts=load_page_evidence(store),
+            preflight_complete=preflight_complete,
+            stale_paper_ids=_stale_active_paper_ids(active_papers, context.pdf_dir),
+            enabled=bool(research_activity),
+        )
+    if last_research_validation.enabled and not last_research_validation.passed:
+        report_markdown = incomplete_research_report(last_research_validation)
     composer_used = context.composer_plan.library_listed or any(
         name in _COMPOSER_TOOL_NAMES for name in tool_names
     )
@@ -1217,17 +1305,43 @@ async def run_paper_copilot(
                 "final_error_codes": initial_error_codes,
             }
 
-    evidence_refs = _extract_evidence_refs(report_markdown)
+    if last_research_validation.enabled and composer_used:
+        last_research_validation = validate_research_report(
+            report_markdown,
+            active_papers=active_papers,
+            evidence_facts=load_page_evidence(store),
+            preflight_complete=preflight_complete,
+            stale_paper_ids=_stale_active_paper_ids(active_papers, context.pdf_dir),
+            enabled=True,
+        )
+        if not last_research_validation.passed:
+            report_markdown = incomplete_research_report(last_research_validation)
+
+    evidence_refs = (
+        last_research_validation.valid_refs
+        if last_research_validation.enabled
+        else _extract_evidence_refs(report_markdown)
+    )
     quality = (
-        _quality_summary(report_markdown, evidence_refs)
+        _quality_summary(
+            report_markdown,
+            evidence_refs,
+            validation=last_research_validation,
+        )
         if (
-            any(name in _RESEARCH_EVIDENCE_TOOL_NAMES for name in tool_names)
-            or ("library_exec" in tool_names and bool(evidence_refs))
+            last_research_validation.enabled
+            or any(name in _RESEARCH_EVIDENCE_TOOL_NAMES for name in tool_names)
         )
         else None
     )
     if proposal_check is not None:
         report_markdown = append_composer_check_section(report_markdown, proposal_check)
+    if last_research_validation.enabled and last_research_validation.passed:
+        report_markdown = render_research_citations(
+            report_markdown,
+            active_papers=active_papers,
+            valid_refs=last_research_validation.valid_refs,
+        )
 
     termination_summary = _build_termination_summary(
         reason=termination_reason,
@@ -1246,6 +1360,7 @@ async def run_paper_copilot(
         "paper_budget": _paper_budget_payload(context),
         "termination_summary": asdict(termination_summary),
         "skill": research_skill.trace_attributes(),
+        "research_validation": last_research_validation.model_dump(mode="json"),
     }
     if quality is not None:
         final_payload["quality"] = quality
@@ -1495,6 +1610,11 @@ def _tool_schema_templates() -> list[dict[str, Any]]:
             LibraryExecInput,
         ),
         _tool_schema(
+            "read_page",
+            read_page_tool_description(),
+            ReadPageInput,
+        ),
+        _tool_schema(
             "inspect_page",
             inspect_page_tool_description(),
             InspectPageInput,
@@ -1532,6 +1652,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "find_related_papers": _FindRelatedPapersInput,
         "library_files": LibraryFilesInput,
         "library_exec": LibraryExecInput,
+        "read_page": ReadPageInput,
         "inspect_page": InspectPageInput,
         "paper_set": PaperSetInput,
         "library_edit": LibraryEditInput,
@@ -1552,6 +1673,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "find_related_papers": frozenset({"read_library"}),
         "library_files": frozenset({"read_library", "write_library"}),
         "library_exec": frozenset({"read_library", "execute_command"}),
+        "read_page": frozenset({"read_library"}),
         "inspect_page": frozenset({"read_library"}),
         "paper_set": frozenset({"read_library", "update_job_state"}),
         "library_edit": frozenset({"read_library", "write_library"}),
@@ -1564,6 +1686,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "query_papers": 60_000,
         "library_files": 16_000,
         "library_exec": 64_000,
+        "read_page": 40_000,
         "inspect_page": 16_000,
         "paper_set": 40_000,
         "library_edit": 40_000,
@@ -1670,6 +1793,8 @@ def _dispatch_parsed_tool(
             )
         case "library_exec":
             return _err("library_exec requires the asynchronous tool dispatcher")
+        case "read_page":
+            return _err("read_page requires the asynchronous tool dispatcher")
         case "inspect_page":
             return _err("inspect_page requires the asynchronous tool dispatcher")
         case "paper_set":
@@ -1705,6 +1830,7 @@ async def dispatch_paper_copilot_tool_async(
     user_request: str = "",
     store: SessionStore | None = None,
     data_root: Path | None = None,
+    active_papers: dict[str, ActivePaperSnapshot] | None = None,
     approval_review_callback: ToolApprovalReviewCallback | None = None,
 ) -> ToolResultData:
     if req.name not in _MODEL_TOOL_NAMES:
@@ -1812,10 +1938,27 @@ async def dispatch_paper_copilot_tool_async(
             library_exec_run = await run_library_exec(
                 cast(LibraryExecInput, parsed_input),
                 context.pdf_dir,
+                cache_root=pdf_cache_dir(
+                    context.root if context.root is not None else data_root
+                ),
             )
             tool_result = _ok(
                 library_exec_run.output,
                 trace_attributes=library_exec_run.trace_attributes,
+            )
+        elif req.name == "read_page":
+            read_page_run = await run_read_page(
+                cast(ReadPageInput, parsed_input),
+                cache_root=pdf_cache_dir(
+                    context.root if context.root is not None else data_root
+                )
+                .expanduser()
+                .resolve(),
+                active_papers=active_papers or {},
+            )
+            tool_result = _ok(
+                read_page_run.output,
+                trace_attributes=read_page_run.trace_attributes,
             )
         elif req.name == "inspect_page":
             inspect_page_run = await run_inspect_page(
@@ -1853,6 +1996,17 @@ def _parse_tool_input(req: ToolUseRequest) -> tuple[ToolDefinition, BaseModel]:
     if definition is None:
         raise ValueError(f"unknown research tool: {req.name}")
     return definition, definition.input_model.model_validate(req.input)
+
+
+def _tool_request_uses_research_evidence(req: ToolUseRequest) -> bool:
+    if req.name in _RESEARCH_EVIDENCE_TOOL_NAMES:
+        return True
+    if req.name != "library_exec":
+        return False
+    command = req.input.get("cmd")
+    return isinstance(command, str) and (
+        "cache/" in command or "pdftotext" in command or "pdfinfo" in command
+    )
 
 
 def _cap_tool_result(
@@ -2000,7 +2154,7 @@ async def _prepare_paper_cache(
         return _PaperCachePreflight(total_pdf_count=0)
     library_root = context.pdf_dir.resolve()
     pdf_paths = _pdfs_under(library_root)
-    cache = PdfTextCache(pdf_cache_dir().expanduser().resolve())
+    cache = PdfTextCache(pdf_cache_dir(context.root).expanduser().resolve())
     prepared: list[_PreparedPaperCache] = []
     failures: list[dict[str, str]] = []
     for pdf_path in pdf_paths[: max(context.max_papers, 0)]:
@@ -2047,7 +2201,46 @@ def _prepared_paper_cache(
         paper_id=cache_ref.pdf_sha256,
         page_count=manifest.page_count,
         text_path=text_path.as_posix(),
+        extractor_fingerprint=cache_ref.extractor_fingerprint,
+        cache_revision_id=cache_ref.revision_id,
+        artifact_sha256=manifest.artifact.sha256,
     )
+
+
+def _stale_active_paper_ids(
+    active_papers: tuple[ActivePaperSnapshot, ...],
+    library_root: Path | None,
+) -> frozenset[str]:
+    if library_root is None:
+        return frozenset(paper.pdf_sha256 for paper in active_papers)
+    resolved_root = library_root.expanduser().resolve()
+    stale: set[str] = set()
+    for paper in active_papers:
+        pdf_path = (resolved_root / paper.source_locator).resolve()
+        try:
+            pdf_path.relative_to(resolved_root)
+        except ValueError:
+            stale.add(paper.pdf_sha256)
+            continue
+        try:
+            is_stale = (
+                not pdf_path.is_file()
+                or pdf_path.suffix.lower() != ".pdf"
+                or _sha256_path(pdf_path) != paper.pdf_sha256
+            )
+        except OSError:
+            is_stale = True
+        if is_stale:
+            stale.add(paper.pdf_sha256)
+    return frozenset(stale)
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _relative_pdf_path(path: Path, pdf_dir: Path) -> str:
@@ -3475,11 +3668,20 @@ def _extract_evidence_refs(report_markdown: str) -> list[dict[str, str]]:
 
 def _quality_summary(
     report_markdown: str,
-    evidence_refs: list[dict[str, str]],
+    evidence_refs: list[dict[str, Any]],
+    *,
+    validation: ResearchValidationResult,
 ) -> dict[str, Any]:
     findings_text = _quality_claim_section(report_markdown)
     findings_claims = _claim_units(findings_text)
-    findings_refs = _extract_evidence_refs(findings_text)
+    valid_raw_refs = {
+        item["raw"] for item in evidence_refs if isinstance(item.get("raw"), str)
+    }
+    findings_inline_ref_count = sum(
+        1
+        for match in _EVIDENCE_REF_RE.finditer(findings_text)
+        if match.group(0) in valid_raw_refs
+    )
     findings_claim_count = len(findings_claims)
     evidence_ref_count = len(evidence_refs)
     coverage_ratio = (
@@ -3489,12 +3691,18 @@ def _quality_summary(
     )
 
     return {
-        "method": "heuristic_v1",
+        "method": "heuristic_v2",
         "evidence_ref_count": evidence_ref_count,
+        "invalid_evidence_ref_count": len(validation.invalid_refs),
         "findings_claim_count": findings_claim_count,
-        "findings_inline_ref_count": len(findings_refs),
+        "findings_inline_ref_count": findings_inline_ref_count,
         "claims_without_refs_count": max(0, findings_claim_count - evidence_ref_count),
         "evidence_coverage_ratio": coverage_ratio,
+        "active_set_citation_coverage_ratio": (
+            validation.cited_paper_count / validation.active_paper_count
+            if validation.active_paper_count
+            else 0.0
+        ),
     }
 
 
@@ -3805,6 +4013,29 @@ def _tool_names_from_history(history: list[dict[str, Any]]) -> list[str]:
             ):
                 names.append(block["name"])
     return names
+
+
+def _history_uses_research_evidence(history: list[dict[str, Any]]) -> bool:
+    for message in history:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            name = block.get("name")
+            raw_input = block.get("input")
+            if name in _RESEARCH_EVIDENCE_TOOL_NAMES:
+                return True
+            if name == "library_exec" and isinstance(raw_input, dict):
+                request = ToolUseRequest(
+                    id=str(block.get("id", "recovered")),
+                    name=name,
+                    input=raw_input,
+                )
+                if _tool_request_uses_research_evidence(request):
+                    return True
+    return False
 
 
 def _build_recovery_state(

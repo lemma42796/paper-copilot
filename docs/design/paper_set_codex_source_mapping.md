@@ -1,7 +1,7 @@
 # `paper_set` Codex 源码映射
 
-状态：Slice 5 实现完成
-日期：2026-07-27  
+状态：历史接口映射；模型可见 `paper_set` 已移除，代码与事件仅保留兼容
+日期：2026-07-28
 Codex source ref：`61a44880a85d2fd0d8770908dea5733495e571c8`  
 Codex worktree：当前固定为 `/Users/a123/Documents/agent学习/codex`；Slice 5 审计时
 使用该 commit 的 GitHub archive，无本地修改
@@ -17,6 +17,10 @@ Codex worktree：当前固定为 `/Users/a123/Documents/agent学习/codex`；Sli
 
 未列入本文的自定义机制不得进入 Slice 5。
 
+本文不再作为新接口设计依据。不可变集合、revision、stale 和 append-only 恢复语义仍
+用于兼容当前代码与历史 session；新的证据与 active-set 设计以
+`runtime_research_evidence_codex_source_mapping.md` 为准。
+
 ## 2. 源码映射
 
 | 需求 | Codex source | Codex 机制 | Paper Copilot 分类 | 结论 |
@@ -27,7 +31,7 @@ Codex worktree：当前固定为 `/Users/a123/Documents/agent学习/codex`；Sli
 | 损坏记录处理 | `rollout/src/recorder.rs::load_rollout_items`、`core/src/session/rollout_reconstruction.rs` | loader/reducer 在恢复边界校验记录形状并以完整前缀重建 | 直接采用 + 必要适配 | 复用现有 torn-tail 处理；`paper_set` reducer 额外校验集合 ID、父子分区、PDF/cache revision 和 evidence ref 形状 |
 | 论文集合 | 固定 Codex source ref 无论文集合、PDF revision 或 evidence coverage | 无对应领域机制 | Codex 缺失 | 增加 create、derive、record_evidence、status 四个确定性操作 |
 | revision 与 stale | 固定 Codex source ref 无授权论文库或内容寻址 PDF cache | 无对应领域机制 | Codex 缺失 | 成员快照绑定 PDF SHA-256、兼容的 cache ref 和授权相对 locator；PDF 缺失/变化或 current cache ref 变化时返回 stale |
-| 覆盖完成性 | 固定 Codex source ref 无逐论文证据覆盖语义 | 无对应领域机制 | Codex 缺失 | 只有每篇成员至少有一个可解析到快照 cache revision 的页级 evidence ref，且没有 stale 成员时，coverage 才为 complete |
+| 覆盖完成性 | 固定 Codex source ref 无逐论文证据覆盖语义 | 无对应领域机制 | Codex 缺失 | 当前实现只证明每篇成员至少登记一个可解析到快照 cache revision 的页码且没有 stale；Query 1 已证明这不足以表示模型读取过 citation-grade 页面，不能作为正式 coverage 合同 |
 
 ## 3. Slice 5 固定边界
 
@@ -48,3 +52,17 @@ Codex worktree：当前固定为 `/Users/a123/Documents/agent学习/codex`；Sli
 - 当前只注册内部 schema 和 dispatcher，实现不加入模型可见工具列表；公开切换、
   Skill 更新和 macOS 兼容仍属于 Slice 6；
 - 不加入搜索、RAG、PDF 提取、回答生成、TTL 回收、新依赖或旧工具删除。
+
+## 4. Query 1 验收后的已知缺口
+
+简化重构后的冻结 Query 1 没有调用 `paper-cache page` 或 `inspect_page`，模型明确使用
+approximate pages，却仍通过 14 次 `record_evidence` 得到 14/14 coverage complete。
+现有 `_validate_evidence_ref` 会读取 cache page 以确认页码和 revision 可用，但不会证明
+该页内容已经作为 citation-grade evidence 返回给模型，也没有把 evidence 绑定到先前
+受信任页面读取产生的 artifact。
+
+因此 Slice 5 的不可变集合、revision、stale 和恢复语义仍成立，但“coverage complete”
+目前只能解释为登记完整性，不能解释为研究证据完整性。下一 bounded slice 必须先完成
+新的 Codex-first 源码映射，再让 Runtime 持有并校验页面证据事实。模型可见
+`paper_set` 已从模型表面删除；旧事件保持可重放，但不再作为 citation-grade coverage
+真源。

@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import signal
 import subprocess
 import sys
@@ -19,10 +18,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
-from paper_copilot.session.paths import pdf_cache_dir
-from paper_copilot.shared.errors import KnowledgeError, PaperCopilotError
+from paper_copilot.shared.errors import KnowledgeError
 from paper_copilot.shared.logging import get_logger
-from paper_copilot.shared.pdf_cache import PdfCacheLookup, PdfTextCache
+from paper_copilot.session.paths import pdf_cache_dir
 from paper_copilot.shared.poppler import find_poppler_executable
 
 _SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
@@ -44,7 +42,6 @@ _SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 _OTOOL = Path("/usr/bin/otool")
 _SCHEMA_VERSION = 2
 _SANDBOX_POLICY_ID = "library_workspace_v2"
-_BROKER_POLICY_ID = "paper_cache_broker_v1"
 _RESOURCE_WRAPPER = (
     "setopt errexit; "
     f"limit -h cputime {_CPU_LIMIT_SECONDS}; "
@@ -105,12 +102,6 @@ class LibraryExecRun:
 class _ResolvedCommand:
     argv: tuple[str, ...]
     source_cmd: str
-
-
-@dataclass(frozen=True, slots=True)
-class _PaperCacheCommand:
-    operation: str
-    arguments: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,10 +186,10 @@ def library_exec_tool_description() -> str:
         "Run a bounded command in a Codex-style macOS sandbox. The fixed logical "
         "workspace exposes the configured paper library as read-only library/, "
         "derived text cache as read-only cache/, and only scratch/ as writable "
-        "temporary storage. Runtime normally provides prepared cache paths in "
-        "research_cache_index; paper-cache remains available for bounded page reads "
-        "and on-demand preparation outside that index. The environment contains no "
-        "user credentials; sandboxing "
+        "temporary storage. Runtime provides prepared cache paths in "
+        "research_cache_index; use read_page for citation-grade page text. "
+        "paper-cache commands are not supported. The environment contains no user "
+        "credentials; sandboxing "
         "blocks network access, library/cache writes, and reads outside authorized "
         "roots. The tool has no permission-escalation path."
     )
@@ -207,18 +198,20 @@ def library_exec_tool_description() -> str:
 async def run_library_exec(
     args: LibraryExecInput,
     library_root: Path | None,
+    *,
+    cache_root: Path | None = None,
 ) -> LibraryExecRun:
     root = _resolve_library_root(library_root)
-    cache_root = pdf_cache_dir().expanduser().resolve()
+    resolved_cache_root = (
+        pdf_cache_dir().expanduser().resolve()
+        if cache_root is None
+        else cache_root.expanduser().resolve()
+    )
     resolved_command = _resolve_command(args.cmd)
-    paper_cache_command = _intercept_paper_cache(resolved_command)
-    if paper_cache_command is not None:
-        return await _run_paper_cache_command(
-            paper_cache_command,
-            resolved_command=resolved_command,
-            args=args,
-            library_root=root,
-            cache_root=cache_root,
+    if _PAPER_CACHE_COMMAND_PATTERN.search(resolved_command.source_cmd):
+        raise KnowledgeError(
+            "paper-cache is not exposed through library_exec; use the Runtime "
+            "research_cache_index for search and read_page for one exact page"
         )
 
     _require_macos_sandbox()
@@ -243,7 +236,9 @@ async def run_library_exec(
         for command_name, executable in external_commands.commands:
             (tool_bin / command_name).symlink_to(executable)
         (workspace / "library").symlink_to(root, target_is_directory=True)
-        visible_cache_root = cache_root if cache_root.is_dir() else empty_cache
+        visible_cache_root = (
+            resolved_cache_root if resolved_cache_root.is_dir() else empty_cache
+        )
         (workspace / "cache").symlink_to(
             visible_cache_root,
             target_is_directory=True,
@@ -594,178 +589,6 @@ def _expand_macho_loader_path(
     if path.startswith("/"):
         return Path(path)
     raise ValueError(f"unsupported Mach-O rpath {path!r} for {object_path}")
-
-
-def _intercept_paper_cache(
-    resolved_command: _ResolvedCommand,
-) -> _PaperCacheCommand | None:
-    try:
-        arguments = shlex.split(resolved_command.source_cmd, posix=True)
-    except ValueError as error:
-        if _PAPER_CACHE_COMMAND_PATTERN.search(resolved_command.source_cmd):
-            raise KnowledgeError(f"invalid paper-cache command: {error}") from error
-        return None
-    if not arguments or arguments[0] != "paper-cache":
-        if _PAPER_CACHE_COMMAND_PATTERN.search(resolved_command.source_cmd):
-            raise KnowledgeError(
-                "paper-cache must be the entire library_exec cmd; do not place it "
-                "inside a shell loop, pipeline, chained command, substitution, or "
-                "find -exec"
-            )
-        return None
-    if len(arguments) < 2:
-        raise KnowledgeError("paper-cache requires status, ensure, or page")
-    return _PaperCacheCommand(
-        operation=arguments[1],
-        arguments=tuple(arguments[2:]),
-    )
-
-
-async def _run_paper_cache_command(
-    command: _PaperCacheCommand,
-    *,
-    resolved_command: _ResolvedCommand,
-    args: LibraryExecInput,
-    library_root: Path,
-    cache_root: Path,
-) -> LibraryExecRun:
-    started = time.monotonic()
-    command_ref = _command_ref(resolved_command, _BROKER_POLICY_ID)
-    cache = PdfTextCache(cache_root)
-    artifacts: list[str] = []
-    timed_out = False
-    exit_code: int | None = 0
-    try:
-        async with asyncio.timeout(args.timeout_ms / 1_000):
-            match command.operation, command.arguments:
-                case ("status", (relative_pdf,)):
-                    pdf_path, _source_locator = _resolve_library_pdf(
-                        library_root,
-                        relative_pdf,
-                    )
-                    payload = _cache_lookup_payload(await cache.status(pdf_path))
-                case ("ensure", (relative_pdf,)):
-                    pdf_path, source_locator = _resolve_library_pdf(
-                        library_root,
-                        relative_pdf,
-                    )
-                    payload = _cache_lookup_payload(
-                        await cache.ensure(
-                            pdf_path,
-                            source_locator=source_locator,
-                        )
-                    )
-                case ("page", (paper_id, raw_page)):
-                    try:
-                        page_number = int(raw_page)
-                    except ValueError as error:
-                        raise KnowledgeError(
-                            "paper-cache page requires an integer page number"
-                        ) from error
-                    cache_page = await cache.page_for_paper_id(
-                        paper_id,
-                        page=page_number,
-                    )
-                    payload = cache_page.model_dump(mode="json")
-                case _:
-                    raise KnowledgeError(
-                        "usage: paper-cache status <relative-pdf> | "
-                        "paper-cache ensure <relative-pdf> | "
-                        "paper-cache page <paper-id> <page>"
-                    )
-        artifact_ref = _artifact_ref(payload)
-        if artifact_ref is not None:
-            artifacts.append(artifact_ref)
-        raw_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    except TimeoutError:
-        timed_out = True
-        exit_code = None
-        raw_text = f"paper-cache timed out after {args.timeout_ms} milliseconds"
-    except (PaperCopilotError, OSError, ValueError) as error:
-        exit_code = 1
-        raw_text = str(error)
-
-    wall_time_seconds = time.monotonic() - started
-    output_text, original_token_count = _truncate_for_token_budget(
-        raw_text,
-        args.max_output_tokens,
-    )
-    return LibraryExecRun(
-        output=_model_output(
-            output=output_text,
-            exit_code=exit_code,
-            wall_time_seconds=wall_time_seconds,
-            timed_out=timed_out,
-            original_token_count=original_token_count,
-            output_omitted_bytes=0,
-        ),
-        trace_attributes={
-            "library_exec_schema_version": _SCHEMA_VERSION,
-            "command": args.cmd,
-            "resolved_command": list(resolved_command.argv),
-            "command_ref": command_ref,
-            "cwd": "workspace",
-            "sandbox_policy": _BROKER_POLICY_ID,
-            "network_access": False,
-            "timeout_ms": args.timeout_ms,
-            "timed_out": timed_out,
-            "exit_code": exit_code,
-            "artifacts": artifacts,
-            "paper_cache_operation": command.operation,
-        },
-    )
-
-
-def _resolve_library_pdf(
-    library_root: Path,
-    relative_pdf: str,
-) -> tuple[Path, str]:
-    locator = Path(relative_pdf)
-    if locator.is_absolute() or ".." in locator.parts:
-        raise KnowledgeError(
-            "paper-cache requires a PDF path relative to the authorized library"
-        )
-    if locator.parts[:1] == ("library",):
-        locator = Path(*locator.parts[1:])
-    if not locator.parts:
-        raise KnowledgeError("paper-cache requires a PDF path")
-    candidate = (library_root / locator).resolve()
-    try:
-        source_locator = candidate.relative_to(library_root).as_posix()
-    except ValueError as error:
-        raise KnowledgeError("PDF path resolves outside the authorized library") from error
-    if candidate.suffix.lower() != ".pdf" or not candidate.is_file():
-        raise KnowledgeError("paper-cache target must be an existing PDF")
-    return candidate, source_locator
-
-
-def _cache_lookup_payload(lookup: PdfCacheLookup) -> dict[str, Any]:
-    return lookup.model_dump(mode="json", exclude_none=True)
-
-
-def _artifact_ref(payload: dict[str, Any]) -> str | None:
-    cache_ref = payload.get("cache_ref")
-    if isinstance(cache_ref, dict):
-        pdf_sha256 = cache_ref.get("pdf_sha256")
-        extractor_fingerprint = cache_ref.get("extractor_fingerprint")
-        revision_id = cache_ref.get("revision_id")
-        if all(
-            isinstance(value, str)
-            for value in (pdf_sha256, extractor_fingerprint, revision_id)
-        ):
-            return (
-                f"paper-cache:{pdf_sha256}:{extractor_fingerprint}:{revision_id}"
-            )
-    artifact_sha256 = payload.get("artifact_sha256")
-    paper_id = payload.get("paper_id")
-    page = payload.get("page")
-    if (
-        isinstance(artifact_sha256, str)
-        and isinstance(paper_id, str)
-        and isinstance(page, int)
-    ):
-        return f"paper-cache:{paper_id}:page:{page}:{artifact_sha256}"
-    return None
 
 
 def _model_output(

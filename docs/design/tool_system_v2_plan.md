@@ -1,1126 +1,253 @@
 # Paper Copilot 工具系统 v2 计划
 
-状态：方向已确认，Slice 1–6 已完成；先执行一次 v2 四轮预检，Slice 7 正式冻结评测尚未开始
+状态：Runtime 页面证据 slice 已实施并完成定向验证；冻结 Query 1 尚未重跑；Slice 7 暂停
 日期：2026-07-28
-取代范围：`docs/design/command_first_tool_redesign_handoff.md` 及本文档旧版中的下一代工具建议  
-历史文档：旧文档和 Git 历史只作为决策背景，不再作为 v2 实施依据
+文档职责：只记录方向、阶段、决策门和 Definition of Done。工具契约、源码映射、实验
+明细和历史过程保存在第 9 节链接的专项文档中，不在本计划重复。
 
-## 1. 最终决策
+## 1. 目标与边界
 
-Paper Copilot 的模型可见工具采用 Codex 风格的少量通用原语。论文研究步骤不再固化在
-一个大型模型工具中，而由 Skill 指导 Agent 显式组合；Runtime 只负责安全、缓存、状态
-不变量和有界执行。
+目标是让 Agent 用少量、可组合的原语完成论文研究，同时由 Runtime 持有安全、缓存、
+证据、恢复和完成性不变量。
 
-v2 模型只看到四个工具：
+固定原则：
 
-1. `library_exec`：在授权论文库和只读派生缓存中执行受限命令。
-2. `inspect_page`：检查一张明确的 PDF 页面或局部区域。
-3. `paper_set`：保存不可变论文集合及其跨轮覆盖状态。
-4. `library_edit`：执行授权论文库中的用户可见写操作。
+1. Agent 编排研究步骤，工具只执行一次明确动作。
+2. PDF 和页级产物是证据基础；摘要、模型文本、搜索命中和 embedding 不是原文真源。
+3. 正常文字层 PDF 默认走全文 TXT、确定性搜索和页级读取，不以向量 RAG 为前置条件。
+4. Skill 指导工作流，但不承担授权、安全或完成性校验。
+5. session、job 和 trace 保持 append-only，并分别承担模型历史、运行状态和审计职责。
+6. Agent 基础设施先映射固定 Codex 源码，再做必要的论文领域适配。
+7. 一次只实施并验收一个 bounded slice。
 
-以下名称不属于 v2 模型工具表面：
+不在 v2 当前范围内：
 
-- `read_paper`
-- `paper_search`
-- `search_papers`
-- `query_paper`
-- `query_papers`
-- `compare_papers`
-- `find_related_papers`
-- Composer 专用工具
-- 旧 `library_files`
-- 旧 `notes_patch`
+- OCR、云端论文库、第二模型审稿；
+- PostgreSQL、向量数据库或强制 embedding；
+- 用模型判断引用是否语义蕴含自然语言 claim；
+- benchmark 专用作者、标题、方法、答案或关键词；
+- SwiftUI 重写 Python Core；
+- 在冻结评测通过前删除旧实现。
 
-核心变化：
+## 2. 当前实现
 
-1. 论文研究工作流写入 Skill，不写入大型工具实现。
-2. 模型通过 `library_exec` 明确选择 `pdfinfo`、`pdftotext`、`rg`、`awk` 等命令，并从
-   每次有界输出决定下一步。
-3. 正常文字层 PDF 优先使用 Poppler 一次性提取全文 TXT，不要求逐页调用模型，不要求
-   LLM 生成结构化字段。
-4. 提取结果按 PDF hash、提取器版本和提取参数跨会话缓存；匹配缓存必须复用。
-5. TXT、page manifest 和原始 PDF 是论文证据基础；数据库、chunk、embedding 和向量
-   RAG 不作为 v2 入库或问答前置条件。
-6. `inspect_page` 只在文字层、版面、图表、公式或页码证据需要核验时使用。
-7. `paper_set` 只承担跨轮集合和遍历完成性，不承担搜索或 RAG；其相对收益必须用新的
-   Codex CLI JSONL 基线重新评分，不再引用旧桌面端模型自报报告。
-8. `library_edit` 仍是唯一用户论文库写入口。
-9. 对 Codex 的借鉴以可审查源码和权威工具 trace 为依据，不以工具名称、界面行为或
-   模型自述作为架构事实。
-10. 旧实现只保留到 v2 通过冻结评测；通过后按单独确认的删除 slice 移除。
+当前模型可见工具表面已切换为：
 
-本计划不修改当前 `ARCHITECTURE.md` 对已实现系统的描述。公开工具实际切换时，再把已
-落地且验收过的 v2 契约写入架构文档。
-
-### 1.1 Codex-first 参考原则
-
-Agent 工具、命令执行、sandbox、审批、进程生命周期、Skill 和 trace 的设计遵循以下
-优先级：
-
-1. 开始设计或编码前，先在固定 Codex source ref 中查找对应实现；
-2. Codex 已有对应机制时，参照其结构、数据流、状态语义和失败行为实现，不另行发明
-   平行机制；
-3. 只有产品授权边界或论文领域对象不同的部分，才允许做必要的窄化适配；
-4. Codex 没有对应机制时，才允许增加 Paper Copilot 专用设计，并记录已检索的源码位置、
-   缺失点和最小补充范围；
-5. 如果计划偏离 Codex 已有设计，必须先写明差异和理由，并取得用户明确确认。
-
-每个实施 slice 在写代码前必须形成一份源码映射，至少包括：
-
-```text
-需求 → Codex source ref → Codex 现有机制 → 直接采用/必要适配/确实缺失
-```
-
-未完成源码映射，不得以“Codex-style”或“Codex-inspired”为由自行补充设计。
-
-## 2. 决策依据
-
-### 2.1 当前实现的问题
-
-当前 `read_paper` 是一个模型可见的复合工具：
-
-```text
-read_paper
-→ SkimPaperTool
-→ ExtractPaperTool
-→ LinkRelatedPapersTool
-→ report
-→ fields store
-→ section chunks
-→ embedding store
-→ graph links
-```
-
-该设计把多个 LLM 调用、论文结构推断、字段抽取、检索索引和持久化步骤隐藏在一次工具
-调用中，存在以下问题：
-
-- Agent 不能按任务跳过不需要的步骤；
-- 正常文字提取、语义解释和索引发布没有清晰边界；
-- 章节骨架错误会级联为正文遗漏；
-- 单次结构化压缩无法证明全文覆盖；
-- 长流程失败时模型难以判断具体失败阶段；
-- 用户只需一次局部问答时仍可能承担完整入库成本；
-- embedding 和结构化字段被错误地当成问答前置条件；
-- 工具逐渐成为隐藏的第二套 Agent。
-
-当前 `paper_search` 同时包装论文发现、单篇查询、多篇查询、分页和旧知识索引，也把本可
-由命令组合完成的搜索决策隐藏在内部。
-
-### 2.2 Codex 源码依据
-
-Slice 2 的源码映射固定到本机 Codex commit
-`61a44880a85d2fd0d8770908dea5733495e571c8`，借鉴以下 Codex Core 机制：
-固定本机 worktree 为 `/Users/a123/Documents/agent学习/codex`；设计或实现 Agent
-基础设施前应先在该路径检查对应源码，不再重新猜测或下载 source ref。
-
-逐项审计见 `docs/design/library_exec_codex_source_mapping.md`。该映射是 Slice 2 的实现
-门槛；映射与本文冲突时先修订计划，不得静默选择其中一份。
-
-- `codex-rs/core/src/tools/handlers/unified_exec.rs`
-  - 通用 `exec_command` 参数；
-  - shell 选择；
-  - PTY、yield 和输出预算。
-- `codex-rs/core/src/tools/handlers/unified_exec/exec_command.rs`
-  - environment/cwd 解析；
-  - sandbox 与权限审批；
-  - process manager；
-  - `apply_patch` 特殊拦截；
-  - hook、trace 和输出截断。
-- `codex-rs/core/src/tools/handlers/unified_exec/write_stdin.rs`
-  - 长进程输入和增量输出协议。
-- `codex-rs/core/src/tools/runtimes/shell.rs`
-  - 命令 canonicalization；
-  - approval key；
-  - sandbox attempt；
-  - 网络和环境策略。
-
-Paper Copilot 不复制 Codex 的全部 Rust、远程环境、代码仓库权限或通用本机能力，只实现
-论文库需要的窄化子集。与 Codex 一致，安全边界以规范化命令、固定 cwd/environment、
-OS sandbox、timeout、输出预算和权威 trace 为核心；不另造一套容易与 sandbox 漂移的
-危险命令黑名单。
-
-### 2.3 Codex 四轮实验依据
-
-冻结的 14 篇硕士学位论文实验中，Codex CLI JSONL v2 的实际策略是：
-
-```text
-列出 14 篇 PDF
-→ pdfinfo 获取页数
-→ pdftotext -f/-l -layout/-raw 有界读取
-→ rg/sed/awk 定向搜索和筛选
-→ 对截断或空命中执行定向补读
-```
-
-权威 session trace 显示：
-
-- 14 篇论文合计 1169 页；
-- 四轮共 17 次命令执行；
-- 四轮均在同一 session 中完成，保存逐轮 `codex exec --json` 和原生 rollout；
-- 模型为 `gpt-5.6-sol`，reasoning effort 为 `low`；
-- 总 input tokens 为 2,975,964，其中 cached input 为 2,534,144；output tokens 为
-  55,264；
-- 没有 OCR；
-- 没有 embedding；
-- 没有向量数据库；
-- 没有先运行全文 LLM 结构化摘要；
-- 没有页面图像工具调用；
-- T02 有一次 WebSocket 自动重连，turn 最终完成。
-
-该实验说明正常文字层 PDF 可以由模型组合受限命令完成多轮研究，但本次 CLI 直接重复
-调用 `pdftotext`，没有建立跨会话缓存契约，也没有验证扫描件或视觉页面路径。
-
-### 2.4 基线失败
-
-旧桌面端基线的 `60/68`、Macro-F1 `95%`、`constraint_memory_failure` 等结论来自只有
-模型自报工具记录的旧回答，相关产物和报告已删除，不再作为当前设计事实。
-
-新的 Codex CLI 四轮回答和权威 trace 已冻结到私有 `runs/codex-cli-jsonl-v2/`，但尚未
-按同一 Gold 重新评分。在新的 `reports/codex-cli-jsonl-v2-report.md` 完成前，不声明
-主要失败类型、质量分数或 `paper_set` 的已测收益；v2 的集合不变量仍作为产品级通用
-完整性机制保留。
-
-## 3. 设计原则
-
-### 3.1 Agent 编排，工具执行
-
-Agent 负责：
-
-- 理解用户问题；
-- 决定是否需要全文提取；
-- 选择关键词、同义表达和命令组合；
-- 选择要精读或视觉核验的页面；
-- 创建和派生论文集合；
-- 综合证据并按用户约束回答。
-
-模型工具负责一次明确动作：
-
-- 执行一条受限命令；
-- 检查一页；
-- 更新一次论文集合状态；
-- 执行一次明确文件修改。
-
-不得在一个模型工具内部隐藏完整的“提取 → OCR → 分章 → embedding → 字段抽取 → 搜索
-→ 总结”研究流水线。
-
-### 3.2 Skill 不是安全边界
-
-Skill 负责指导正确工作流，但不能授权命令、路径、网络或副作用。
-
-真正的边界位于：
-
-- Pydantic tool schema；
-- executable/argument policy；
-- canonical path validation；
-- macOS sandbox；
-- resource caps；
-- approval binding；
-- append-only session/job/trace。
-
-PDF 文本、文件名、TXT 缓存、命令输出和 Skill 引用的论文内容均视为不可信输入。
-
-### 3.3 事实真源与派生缓存分离
-
-- 原始 PDF 不修改；
-- TXT 是从明确 PDF hash 和提取器版本生成的派生证据；
-- page manifest 保存页数、换页边界、提取状态和版本；
-- 页面渲染、OCR 和模型解释分别记录来源；
-- 搜索结果、结构化摘要、embedding 和模型回答不是原文真源；
-- 任意缓存都可由原 PDF 重建；
-- 重建生成新 revision，不覆盖 append-only 历史。
-
-### 3.4 默认不使用向量 RAG
-
-v2 默认检索顺序：
-
-```text
-全文 TXT
-→ rg/awk
-→ 明确 PDF 页
-→ 有界页级原文
-→ 必要时 inspect_page
-```
-
-SQLite FTS、BM25、embedding 或向量索引只能作为后续独立实验候选。没有冻结消融证明前：
-
-- 不作为入库条件；
-- 不作为问答条件；
-- 不作为 `paper_set` 依赖；
-- 不新增 embedding 调用；
-- 不新增向量数据库依赖。
-
-### 3.5 一次只推进一个 bounded slice
-
-每个 slice 单独确认、实现和验收。不得在同一变更中同时完成命令执行器、缓存、页面核验、
-论文集合、公开工具切换和旧代码删除。
-
-## 4. 模型可见工具
-
-### 4.1 `library_exec`
-
-用途：在授权论文库和只读派生缓存范围内执行一条受限命令。
-
-计划输入：
-
-```yaml
-cmd: string
-timeout_ms: integer?
-max_output_tokens: integer?
-```
-
-v2 初版不提供交互式 PTY 或任意长进程。命令必须在有界 deadline 内完成；超时后终止并
-在输出中标记 `timed_out`。如果真实论文任务证明需要持续进程，再单独评估 Codex `write_stdin`
-模式，不在本计划中预先增加第五个工具。
-
-计划输出：
-
-```yaml
-output: string
-exit_code: integer?
-wall_time_seconds: number
-timed_out: boolean?
-original_token_count: integer?
-output_omitted_bytes: integer?
-```
-
-该结构参照 Codex `ExecCommandToolOutput::code_mode_result`。完整命令、resolved argv、
-`command_ref`、sandbox policy/profile hash 和 artifact refs 只进入权威 trace，不作为
-模型输出协议。
-
-允许能力的目标范围：
-
-- 列举和统计授权论文库文件；
-- 计算文件 hash；
-- `pdfinfo`；
-- `pdftotext -layout`；
-- `pdftotext -raw`；
-- `pdftotext -f/-l`；
-- `rg`；
-- `awk`、`sed`、`sort`、`wc` 等有界文本处理；
-- 调用 Runtime 提供的确定性 `paper-cache` 命令。
-
-具体执行边界依据固定 Codex 源码版本的 command resolution 和 sandbox attempt 结构实现。
-Paper Copilot 固定系统 PATH、逻辑 cwd 和过滤后的环境，不提供模型可选 shell、登录
-shell、远程 environment、额外权限或失败后升级。模型不能：
-
-- 访问网络；
-- 读取论文库、受控缓存和允许临时目录之外的路径；
-- 写入用户论文库；
-- 直接写入应用数据目录；
-- 读取凭据或继承无关环境变量；
-- 选择任意 OCR 引擎或可执行路径；
-- 绕过审批调用其他副作用工具。
-
-命令中显式出现的 `pdftotext`、`rg` 等程序必须保留在 trace。Runtime 不把一组研究步骤
-静默改写成大型内部 pipeline。
-
-### 4.2 `inspect_page`
-
-用途：检查一个明确的 PDF 页面或局部区域。
-
-计划输入：
-
-```yaml
-paper_id: string
-page: integer
-region:
-  x1: number
-  y1: number
-  x2: number
-  y2: number
-purpose: string
-```
-
-`region` 可省略；坐标使用归一化页面坐标。
-
-Runtime 确定性执行：
-
-```text
-paper_id
-→ 授权 locator
-→ PDF hash/revision 校验
-→ pdftoppm 定向渲染
-→ 有界页面结果
-```
-
-多模态模型获得：
-
-- 页面或区域图像；
-- PDF 页码、render hash 和 evidence metadata。
-
-纯文本模型沿用固定 Codex `view_image` 的能力检查语义：Runtime 在解析 PDF 和渲染前
-明确拒绝调用，不执行文本回退，也不发送模型无法消费的 image content。
-
-计划输出：
-
-```yaml
-status: ok | partial | unresolved
-paper_id: string
-page: integer
-evidence: [...]
-visual:
-  delivered_to_model: boolean
-  render_hash: string
-unresolved: [...]
-```
-
-约束：
-
-- 不接受任意文件路径；
-- 单次只处理一页；
-- 渲染尺寸和字节数有上限；
-- 不静默声称 OCR 能理解图表、箭头、公式或复杂表头；
-- 不支持图像的模型不会收到不可消费的 image content；
-- `inspect_page` 不触发整篇入库、embedding 或结构化摘要。
-
-OCR 不在 v2 初版中预选。扫描件恢复需要单独的依赖、打包、质量和评测决策。
-
-### 4.3 `paper_set`
-
-用途：保存和复用不可变论文集合，确定性报告跨轮约束与遍历覆盖。
-
-计划操作：
-
-- `create`
-- `derive`
-- `record_evidence`
-- `status`
-
-计划输入：
-
-```yaml
-operation: create | derive | record_evidence | status
-result_set_id: string?
-parent_result_set_id: string?
-query: string?
-paper_ids: [string]?
-included_paper_ids: [string]?
-excluded_paper_ids: [string]?
-paper_id: string?
-evidence_refs: [string]?
-reason: string?
-```
-
-语义：
-
-- `create` 保存 Agent 通过显式命令发现的论文 ID 和 query fingerprint；
-- `derive` 从父集合产生新集合，不修改父集合；
-- `record_evidence` 为集合中一篇论文追加已核验 evidence refs；
-- `status` 返回 expected、completed、missing、stale 和 coverage。
-
-计划输出：
-
-```yaml
-status: ok | incomplete | stale
-result_set_id: string
-parent_result_set_id: string?
-paper_ids: [string]
-coverage:
-  expected_papers: integer
-  completed_papers: integer
-  missing_paper_ids: [string]
-  complete: boolean
-stale_paper_ids: [string]
-```
-
-约束：
-
-- 论文 ID 必须解析到授权论文库；
-- 集合创建后不可修改；
-- 派生集合必须保存父集合和排除原因；
-- evidence ref 必须存在且与目标 paper/revision 匹配；
-- PDF hash 变化时返回 stale；
-- session 只追加 create/derive/evidence/complete 事件；
-- resume 能从 append-only 事件重建；
-- TTL 只能回收派生缓存，不能删除历史事件。
-
-完成条件：
-
-```text
-completed_papers == expected_papers
-AND missing_paper_ids == []
-AND stale_paper_ids == []
-AND complete == true
-```
-
-`paper_set` 不执行全文搜索、不调用 `library_exec`、不调用 `inspect_page`，也不生成答案。
-
-### 4.4 `library_edit`
-
-用途：承担授权论文库内所有用户可见写操作。
-
-计划操作：
-
-- `mkdir`
-- `copy`
-- `move`
-- `trash`
-- `restore`
-- `write_document`
-
-约束：
-
-- 所有路径 canonicalize 后仍须位于授权论文库；
-- 不允许静默覆盖；
-- 删除进入系统废纸篓；
-- Markdown 写入展示完整 diff；
-- 批准绑定 tool call、已校验参数、目标 hash、目标快照和预览；
-- 执行前重新检查 precondition；
-- 中断、失败和 resume 不自动重放缺少结果的副作用；
-- 不负责 PDF 缓存、索引或应用内部状态写入。
-
-`library_edit` 不调用其他模型可见工具。它可以复用底层文件、Trash、diff 和审批组件。
-
-## 5. 论文研究 Skill
-
-v2 提供一个论文研究 Skill，指导 Agent 组合四个工具。Skill 是可审查的提示和工作流，
-不包含论文答案、benchmark 特例或隐藏程序执行。
-
-### 5.1 标准工作流
-
-```text
-1. library_exec 列出 PDF 并确认任务范围
-2. 检查 paper-cache 状态
-3. 缓存缺失时执行确定性全文 TXT 提取
-4. 使用 rg/awk 和同义表达搜索
-5. 根据换页边界定位 PDF 页
-6. 用 pdftotext -f/-l 读取有界原文
-7. 文字或版面可疑时调用 inspect_page
-8. 全库或多轮任务创建 paper_set
-9. 为逐篇证据记录 coverage
-10. 基于 evidence refs 回答
-11. 需要保存结果时调用 library_edit
-```
-
-### 5.2 Skill 约束
-
-- 不仅根据文件名分类；
-- 不把单次 `rg` 空结果解释为论文没有相关内容；
-- 对关键概念使用用户原词、同义表达、方法名和英文术语组合搜索；
-- 引用必须来自明确 PDF 页；
-- “全部、逐篇、逐项复核”必须使用 `paper_set`；
-- coverage 未完成时不得声称完整；
-- 页面视觉关系未核验时标记 `unresolved`；
-- 不要求先生成 contributions/methods/experiments/limitations；
-- 不自动执行 embedding 或向量检索；
-- 检测到用户环境缺少 Poppler 时，先询问用户是否同意执行
-  `brew install poppler`；只有获得明确同意后才自动安装，拒绝或 Homebrew 缺失时停止
-  并说明原因；
-- 工具使用记录以 Runtime trace 为准，不以模型自报为准。
-
-### 5.3 Skill 与源码依据
-
-Skill 中每个 Codex-inspired 行为都必须能追溯到：
-
-- Codex 源码路径和固定 commit/ref；
-- 冻结基线的权威 tool trace；
-- Paper Copilot 自身安全或产品边界。
-
-不得仅因 Codex 当前界面出现某工具名称就复制行为。
-
-## 6. 跨会话 PDF 缓存
-
-### 6.1 缓存身份
-
-缓存键至少包含：
-
-```text
-PDF SHA-256
-+ extractor name
-+ extractor version
-+ extraction mode
-+ normalized extraction parameters
-```
-
-文件名、移动时间和模型会话 ID 不属于内容缓存身份。
-
-### 6.2 逻辑布局
-
-具体物理路径在 Slice 1 冻结。逻辑结构：
-
-```text
-paper cache
-└── <pdf_sha256>/
-    └── <extractor_fingerprint>/
-        ├── manifest.json
-        ├── layout.txt
-        ├── raw.txt
-        └── recovered/
-            └── <page>.txt
-```
-
-`raw.txt` 和 `recovered/` 按需生成，不要求每篇论文同时存在。
-
-manifest 至少记录：
-
-- PDF hash；
-- 授权 locator 的安全引用；
-- 页数；
-- 提取器和版本；
-- 提取参数；
-- 每页文字字符数；
-- 换页边界；
-- 创建时间；
--完成/部分/失败状态；
-- unresolved pages；
-- artifact hash。
-
-### 6.3 缓存命令
-
-Runtime 在 `library_exec` 完成 shell resolution 后拦截确定性 `paper-cache` 命令：
-
-```text
-paper-cache status <relative-pdf>
-paper-cache ensure <relative-pdf>
-paper-cache page <paper-id> <page>
-```
-
-这些是 broker 命令原语，不是模型工具或 sandbox PATH 中的可执行文件。每次操作必须
-占据一次 `library_exec.cmd` 的完整命令，不允许放入循环、管道、命令链、命令替换或
-`find -exec`。`ensure` 只负责 hash、缓存命中判断、确定性文字提取和原子发布，不执行
-OCR、LLM、切片、embedding、结构化字段或论文搜索。
-`status/ensure` 同时接受 workspace 列举返回的 `library/<relative-pdf>` 和 library-root
-relative 的 `<relative-pdf>`，归一化后仍必须解析在授权根内。
-
-`library_exec` 对缓存只有读取能力；缓存写入由 `paper-cache` 的窄化 broker 完成，模型
-不能指定应用数据输出路径。
-
-### 6.4 命中与失效
-
-必须复用缓存：
-
-- PDF hash 相同；
-- extractor fingerprint 相同；
-- manifest 和 artifact hash 完整；
-- 状态满足调用需求。
-
-只有以下情况重新提取：
-
-- PDF 内容变化；
-- 提取器或参数变化；
-- 缓存损坏或缺失；
-- 旧缓存为 partial 且目标页不可用；
-- 用户明确要求重建。
-
-重新提取写入新 revision，完成前不替换 current。并发请求对同一 cache key 合并为一个
-有界任务，不重复执行。
-
-## 7. 文本搜索与证据定位
-
-### 7.1 默认搜索
-
-Agent 通过 `library_exec` 对缓存 TXT 执行命令：
-
-```text
-rg --follow -l <query> cache/
-rg -n -C <context> <query> <text>
-awk with RS="\f" to compute PDF page
-paper-cache page <paper-id> <page>
-```
-
-全文 TXT 保留 `\f` 页面分隔符；`awk` 的 record number 可用于确定 PDF 页码。最终引用
-前应使用 `paper-cache page` 或等价的有界页读取获得稳定 evidence ref。
-
-### 7.2 Evidence ref
-
-稳定 evidence ref 至少绑定：
-
-```text
-paper_id
-pdf_sha256
-extractor_fingerprint
-page
-source_kind
-artifact_hash
-optional region
-```
-
-`rg` 的行号不是 PDF 页码，不能直接作为用户引用。命令输出 artifact ref 也不能单独
-替代页级 evidence ref。
-
-### 7.3 可选检索增强
-
-如果冻结评测显示 TXT 命令搜索存在稳定漏召回，可单独比较：
-
-1. `rg`；
-2. SQLite FTS5；
-3. BM25；
-4. 仅在前三者不足时评估 embedding/vector。
-
-任何增强必须：
-
-- 不改变页级原文真源；
-- 不成为 PDF 缓存前置条件；
-- 有独立质量、延迟、成本和隐私评测；
-- 作为新的 bounded slice 单独批准。
-
-## 8. 安全边界
-
-### 8.1 权限
-
-- 论文库读取来自 macOS security-scoped bookmark；
-- 派生缓存目录由 Runtime 单独管理；
-- 模型不能提供任意缓存路径；
-- `library_exec` 无网络；
-- `inspect_page` 只能使用已授权 `paper_id`；
-- `library_edit` 是唯一用户论文库写入口；
-- Skill、PDF、TXT 和命令输出不能扩大权限。
-
-### 8.2 资源限制
-
-每次工具调用限制并记录：
-
-- wall-clock deadline；
-- CPU 和内存；
-- 最大进程数；
-- 最大临时空间；
-- stdout/stderr；
-- 最大页面数；
-- 渲染像素和图片字节；
-- 命令长度与管道复杂度；
-- attempt 总预算。
-
-Agent loop 不设置固定模型回合数。它与 Codex 一样由模型 `end_turn`、总预算、job
-deadline、用户中断、确定性 guard 或失败终止；工具调用次数只进入 trace 和评测指标，
-不作为运行时截断条件。
-
-### 8.3 命令策略
-
-采用 Codex 的分层执行方式：
-
-- 输入使用 `cmd`，实际命令、cwd 和 sandbox policy 共同生成稳定 `command_ref`；
-- cwd 固定为逻辑 workspace，环境变量和 PATH 由 Runtime 完整构造；
-- 授权论文库和派生缓存只读，只有调用级 `scratch/` 可写；
-- OS sandbox 默认拒绝库外读取、授权根写入和网络访问；
-- sandbox profile 计算 hash 并随执行结果进入 trace；
-- 不提供模型可选 shell、登录 shell、远程环境、额外权限或 sandbox 失败后的升级路径；
-- timeout、进程组终止、聚合 head-tail 输出捕获和 token 截断由 Runtime 确定性执行。
-
-不得只用 Prompt 禁止危险命令。
-
-### 8.4 副作用
-
-- `library_exec` 对用户论文库只读；
-- `paper-cache` 只写内容寻址的派生缓存；
-- `inspect_page` 只生成有界临时渲染或派生 artifact；
-- `paper_set` 只追加应用状态事件；
-- `library_edit` 承担全部用户可见写操作；
-- interrupted/failed side-effect call 不自动重放。
-
-## 9. 状态、恢复和审计
-
-三个状态真源保持独立：
-
-- session：模型历史、工具调用和 `paper_set` 事件；
-- job：attempt、审批、中断、恢复和最终结果；
-- trace：命令、工具、成本和诊断。
-
-权威 trace 至少保存：
-
-- 工具名和 schema version；
-- 完整校验参数或安全摘要；
-- 实际命令；
-- executable 和版本；
-- cwd/environment；
-- sandbox profile/hash；
-- approval decision；
-- 输入/输出 artifact refs；
-- cache hit/miss/rebuild 原因；
-- timeout、truncation 和 exit code；
-- `paper_set` coverage；
-- token、成本和耗时；
-- terminal status。
-
-模型自报的工具使用记录不作为权威 trace。
-
-## 10. 评测与验收
-
-### 10.0 当前预检决策
-
-在投入 Slice 7 的三次重复和完整消融前，先执行一次完整 v2 四轮预检：
-
-- 使用现有 14 篇论文、冻结的四轮 query 和私有 Gold；
-- 从全新 Paper Copilot 会话开始，按顺序逐轮运行，不提供答案性纠正；
-- 使用完整 v2 工具表面和 `research-papers` Skill；
-- 复用 `runs/codex-cli-jsonl-v2/` 的权威 CLI 基线，不重新运行 Codex；
-- 在产品对比前先生成 `reports/codex-cli-jsonl-v2-report.md`，不得沿用已删除的桌面端
-  评分；
-- 保存完整产品 trace，并报告质量、跨轮约束、遍历完成、引用和工具行为；
-- 缓存、超时、网络隔离等确定性行为可引用 Slice 1–6 的既有验收，但不得用既有验收
-  替代本次实际 trace；
-- 报告所有 failure、partial 和 unverifiable 字段。
-
-本次预检不执行 10.4 节的完整消融，也不满足 10.1 节的三次重复要求，因此不能标记
-Slice 7 完成，不能报告中位数或最差运行，也不能据此宣称 v2 已稳定超过 Codex。若预检
-暴露问题，先单独确认修复范围；若预检结果支持继续投入，再由用户确认是否补齐正式
-冻结评测。只移除 `paper_set` 的关键消融仍是候选，但不在本次预检中默认执行。
-
-### 10.1 冻结条件
-
-- 使用现有 14 篇论文、四轮 query 和私有 Gold；
-- 不根据 v2 答案修改 Gold；
-- 记录精确模型、endpoint、参数、工具版本和 Skill version；
-- 网络关闭；
-- 保存完整工具 trace；
-- 同一配置至少重复三次；
-- 报告中位数和最差结果。
-
-### 10.2 质量门槛
-
-旧桌面端数值门槛已随旧报告退役。以下各项须先从
-`reports/codex-cli-jsonl-v2-report.md` 得到新的 Codex 值，再由用户确认 v2 门槛；在此
-之前不得沿用旧数值判定通过。
-
-| 指标 | Codex CLI JSONL v2 | v2 最低门槛 |
+| 工具 | 当前职责 | 状态 |
 |---|---|---|
-| Required claim 严格正确 | 待重新评分 | 待基线报告后冻结 |
-| Required claim 加权准确 | 待重新评分 | 待基线报告后冻结 |
-| Required claim 完整 | 待重新评分 | 待基线报告后冻结 |
-| 全部 claim 引用支持 | 待重新评分 | 待基线报告后冻结 |
-| 相关论文集合 Macro-F1 | 待重新评分 | 待基线报告后冻结 |
-| 约束保持 | 待重新评分 | 待基线报告后冻结 |
-| 遍历完成 | 待重新评分 | 待基线报告后冻结 |
-| major error | 待重新评分 | 0 |
-| 作者—方法归属 | 待重新评分 | 100% |
-
-重复运行要求：
-
-- 三次中位数高于 Codex；
-- 最差一次没有 major error；
-- 每次约束保持和遍历完成均为 100%；
-- 作者—方法归属每次为 100%；
-- 正常文字层论文不因缓存或页面核验产生质量回归。
-
-### 10.3 工具行为门槛
-
-- 首次缓存生成覆盖全部 14 篇 PDF；
-- 第二个全新会话对相同 PDF 达到 100% cache hit；
-- cache hit 不重复运行全文 `pdftotext`；
-- 修改一篇 PDF 只使该内容 hash 的缓存失效；
-- extractor fingerprint 变化生成新 revision；
-- 命令输出截断、超时和非零退出明确可见；
-- 14 篇任务不使用网络；
-- `paper_set` 在 T02→T03→T04 保持正确派生关系；
-- “全部”任务 coverage 未完成时不得报告 complete；
-- 所有关键引用可解析到 PDF hash 和页码。
-
-### 10.4 消融
-
-至少比较：
-
-1. Codex 原始命令策略；
-2. `library_exec` + 临时 TXT；
-3. `library_exec` + 跨会话缓存；
-4. 缓存 + `inspect_page`；
-5. 缓存 + `paper_set`；
-6. 完整 v2 Skill。
-
-v2 不以 embedding 消融为前置条件。只有文本命令检索未达到门槛时，才规划独立检索增强
-实验。
-
-### 10.5 外推边界
-
-14 篇同领域学位论文只证明当前 benchmark。对外声称一般化优势前，还需未参与设计的：
-
-- 正常文字层 PDF；
-- 扫描件；
-- 双栏；
-- 中英文混排；
-- 表格；
-- 公式；
-- 图表依赖问题；
-- 大规模个人论文库。
-
-## 11. 实施 slices
-
-### Slice 0：计划冻结
-
-交付：
-
-- 本文档；
-- `TASKS.md` 继续指向本文档；
-- 用户确认最终工具方向；
-- 不修改产品代码或公开工具。
-
-当前状态：用户已确认方向。完成本文档重写后停止；进入 Slice 1 需要单独授权。
-
-### Slice 1：内容寻址 TXT 缓存
-
-目标：复现 Codex 的快速全文 TXT 提取，并提供跨会话复用。
-
-当前状态：已完成。冻结 14 篇、1169 页论文首次缓存全部生成，耗时 4.211 秒；新缓存
-实例二次检查 14/14 命中，耗时 83 毫秒；三个同 key 并发请求只生成一个 revision。
-
-范围：
-
-- Poppler packaging/licensing 评估；
-- `pdfinfo`/`pdftotext` adapter；
-- extractor fingerprint；
-- manifest；
-- `paper-cache status/ensure/page`；
-- cache hit/miss/invalidation；
-- 原子发布和并发去重。
-
-非目标：
-
-- 修改模型工具表面；
-- OCR；
-- `paper_set`；
-- FTS/BM25；
-- embedding；
-- 删除旧代码。
+| `library_exec` | 在授权论文库和只读缓存上执行受限命令 | 已实施 |
+| `inspect_page` | 检查一张明确 PDF 页面或区域 | 已实施 |
+| `paper_set` | 创建、派生集合并记录覆盖 | 已实施，但证据合同有缺口 |
+| `library_edit` | 执行授权论文库中的用户可见写操作 | 已实施 |
+
+`paper-cache` 当前不是独立模型工具，而是 `library_exec` 可调用的确定性 broker 命令，
+提供 `status`、`ensure` 和 `page`。Runtime preflight 已接管批量 `ensure`，模型仍可通过
+`paper-cache page` 读取页文本。
+
+旧 `read_paper`、`paper_search`、query/compare/related、Composer 专用工具、
+`library_files` 和 `notes_patch` 已从模型工具表面移除，但回滚代码尚未删除。
+
+当前架构真源是 `ARCHITECTURE.md`。本计划中的候选接口只有在实施并验收后才能写入
+架构文档。
+
+## 3. 已完成阶段
+
+| Slice | 结果 | 详细依据 |
+|---|---|---|
+| 0 计划冻结 | 已完成 | 本计划与 Git 历史 |
+| 1 内容寻址 TXT 缓存 | 已完成 | 14 篇、1169 页首次生成 4.211 秒；二次 14/14 命中 83 ms |
+| 2 `library_exec` | 已完成 | `library_exec_codex_source_mapping.md` |
+| 3 论文研究 Skill | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
+| 4 `inspect_page` | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
+| 5 `paper_set` | 历史兼容，不再模型可见 | `paper_set_codex_source_mapping.md` |
+| 6 公开工具切换 | 已切换为 `read_page` 表面，待验证 | `agent_infrastructure_codex_source_mapping.md` |
+| 7 冻结评测 | 未开始 | 被 Query 1 阻塞 |
+| 8 删除旧实现 | 未开始 | 仅在 Slice 7 通过并获确认后执行 |
+
+已完成的底层能力包括：
+
+- 以 PDF SHA-256、提取器版本和参数标识跨会话缓存；
+- 固定逻辑 workspace、过滤环境、无网络 sandbox、deadline 和输出预算；
+- 缓存 preflight、原子发布、revision 和并发去重；
+- Skill 在首次运行、恢复和 context compaction 后注入；
+- `inspect_page` 的模型能力检查和页级渲染；
+- `paper_set` 的 append-only 事件、集合快照、stale 检查和恢复；
+- session tool call 与 lifecycle trace 的 call ID 对齐。
 
-### Slice 2：Codex-style `library_exec`
-
-目标：让模型使用少量通用命令原语读取论文库和缓存。
-
-当前状态：已按 1.1 节完成 schema、逻辑 workspace、sandbox、输出和 broker 的逐项
-源码复核，映射见 `docs/design/library_exec_codex_source_mapping.md`。未在 Codex 中
-找到对应机制的部分已标记为 Paper Copilot 专用适配，必要差异已获用户确认，现有实现
-也已按映射回改。Runtime 手工验收已覆盖普通命令、`rg`、`pdfinfo`、`pdftotext`、
-缓存搜索、权限拒绝、无网络、timeout、进程组终止、文件大小限制、head-tail 输出、
-broker 和权威 trace。`.app` 使用 Codex package builder 同源的固定 ripgrep 15.2.0
-官方发布包、archive size/SHA-256 校验和临时缓存，打包验收已通过签名、PCRE2 搜索、
-Runtime 握手、真实 `library_exec rg`、broker 和权威 trace。Slice 2 已完成；Slice 3
-需要单独确认后开始。
-
-范围：
+## 4. Query 1 当前结论
 
-- v2 schema/dispatch；
-- Codex-style command resolution 和 sandbox policy；
-- 固定授权根和只读缓存；
-- sandbox；
-- timeout/output caps；
-- authoritative command trace；
-- `paper-cache` 命令接入。
-
-非目标：
-
-- 交互式 PTY；
-- 任意本机 shell；
-- 网络；
-- 用户论文库写入；
-- 其他三个 v2 工具。
-
-### Slice 3：论文研究 Skill
-
-状态：已完成。实现位于
-`src/paper_copilot/agents/skills/research-papers/SKILL.md`，Codex 源码映射见
-`docs/design/research_skill_codex_source_mapping.md`。Skill 在首次运行、恢复和
-context compaction 后注入，版本与正文 SHA-256 进入权威 trace 和 final payload。
-Slice 4 已按单独确认完成。
-
-目标：用可审查 Skill 复现 Codex 命令搜索和证据定位工作流。
-
-范围：
-
-- 缓存检查；
-- 全文提取；
-- `rg`/`awk` 搜索；
-- 页码定位；
-- bounded evidence；
-- incomplete/unresolved 表述；
-- Skill version 和 source mapping。
-
-非目标：
-
-- 新 LLM worker；
-- 结构化全文字段；
-- 向量 RAG；
-- 公开工具切换。
-
-### Slice 4：`inspect_page`
-
-状态：已完成。实现位于
-`src/paper_copilot/agents/inspect_page_tool.py`，Codex 源码映射见
-`docs/design/inspect_page_codex_source_mapping.md`。当前只完成内部工具、模型
-modality、图像工具结果 transport 和权威 metadata；公开工具列表保持不变，留待
-Slice 6 统一切换。真实 134 页论文的整页、归一化区域、纯文本能力拒绝和越界页手工
-验收均已通过。
-
-目标：提供论文专用的单页视觉核验。
-
-范围：
-
-- `paper_id + page + region`；
-- `pdftoppm`；
-- capability negotiation；
-- image output 和 unsupported-model rejection；
-- render/evidence metadata；
-- unresolved。
-
-非目标：
-
-- OCR 依赖；
-- 批量页面工具；
-- 第二云端模型；
-- 全文入库。
-
-### Slice 5：`paper_set`
-
-状态：已完成。实现位于
-`src/paper_copilot/agents/paper_set_tool.py`，Codex 源码映射见
-`docs/design/paper_set_codex_source_mapping.md`。当前已完成内部工具、append-only
-application event、PDF/cache revision 快照、coverage/stale 和 recovery source
-session 重放；公开工具列表保持不变，留待 Slice 6 统一切换。
-
-目标：修复跨轮集合遗忘和遍历完成性。
-
-范围：
-
-- create/derive/record_evidence/status；
-- immutable set；
-- ingest/cache revision snapshot；
-- coverage；
-- stale；
-- session/resume 重建。
-
-非目标：
-
-- 搜索；
-- RAG；
-- PDF 提取；
-- 回答生成。
-
-### Slice 6：公开工具切换与安全收敛
-
-状态：已完成公开表面实施。两次 Query 1 端到端预检后已修正 Unicode sandbox 路径、
-客户端论文预算传递、空集合完成语义、Poppler 解析规则分裂、broker 复合命令误用和
-`inspect_page` 完整 SHA-256 传递。第四次 Query 1 又修正了 `library/` 逻辑路径重复
-拼接以及 broker 失败后退化为临时全文脚本的问题。内建 Skill 已更新为 version 5，
-版本直接从正文解析。
-纠正版本尚待用冻结 Query 1 重跑验收，因此本 Slice 尚未重新冻结。macOS 通用审批协议已
-核对兼容，异步 Runtime 拒绝未公开旧名称，旧实现按计划保留为不可由模型调用的回滚代码。源码映射见
-`docs/design/tool_surface_v2_codex_source_mapping.md`。
-
-目标：公开四个 v2 工具，并冻结统一安全边界。
-
-范围：
-
-- `library_exec`；
-- `inspect_page`；
-- `paper_set`；
-- `library_edit`；
-- 模型工具列表切换；
-- macOS approval UI 兼容；
-- adversarial PDF/file names/command output；
-- Runtime 拒绝旧模型工具名称；
-- `ARCHITECTURE.md` 更新。
-
-旧实现仍保留为不可调用的回滚代码，不在本 slice 删除。
-
-### Slice 7：冻结评测
-
-目标：完成三次可审计四轮评测及第 10 节消融。
-
-当前状态：正式冻结评测尚未开始。Codex CLI JSONL 基线已重跑完成，旧桌面端基线和
-评分已删除；先按同一 Gold 生成新的 CLI 基线报告，再按 10.0 节运行一次完整 v2 四轮
-预检，暂不重复 Codex，也不执行完整消融。预检结果不改变本节完成条件。
-
-完成条件：
-
-- 达到质量和工具行为门槛；
-- 报告所有失败、partial 和 unverifiable 字段；
-- 不使用模型自报替代 trace；
-- 用户决定是否进入旧实现删除。
-
-### Slice 8：删除旧实现
-
-目标：只保留 v2 和仍被复用的稳定基础设施。
-
-删除候选：
-
-- `ReadPaperTool`；
-- `SkimPaperTool`；
-- `ExtractPaperTool`；
-- `LinkRelatedPapersTool`；
-- 旧 `read_pipeline`；
-- 旧 `paper_search`、query、compare 和 related dispatch；
-- Composer 专用工具；
-- 只服务旧工具的 schemas、prompts 和兼容代码；
-- v2 不再使用的 fields/embedding 索引路径。
-
-保留候选：
-
-- append-only session；
-- job/attempt/recovery；
-- macOS authorization 和审批 UI；
-- observability 基础设施；
-- MCP/客户端协议边界；
-- 能证明仍被 v2 使用的纯函数和存储原语。
-
-删除前必须有：
-
-- v2 eval 通过；
-- App/MCP 对旧工具零调用证明；
-- 数据迁移、保留或明确重建策略；
-- 用户明确确认删除 slice。
-
-### 11.1 v2 简化重构（2026-07-28）
-
-冻结 Query 1 暴露出模型可见 cache/paper-set 协议的协调成本：DeepSeek 在没有生成最终
-答案前已执行 103 次工具调用，其中 88 次为 `library_exec`。对照当时的旧桌面端自报
-基线后，用户确认改为 Codex 风格的模型表面，并将安全、缓存和覆盖记账收回 Runtime。
-该比较只保留为历史决策背景，不作为当前量化基线。
-
-简化重构仍按 bounded slice 实施。第一 slice 只改变缓存准备：
-
-- Runtime 在模型循环前对论文预算内的授权 PDF 调用内容寻址 cache `ensure`；
-- 一次性生成只读 `research_cache_index`，只暴露逻辑 locator、完整 PDF SHA-256、
-  页数和精确 `cache/.../layout.txt` 路径，不暴露宿主绝对路径；
-- 索引作为应用生成的受信任上下文进入首次运行、恢复和 compaction 后的上下文；
-- 模型直接批量搜索索引中的 TXT，不再逐篇调用 `paper-cache status/ensure`；
-- broker 暂时保留，服务索引因论文预算截断后的按需准备以及页级读取；
-- preflight 写入权威 trace，但不产生模型调用或模型可见工具调用。
-
-本 slice 不删除 `paper_set`，不改变页级 evidence 协议，不引入持久 scratch，也不删除
-旧工具。后续 slice 是否继续缩减模型表面，取决于同一冻结 Query 1 的工具数、token、
-完整答案和引用结果。
-
-首次重跑在模型调用前暴露 preflight 使用了 observability schema 未声明的 entity。
-按固定 Codex commit
-`61a44880a85d2fd0d8770908dea5733495e571c8` 的
-`codex-rs/rollout-trace/README.md` 与 `src/raw_event.rs` 复核：Runtime 工作应与模型工具
-调用分开记录，尚未有专用语义时使用通用 `Other` raw observation。Paper Copilot 现有
-trace 只支持成对生命周期事件，没有同形的单事件 `Other`，因此最小适配为通用
-`runtime_operation` entity，并以 `kind=research_cache_preflight` 标识本次预处理；
-它不计入 `tool_call`，也不增加模型可见工具。Codex 的 trace 全局 best-effort 写入语义
-不在本次阻塞修复中改造，作为现有 observability 差异另行处理。
-
-## 12. 依赖与成本
-
-本计划不新增 LLM call site，不增加每篇论文的固定模型调用，也不预设 embedding 成本。
-
-潜在依赖：
-
-- Poppler：Slice 1 前完成打包、签名、sandbox、固定版本、GPL 和传递依赖审查；
-- OCR：不属于当前 v2，未来如需要必须单独批准；
-- FTS/BM25/vector：不属于当前 v2 基线，未来按独立实验决定。
-
-终端用户不得被要求安装 Homebrew。任何新增依赖必须按仓库规则单独批准，并给出无新增
-依赖替代方案。
-
-## 13. 非目标
-
-- 不建设 PostgreSQL 或独立向量数据库；
-- 不把 embedding 作为入库条件；
-- 不把结构化字段作为问答前置条件；
-- 不让一个模型工具隐藏完整论文研究流水线；
-- 不为每个论文任务新增专用模型工具；
-- 不建设托管 OCR、托管视觉模型或云端论文库；
-- 不新增账号、支付、同步或多租户；
-- 不为 benchmark 论文、作者、方法或 query 写特例；
-- 不让 SwiftUI 重写 Python Core；
-- 不在一个 slice 中同时替换全部工具；
-- 不宣称纯文本模型可以理解所有图、表和公式；
-- 不在 v2 验收前删除可恢复旧系统的 Git 历史。
-
-## 14. 下一步决策门
-
-本文档完成后停止。开始 Slice 1 前，用户需要单独确认：
-
-1. 只实施内容寻址 TXT 缓存，不修改公开工具；
-2. 接受 Poppler 作为首选 PDF substrate 候选；
-3. 允许进行 GPL、打包、签名和 sandbox 评估，但尚不添加依赖；
-4. 接受 `paper-cache` 作为 `library_exec` 可调用的确定性命令原语；
-5. 接受 v2 默认不建设向量 RAG；
-6. 接受旧 `read_paper`/`paper_search` 在公开切换前继续保留为现状。
+简化重构后的冻结 Query 1 正常 `end_turn`，但 bounded slice 未通过：
+
+| 指标 | 结果 |
+|---|---:|
+| Preflight | 14/14 成功，0 失败，309 ms |
+| 模型工具调用 | 113 |
+| `library_exec` | 84 |
+| `paper_set` | 29 |
+| Lifecycle trace | 113 started / 99 completed / 14 failed |
+| LLM 调用 | 23 |
+| 总耗时 | 约 280 秒 |
+| 费用 | 约 ¥0.161 |
+
+关键失败：
+
+- 14 次 `paper_set` 调用因 evidence ref 缺少外层 `[]` 失败后重试；
+- 3 次 `library_exec` 非零退出；
+- 没有调用 `paper-cache page` 或 `inspect_page`；
+- 模型以 approximate pages 使 `paper_set` 显示 14/14 complete；
+- 最终 14 个引用均使用 8 位短 hash，不符合完整 SHA-256 合同；
+- `heuristic_v1` 仍错误报告 evidence coverage 1.0；
+- 与旧版 Query 1 的 103 次调用相比增加 10 次。
+
+session 与 trace 的 113 个 started call ID 完全一致。此前将 99 个 completed 误认为全部
+lifecycle 调用的结论已纠正，trace 修复不属于下一 slice。
+
+权威产物：
+
+- `/Users/a123/.paper-copilot/jobs/job-20260728T124406-7645b6c00e/attempts/1/trace.jsonl`
+- `/Users/a123/.paper-copilot/papers/paper-copilot-job-20260728T124406-7645b6c00e-attempt-1/session.jsonl`
+- `/Users/a123/.paper-copilot/papers/paper-copilot-job-20260728T124406-7645b6c00e-attempt-1/research-report.md`
+
+最后一个路径以实际 job 目录为准；专项实验文档保存完整统计和纠正记录。
+
+## 5. 当前阻塞
+
+现有实现把“模型声称读过某页”和“Runtime 确实把该页交给模型”混为一谈：
+
+```text
+模型猜测页码
+→ paper_set record_evidence
+→ 只校验格式或页面存在
+→ coverage complete
+→ 短 hash 报告仍可 end_turn
+```
+
+因此当前 14/14 coverage 和 `heuristic_v1` 不能证明 citation-grade 页面覆盖。继续
+Query 2–4 或完整消融不会解决该确定性合同缺口。
+
+## 6. 下一 bounded slice
+
+### 6.1 目标
+
+把页面读取、证据登记、集合覆盖和最终引用校验收回 Runtime，减少模型协调工具协议的
+负担。
+
+候选目标表面：
+
+| 能力 | 候选处理 |
+|---|---|
+| `paper_set` 模型工具 | 删除 |
+| `paper-cache status/ensure` | 已由 Runtime preflight 接管，不再暴露给模型 |
+| `paper-cache page` | 从 `library_exec` broker 移除，改为独立 `read_page` 工具 |
+| `inspect_page` | 保留，负责视觉页面读取 |
+| active paper set | 本 slice 固定为 Query 1 的 Runtime preflight 论文预算 |
+| 页级证据 | `read_page`/`inspect_page` 成功后由 Runtime 自动登记 |
+| 完成性与引用 | Runtime 在接受 `end_turn` 前确定性校验 |
+
+这会删除工具入口，不会删除底层能力：
+
+- 删除 `paper_set` 不等于删除集合、stale、coverage 和恢复；
+- 删除 `paper-cache` broker 不等于删除内容寻址缓存或页文本读取；
+- `read_page` 只暴露完整 SHA-256 和正整数页码，不接受任意路径；
+- evidence ledger 不保存完整正文、图片、PDF 或宿主绝对路径。
+
+### 6.2 实施前决策门
+
+`runtime_research_evidence_codex_source_mapping.md` 已按 `read_page` 方向修订并冻结：
+
+1. `read_page` schema、输出、失败和 trace attributes；
+2. Query 1 active set 等于 Runtime preflight 成功准备的论文集合；
+3. 旧 `paper_set` 事件可重放但不再产生 citation-grade evidence；
+4. `library_exec` 明确拒绝全部 `paper-cache` broker 命令；
+5. end-turn guard 的 issue codes 和 incomplete 降级结果。
+
+Query 2–4 的排除和派生集合没有确定性 Runtime 来源，不在本 slice 通过语义猜测实现，
+继续暂停并等待单独的结构化 scope-transition 设计。
+
+该映射检查的固定 Codex source ref 为：
+`61a44880a85d2fd0d8770908dea5733495e571c8`。Codex 已提供 Stop hook 的
+block-and-continue 结构，但没有 PDF 页证据、论文集合或 Markdown 引用语义；这些只做
+最小 Paper Copilot 领域适配。
+
+### 6.3 预期实现范围
+
+预计修改：
+
+- `src/paper_copilot/agents/loop.py`
+- `src/paper_copilot/agents/paper_copilot.py`
+- `src/paper_copilot/agents/library_exec_tool.py`
+- `src/paper_copilot/agents/inspect_page_tool.py`
+- `src/paper_copilot/agents/paper_set_tool.py`
+- 新增 `src/paper_copilot/agents/read_page_tool.py`
+- 新增 `src/paper_copilot/agents/research_evidence.py`
+- research Skill、工具注册、相关设计和状态文档
+
+预计不修改：
+
+- SwiftUI、API transport、MCP 和数据库 schema；
+- PDF cache 文件格式、模型配置和依赖；
+- trace lifecycle 语义；
+- 旧实现删除范围。
+
+## 7. 下一 slice Definition of Done
+
+实施完成只代表可以重跑冻结 Query 1，必须满足：
+
+- 模型工具表面不再包含 `paper_set`；
+- `library_exec` 不再接受 `paper-cache status/ensure/page`；
+- `read_page` 只能读取授权缓存中与完整 PDF SHA-256 匹配的一页；
+- 只有成功返回给模型的 `read_page` 或 `inspect_page` 能产生页证据事实；
+- approximate pages、搜索命中和旧 `record_evidence` 事件不能完成 coverage；
+- session/recovery 可确定性重建 active set 和 evidence ledger；
+- 短 hash、未观察页面和未覆盖目标集合的报告不能直接成功 `end_turn`；
+- 合法完整引用 `[<64-lowercase-hex>:page[<positive-int>]]` 可以通过；
+- 验证通过后用户可见引用渲染为 `《论文题目》第 N 页`，完整标识留在结构化证据；
+- 非论文直接回答不受 end-turn guard 影响；
+- `heuristic_v2` 只统计 validator 确认的完整引用；
+- 不新增 LLM call site、依赖、网络、OCR、embedding 或固定逐篇模型调用；
+- session `tool_use` 与 trace `tool_call.started` 的 call ID 集合保持一致。
+
+按照仓库规则，设计修订、代码实施、定向验证和冻结 Query 1 重跑分别属于明确步骤。
+未获当前步骤授权时不提前进入下一步。
+
+## 8. Slice 7 冻结评测
+
+只有下一 bounded slice 通过 Query 1 后，才恢复正式评测：
+
+1. 使用冻结的 14 篇论文、四轮 query 和私有 Gold；
+2. 先按同一 Gold 生成新的 Codex CLI JSONL v2 基线报告；
+3. 同一配置至少重复三次，保存完整 session、job 和 trace；
+4. 报告中位数、最差结果及全部 failure、partial、unverifiable 字段；
+5. 比较质量、集合召回、约束保持、页级引用、工具调用、token、费用和耗时；
+6. 执行经确认的工具消融；
+7. 不使用模型自报替代权威 trace。
+
+冻结门槛须在 Codex 基线重新评分后由用户确认。当前不沿用已删除的旧桌面端分数，也不
+根据 v2 输出修改 Gold。
+
+Slice 7 通过后，另行确认 Slice 8，才可删除旧工具和只服务旧流程的实现。
+
+## 9. 专项文档索引
+
+| 文档 | 职责 |
+|---|---|
+| `ARCHITECTURE.md` | 当前已实现架构和模块边界 |
+| `TASKS.md` | 当前状态、下一动作和工作纪律 |
+| `docs/design/library_exec_codex_source_mapping.md` | 命令执行、sandbox、审批和 trace |
+| `docs/design/agent_infrastructure_codex_source_mapping.md` | 已实施 Skill、页面视觉和公开工具基础设施 |
+| `docs/design/paper_set_codex_source_mapping.md` | 历史集合工具及兼容事件 |
+| `docs/design/runtime_research_evidence_codex_source_mapping.md` | 当前 `read_page`、Runtime evidence 和 Query 1 完成合同 |
+| `docs/design/codex_multi_thesis_blind_experiment_plan.md` | 冻结实验、指标和运行记录 |
+
+## 10. 下一步
+
+当前接口已实施并完成定向验证，下一步按用户授权重跑冻结 Query 1：
+
+```text
+read_page + inspect_page
+→ Runtime evidence ledger
+→ Runtime active set coverage
+→ end-turn citation validator
+```
+
+本步骤不继续 Query 2–4、不运行完整消融、不删除旧实现。

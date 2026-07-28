@@ -28,6 +28,7 @@ from paper_copilot.shared.prompt_fingerprint import compute_prompt_sha256
 __all__ = [
     "AssistantMessage",
     "ContentBlock",
+    "EndTurnValidation",
     "Event",
     "LLMClientProtocol",
     "LLMResponse",
@@ -160,6 +161,12 @@ class ToolResultData:
     images: tuple[ToolResultImage, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class EndTurnValidation:
+    passed: bool
+    continuation_message: str | None = None
+
+
 # ---- Events --------------------------------------------------------------
 
 
@@ -240,6 +247,12 @@ async def run_agent_loop(
         Awaitable[list[dict[str, Any]]],
     ]
     | None = None,
+    on_tool_result_persisted: Callable[
+        [ToolUseRequest, ToolResultData],
+        Awaitable[None],
+    ]
+    | None = None,
+    validate_end_turn: Callable[[str], EndTurnValidation] | None = None,
     stream_event_callback: LLMStreamEventCallback | None = None,
 ) -> AsyncIterator[Event]:
     """Drive an LLM with tools until it stops or a budget, deadline, or guard fires.
@@ -404,6 +417,27 @@ async def run_agent_loop(
             turns += 1
 
             if response.stop_reason == "end_turn":
+                if validate_end_turn is not None:
+                    candidate_text = "".join(
+                        block.text
+                        for block in response.content
+                        if isinstance(block, TextBlock)
+                    )
+                    validation = validate_end_turn(candidate_text)
+                    if not validation.passed:
+                        continuation = validation.continuation_message
+                        if not continuation:
+                            raise AgentError(
+                                "blocked end-turn validation requires a continuation"
+                            )
+                        continuation_history = {
+                            "role": "user",
+                            "content": [{"type": "text", "text": continuation}],
+                        }
+                        history.append(continuation_history)
+                        if store is not None:
+                            store.append_message(role="user", text=continuation)
+                        continue
                 yield Terminated(reason="end_turn", cost=_cost_snapshot(cost))
                 return
 
@@ -514,6 +548,8 @@ async def run_agent_loop(
                 assert result is not None
                 if store is not None:
                     store.append_tool_result(block.id, result.output, result.is_error)
+                    if on_tool_result_persisted is not None and not result.is_error:
+                        await on_tool_result_persisted(request, result)
                     if build_recovery_state is not None:
                         store.append_runtime_state(build_recovery_state())
                 yield ToolResult(id=block.id, output=result.output, is_error=result.is_error)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import os
 import tempfile
 import time
 from dataclasses import dataclass
@@ -59,8 +60,8 @@ class InspectPageInput(BaseModel):
         max_length=64,
         pattern=r"^(?:[0-9a-f]{12}|[0-9a-f]{64})$",
         description=(
-            "Full PDF SHA-256 returned by paper-cache or paper_set. Legacy "
-            "12-character Paper Copilot IDs remain accepted."
+            "Full PDF SHA-256 from research_cache_index. Legacy 12-character "
+            "Paper Copilot IDs remain accepted for historical sessions."
         ),
     )
     page: int = Field(
@@ -168,12 +169,15 @@ async def run_inspect_page(
         args.region.model_dump(mode="json") if args.region is not None else None
     )
     evidence = {
+        "schema_version": _SCHEMA_VERSION,
         "source_kind": "pdf_page_render",
-        "paper_id": args.paper_id,
         "pdf_sha256": pdf_sha256,
         "page": args.page,
         "region": region_payload,
-        "artifact_hash": render_sha256,
+        "artifact_sha256": render_sha256,
+        "extractor_fingerprint": None,
+        "cache_revision_id": None,
+        "render_sha256": render_sha256,
     }
     output = {
         "status": "ok",
@@ -209,6 +213,7 @@ async def run_inspect_page(
             "render_height": height,
             "render_bytes": len(image_bytes),
             "wall_time_seconds": round(time.monotonic() - started, 3),
+            "page_evidence": evidence,
         },
     )
 
