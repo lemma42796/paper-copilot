@@ -470,13 +470,15 @@ private struct ConversationTimeline: View {
     @EnvironmentObject private var appModel: AppModel
     let conversation: ChatConversation
 
-    private var latestAnswerSequence: Int {
-        conversation.jobs.compactMap {
-            appModel.jobEvents[$0.id]?.last {
-                $0.activityKind == "assistant"
-                    && $0.activityPhase == "delta"
-            }?.seq
-        }.max() ?? 0
+    private var latestActivityUpdate: String {
+        for job in conversation.jobs.reversed() {
+            if let sequence = appModel.jobEvents[job.id]?.last(where: {
+                $0.activityID != nil
+            })?.seq {
+                return "\(job.id):\(sequence)"
+            }
+        }
+        return ""
     }
 
     var body: some View {
@@ -498,14 +500,23 @@ private struct ConversationTimeline: View {
                 .frame(maxWidth: .infinity)
             }
             .onChange(of: appModel.jobs) { _ in
-                proxy.scrollTo("timeline-bottom", anchor: .bottom)
+                scrollToTimelineBottom(using: proxy)
             }
-            .onChange(of: latestAnswerSequence) { _ in
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    proxy.scrollTo("timeline-bottom", anchor: .bottom)
-                }
+            .onChange(of: latestActivityUpdate) { _ in
+                scrollToTimelineBottom(using: proxy)
+            }
+            .onAppear {
+                scrollToTimelineBottom(using: proxy)
+            }
+        }
+    }
+
+    private func scrollToTimelineBottom(using proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo("timeline-bottom", anchor: .bottom)
             }
         }
     }
@@ -515,14 +526,19 @@ private struct JobTurnView: View {
     @EnvironmentObject private var appModel: AppModel
     @State private var approvalDetailsExpanded = false
     @State private var activityAccumulator: JobActivityAccumulator
+    @State private var progressDetailsExpanded: Bool
     let job: ChatJobRecord
     let events: [ChatJobEvent]
 
     init(job: ChatJobRecord, events: [ChatJobEvent]) {
         self.job = job
         self.events = events
-        _activityAccumulator = State(
-            initialValue: JobActivityAccumulator(events: events)
+        let accumulator = JobActivityAccumulator(events: events)
+        _activityAccumulator = State(initialValue: accumulator)
+        _progressDetailsExpanded = State(
+            initialValue: !accumulator.activities.contains {
+                $0.kind == .assistant
+            }
         )
     }
 
@@ -542,6 +558,11 @@ private struct JobTurnView: View {
 
             if !events.isEmpty || job.status.isActive {
                 progressCard
+            }
+
+            if job.result == nil, let answer = streamingAnswer,
+               !answer.text.isEmpty {
+                StreamingActivityText(text: answer.text)
             }
 
             if let approval = job.pendingApproval {
@@ -572,7 +593,23 @@ private struct JobTurnView: View {
     }
 
     private var progressCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        DisclosureGroup(isExpanded: $progressDetailsExpanded) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(lifecycleEvents) { event in
+                    Text(event.message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                ForEach(executionActivities) { activity in
+                    ActivityRow(
+                        activity: activity,
+                        formalAnswerHasStarted: formalAnswerHasStarted
+                    )
+                }
+            }
+            .padding(.top, 8)
+        } label: {
             HStack {
                 if job.status.isActive {
                     ProgressView()
@@ -583,29 +620,33 @@ private struct JobTurnView: View {
                 Text(job.status.displayName)
                     .font(.subheadline.weight(.semibold))
             }
-            ForEach(lifecycleEvents) { event in
-                Text(event.message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            ForEach(visibleActivities) { activity in
-                ActivityRow(activity: activity)
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .background(.quaternary.opacity(0.45))
         .clipShape(RoundedRectangle(cornerRadius: 10))
+        .onChange(of: formalAnswerHasStarted) { hasStarted in
+            if hasStarted {
+                progressDetailsExpanded = false
+            }
+        }
     }
 
     private var lifecycleEvents: [ChatJobEvent] {
         events.filter { $0.activityID == nil }
     }
 
-    private var visibleActivities: [JobActivity] {
-        activityAccumulator.activities.filter {
-            job.result == nil || $0.kind != .assistant
+    private var executionActivities: [JobActivity] {
+        activityAccumulator.activities.filter { $0.kind != .assistant }
+    }
+
+    private var streamingAnswer: JobActivity? {
+        activityAccumulator.activities.last { $0.kind == .assistant }
+    }
+
+    private var formalAnswerHasStarted: Bool {
+        activityAccumulator.activities.contains {
+            $0.kind == .assistant
         }
     }
 
@@ -1524,49 +1565,110 @@ private struct JobActivityAccumulator {
 
 private struct ActivityRow: View {
     let activity: JobActivity
-    @State private var isExpanded = true
+    let formalAnswerHasStarted: Bool
+    @State private var isExpanded: Bool
+
+    init(activity: JobActivity, formalAnswerHasStarted: Bool) {
+        self.activity = activity
+        self.formalAnswerHasStarted = formalAnswerHasStarted
+        _isExpanded = State(
+            initialValue: activity.kind != .reasoning
+                || (
+                    activity.phase != .completed
+                        && !formalAnswerHasStarted
+                )
+        )
+    }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            if !activity.text.isEmpty {
-                if activity.kind == .assistant {
-                    StreamingActivityText(
-                        text: activity.text,
-                        isComplete: activity.phase == .completed
-                    )
-                } else {
-                    Text(activity.text)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.top, 4)
-                }
-            }
-            if !activity.detail.isEmpty {
-                Text(activity.detail)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 4)
-            }
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .foregroundStyle(statusColor)
-                Text(activity.title)
-                    .font(.caption.weight(.semibold))
-                Spacer()
-                if activity.phase == .started || activity.phase == .delta {
-                    ProgressView()
-                        .controlSize(.mini)
+        Group {
+            if isLiveReasoning {
+                activityLabel
+            } else {
+                DisclosureGroup(isExpanded: $isExpanded) {
+                    activityContent
+                } label: {
+                    activityLabel
                 }
             }
         }
         .padding(10)
         .background(.background.opacity(0.7))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .onChange(of: activity.phase) { phase in
+            if activity.kind == .reasoning, phase == .completed {
+                isExpanded = false
+            }
+        }
+        .onChange(of: formalAnswerHasStarted) { hasStarted in
+            if activity.kind == .reasoning, hasStarted {
+                isExpanded = false
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var activityContent: some View {
+        let displayedReasoning = reasoningPresentation
+        let displayedText = displayedReasoning?.transcript ?? activity.text
+        if !displayedText.isEmpty {
+            if activity.kind == .assistant {
+                StreamingActivityText(text: displayedText)
+            } else if activity.kind == .reasoning {
+                ReasoningTranscriptText(text: displayedText)
+            } else {
+                Text(displayedText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
+            }
+        }
+        if !activity.detail.isEmpty {
+            Text(activity.detail)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 4)
+        }
+    }
+
+    private var activityLabel: some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .foregroundStyle(statusColor)
+            Text(displayedTitle)
+                .font(.caption.weight(.semibold))
+            Spacer()
+            if activity.phase == .started || activity.phase == .delta {
+                ProgressView()
+                    .controlSize(.mini)
+            }
+        }
+    }
+
+    private var isLiveReasoning: Bool {
+        activity.kind == .reasoning
+            && (activity.phase == .started || activity.phase == .delta)
+    }
+
+    private var displayedTitle: String {
+        guard activity.kind == .reasoning else {
+            return activity.title
+        }
+        if isLiveReasoning {
+            return firstBoldReasoningHeader(in: activity.text) ?? "正在思考"
+        }
+        return reasoningPresentation?.title ?? activity.title
+    }
+
+    private var reasoningPresentation: ReasoningPresentation? {
+        guard activity.kind == .reasoning else {
+            return nil
+        }
+        return completedReasoningPresentation(for: activity.text)
     }
 
     private var systemImage: String {
@@ -1594,86 +1696,92 @@ private struct ActivityRow: View {
     }
 }
 
-private struct StreamingActivityText: View {
-    let text: String
-    let isComplete: Bool
+private struct ReasoningPresentation {
+    let title: String
+    let transcript: String
+}
 
-    @State private var displayedText = ""
-    @State private var queuedText = ""
-    @State private var revealTask: Task<Void, Never>?
+private func firstBoldReasoningHeader(in text: String) -> String? {
+    guard
+        let opening = text.range(of: "**"),
+        let closing = text.range(
+            of: "**",
+            range: opening.upperBound..<text.endIndex
+        )
+    else {
+        return nil
+    }
+    let header = text[opening.upperBound..<closing.lowerBound]
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    return header.isEmpty ? nil : header
+}
+
+private func completedReasoningPresentation(
+    for text: String
+) -> ReasoningPresentation {
+    let transcript = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard
+        transcript.hasPrefix("**"),
+        let closing = transcript.range(
+            of: "**",
+            range: transcript.index(
+                transcript.startIndex,
+                offsetBy: 2
+            )..<transcript.endIndex
+        )
+    else {
+        return ReasoningPresentation(
+            title: "思考过程",
+            transcript: transcript
+        )
+    }
+
+    let titleStart = transcript.index(transcript.startIndex, offsetBy: 2)
+    let title = transcript[titleStart..<closing.lowerBound]
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let remainder = transcript[closing.upperBound...]
+    guard
+        !title.isEmpty,
+        remainder.first == "\n" || remainder.first == "\r"
+    else {
+        return ReasoningPresentation(
+            title: "思考过程",
+            transcript: transcript
+        )
+    }
+    return ReasoningPresentation(
+        title: title,
+        transcript: remainder.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+    )
+}
+
+private struct ReasoningTranscriptText: View {
+    let text: String
 
     var body: some View {
-        Text(displayedText)
+        ScrollView {
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: 220)
+        .padding(.top, 4)
+    }
+}
+
+private struct StreamingActivityText: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
             .font(.body)
             .foregroundStyle(.primary)
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 4)
-            .onAppear {
-                accept(text)
-            }
-            .onChange(of: text) { updatedText in
-                accept(updatedText)
-            }
-            .onChange(of: isComplete) { completed in
-                if completed {
-                    finish()
-                }
-            }
-            .onDisappear {
-                revealTask?.cancel()
-                revealTask = nil
-            }
-    }
-
-    private func accept(_ updatedText: String) {
-        let acceptedText = displayedText + queuedText
-        guard updatedText.hasPrefix(acceptedText) else {
-            displayedText = updatedText
-            queuedText = ""
-            revealTask?.cancel()
-            revealTask = nil
-            return
-        }
-        queuedText.append(contentsOf: updatedText.dropFirst(acceptedText.count))
-        if isComplete {
-            finish()
-        } else {
-            startRevealTaskIfNeeded()
-        }
-    }
-
-    private func startRevealTaskIfNeeded() {
-        guard revealTask == nil, !queuedText.isEmpty else {
-            return
-        }
-        revealTask = Task { @MainActor in
-            while !Task.isCancelled, !queuedText.isEmpty {
-                let batchSize = revealBatchSize(for: queuedText.count)
-                let revealed = queuedText.prefix(batchSize)
-                displayedText.append(contentsOf: revealed)
-                queuedText.removeFirst(revealed.count)
-                try? await Task.sleep(nanoseconds: 25_000_000)
-            }
-            revealTask = nil
-        }
-    }
-
-    private func revealBatchSize(for backlog: Int) -> Int {
-        switch backlog {
-        case 241...:
-            return 24
-        case 81...:
-            return 8
-        default:
-            return 3
-        }
-    }
-
-    private func finish() {
-        revealTask?.cancel()
-        revealTask = nil
-        displayedText += queuedText
-        queuedText = ""
     }
 }
