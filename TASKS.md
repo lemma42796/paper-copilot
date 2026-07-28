@@ -4,7 +4,7 @@
 > [AGENTS.md](AGENTS.md)，技术结构和稳定架构决策见
 > [ARCHITECTURE.md](ARCHITECTURE.md)，历史实现过程见 Git。
 
-更新于 2026-07-27。
+更新于 2026-07-28。
 
 ## Current Direction
 
@@ -17,7 +17,10 @@ MCP Server 两个入口复用同一 Python Core。
 
 ## Current Work
 
-当前已完成 Codex 四轮基线、工具系统 v2 实施计划和 Slice 1–6。
+当前已完成 Codex CLI 四轮可审计基线、工具系统 v2 实施计划和 Slice 1–6。权威基线
+位于私有 `runs/codex-cli-jsonl-v2/`，固定 `codex-cli 0.145.0`、
+`gpt-5.6-sol` 和 `low` reasoning，保存逐轮 JSONL 与原生 session rollout。旧桌面端
+回答及其依赖模型自报的评测报告已删除；新 CLI 基线尚待按同一 Gold 重新评分。
 首次 v2 Query 1 预检在进入质量评测前暴露了 Unicode 论文目录 sandbox 授权、
 macOS 客户端沿用默认五篇预算，以及空 `paper_set` 真空完成三个阻塞问题。纠正实现
 已落地。第二次 Query 1 证明目录和 14 篇预算已生效，但被 Paper Copilot 专有的固定
@@ -29,12 +32,14 @@ macOS 客户端沿用默认五篇预算，以及空 `paper_set` 真空完成三�
 猜测。路径现已归一化，Skill 更新为 version 5，明确 call-local scratch、broker 失败
 不得退化为临时全文脚本、全量 coverage 未完成不得输出填充后的分类表。确定性
 end-turn coverage guard 尚待按 Codex-first 设计确认。下一步先用同一冻结 Query 1 和
-全新 Paper Copilot 会话重跑端到端验收。通过后再继续完整四轮预检，复用既有 Codex
-基线，保存完整工具 trace，并对照私有 Gold 报告质量、跨轮约束、遍历完成、引用和工具
-行为。当前不重复运行 Codex，也不执行完整消融。
+全新 Paper Copilot 会话重跑端到端验收。通过后再继续完整四轮预检，以新的 Codex CLI
+JSONL 基线作为对照，保存完整工具 trace，并对照私有 Gold 报告质量、跨轮约束、遍历
+完成、引用和工具行为。比较前必须先生成新的 CLI 基线评分报告；当前不再重复运行
+Codex，也不执行完整消融。
 
-第五次 Query 1 触发 3000-token 客户端输出上限且工具编排显著重于 Codex 基线后，用户
-确认启动 Codex 风格简化重构。第一 bounded slice 已把预算内 PDF 的 cache ensure
+第五次 Query 1 触发 3000-token 客户端输出上限且工具编排显著重于当时的旧桌面端
+自报基线后，用户确认启动 Codex 风格简化重构；该比较只保留为历史决策背景，不作为
+当前量化基线。第一 bounded slice 已把预算内 PDF 的 cache ensure
 移到模型循环前的 Runtime preflight，并通过受信任 `research_cache_index` 一次提供
 逻辑 TXT 路径；Skill 不再要求模型逐篇调用 `paper-cache status/ensure`。`paper_set`
 和页级 evidence 协议本 slice 保持不变，尚待后续 slice 与冻结 Query 1 验收。
@@ -45,8 +50,10 @@ end-turn coverage guard 尚待按 Codex-first 设计确认。下一步先用同�
 已完成：
 
 - 冻结 14 篇硕士学位论文、四轮 query 和私有 Gold；
-- 完成原生 Codex 四轮盲测和基线评测；
-- 基线未发现作者—方法错配，主要失败类型为 `constraint_memory_failure`；
+- 完成原生 Codex CLI 四轮盲测，保存 4 轮回答、17 次实际命令调用、逐轮 JSONL、
+  原生 session rollout、token 和耗时；
+- 校验 CLI 基线的 14 篇 PDF 哈希与冻结 manifest 一致；旧桌面端评分结论不再作为
+  当前基线事实，新评分报告尚待生成；
 - 确认当前 `read_paper` 的单次全文结构化抽取不作为 v2 入库核心；
 - 规划 Poppler 候选底座、异常页本地恢复、能力自适应 `inspect_page`、稳定结果集合和
   Codex-inspired 安全边界。
@@ -166,9 +173,9 @@ milestone。开始实现前需要先确定目标、范围、验收方式和明�
   组合方式。
 - 排查能力缺口、职责重叠、隐式耦合、安全策略不一致及难以评估的接口。
 - 评估仍保留的旧内部工具应继续复用、迁移还是删除。
-- 已完成四轮多论文 Codex 基线、稳定结果集合和四工具公开表面切换。
-- 已确认先运行一次完整 v2 四轮预检，复用既有 Codex 基线并暂缓完整消融；该预检不产生
-  Slice 7 已完成结论。
+- 已完成四轮多论文 Codex CLI JSONL 基线、稳定结果集合和四工具公开表面切换。
+- 已确认先运行一次完整 v2 四轮预检，复用新的 Codex CLI 基线并暂缓完整消融；比较前
+  先按私有 Gold 重新评分 CLI 回答。该预检不产生 Slice 7 已完成结论。
 - v2 按 `docs/design/tool_system_v2_plan.md` 的 bounded slices 实施；每个 slice 单独确认、
   验收后再进入下一项。
 

@@ -507,6 +507,7 @@ enum TraceEntityType: String, Codable, CaseIterable {
     case llmCall = "llm_call"
     case toolCall = "tool_call"
     case compaction
+    case runtimeOperation = "runtime_operation"
 
     var displayName: String {
         switch self {
@@ -520,6 +521,8 @@ enum TraceEntityType: String, Codable, CaseIterable {
             return "工具调用"
         case .compaction:
             return "上下文压缩"
+        case .runtimeOperation:
+            return "Runtime 操作"
         }
     }
 }

@@ -890,10 +890,13 @@ async def run_paper_copilot(
     preflight_recorder = current_recorder()
     preflight_trace = (
         preflight_recorder.operation(
-            "research_cache_preflight",
-            preflight_recorder.new_entity_id("research_cache_preflight"),
+            "runtime_operation",
+            preflight_recorder.new_entity_id("runtime-operation"),
             parent_entity_id=preflight_recorder.rollout_entity_id,
-            attributes={"max_papers": context.max_papers},
+            attributes={
+                "kind": "research_cache_preflight",
+                "max_papers": context.max_papers,
+            },
         )
         if preflight_recorder is not None
         else nullcontext()

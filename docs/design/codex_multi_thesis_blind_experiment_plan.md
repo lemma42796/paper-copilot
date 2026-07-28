@@ -1,7 +1,7 @@
 # Codex 多篇学位论文盲测与工具改造计划
 
-状态：Proposed  
-日期：2026-07-26
+状态：执行中；Codex CLI 四轮权威 trace 已完成，基线重新评分待执行
+日期：2026-07-28
 
 ## 1. 目标
 
@@ -73,7 +73,7 @@
 │   ├── turns.yaml
 │   └── evidence.yaml
 ├── runs/
-│   ├── codex-baseline/
+│   ├── codex-cli-jsonl-v2/
 │   └── paper-copilot/
 └── reports/
 ```
@@ -225,7 +225,7 @@ allowed_abstention: true
 - 标签内部没有同一论文同时 `required` 和 `forbidden` 的冲突；
 - 私有产物未进入盲测 workspace。
 
-## 6. 会话 2：原生 Codex 盲测
+## 6. 会话 2：原生 Codex CLI 盲测
 
 ### 6.1 会话设置
 
@@ -236,6 +236,12 @@ allowed_abstention: true
 ```
 
 工作区只包含论文目录。不要在提示中提到实验、评分、标签或后续工具设计。
+
+当前权威运行使用 `codex-cli 0.145.0`、`gpt-5.6-sol` 和 `low` reasoning。首轮通过
+`codex exec --json` 开始，后三轮通过同一 session ID 的 `codex exec resume --json`
+继续；web search、命令网络、Apps、Plugins 和 multi-agent 均关闭。逐轮 JSONL 和原生
+session rollout 是工具行为真源。旧 ChatGPT 桌面端导出只有模型自报，已删除，不再
+作为基线或评分输入。
 
 ### 6.2 逐轮 query
 
@@ -298,7 +304,7 @@ allowed_abstention: true
 原始轨迹只追加，不人工清理错误调用。导出后写入：
 
 ```text
-runs/codex-baseline/
+runs/codex-cli-jsonl-v2/
 ```
 
 ### 6.5 完成条件
@@ -381,7 +387,7 @@ unsupported_negative_claim
 评测报告写入：
 
 ```text
-reports/codex-baseline-report.md
+reports/codex-cli-jsonl-v2-report.md
 ```
 
 报告必须包含：

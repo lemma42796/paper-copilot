@@ -2,7 +2,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-TraceEntityType = Literal["rollout", "turn", "llm_call", "tool_call", "compaction"]
+TraceEntityType = Literal[
+    "rollout",
+    "turn",
+    "llm_call",
+    "tool_call",
+    "compaction",
+    "runtime_operation",
+]
 TraceStatus = Literal["running", "completed", "failed", "cancelled", "aborted"]
 TraceEventType = Literal[
     "rollout.started",
@@ -26,6 +33,10 @@ TraceEventType = Literal[
     "compaction.completed",
     "compaction.failed",
     "compaction.cancelled",
+    "runtime_operation.started",
+    "runtime_operation.completed",
+    "runtime_operation.failed",
+    "runtime_operation.cancelled",
 ]
 
 

@@ -1,7 +1,7 @@
 # Paper Copilot 工具系统 v2 计划
 
 状态：方向已确认，Slice 1–6 已完成；先执行一次 v2 四轮预检，Slice 7 正式冻结评测尚未开始
-日期：2026-07-27  
+日期：2026-07-28
 取代范围：`docs/design/command_first_tool_redesign_handoff.md` 及本文档旧版中的下一代工具建议  
 历史文档：旧文档和 Git 历史只作为决策背景，不再作为 v2 实施依据
 
@@ -42,7 +42,8 @@ v2 模型只看到四个工具：
 5. TXT、page manifest 和原始 PDF 是论文证据基础；数据库、chunk、embedding 和向量
    RAG 不作为 v2 入库或问答前置条件。
 6. `inspect_page` 只在文字层、版面、图表、公式或页码证据需要核验时使用。
-7. `paper_set` 只解决 Codex 基线暴露的跨轮集合遗忘和遍历完成性，不承担搜索或 RAG。
+7. `paper_set` 只承担跨轮集合和遍历完成性，不承担搜索或 RAG；其相对收益必须用新的
+   Codex CLI JSONL 基线重新评分，不再引用旧桌面端模型自报报告。
 8. `library_edit` 仍是唯一用户论文库写入口。
 9. 对 Codex 的借鉴以可审查源码和权威工具 trace 为依据，不以工具名称、界面行为或
    模型自述作为架构事实。
@@ -140,49 +141,43 @@ OS sandbox、timeout、输出预算和权威 trace 为核心；不另造一套�
 
 ### 2.3 Codex 四轮实验依据
 
-冻结的 14 篇硕士学位论文实验中，Codex 的实际首轮策略是：
+冻结的 14 篇硕士学位论文实验中，Codex CLI JSONL v2 的实际策略是：
 
 ```text
 列出 14 篇 PDF
 → pdfinfo 获取页数
-→ pdftotext -layout 把全部 PDF 提取到临时 TXT
-→ awk/rg 定向搜索
-→ pdftotext -f/-l 精读命中页
-→ pdftoppm 渲染少数页面
-→ view_image 核验
+→ pdftotext -f/-l -layout/-raw 有界读取
+→ rg/sed/awk 定向搜索和筛选
+→ 对截断或空命中执行定向补读
 ```
 
 权威 session trace 显示：
 
 - 14 篇论文合计 1169 页；
-- 首次完整 TXT 提取耗时 4.2 秒；
-- 前四轮共 48 次命令执行和 14 次页面图像检查；
+- 四轮共 17 次命令执行；
+- 四轮均在同一 session 中完成，保存逐轮 `codex exec --json` 和原生 rollout；
+- 模型为 `gpt-5.6-sol`，reasoning effort 为 `low`；
+- 总 input tokens 为 2,975,964，其中 cached input 为 2,534,144；output tokens 为
+  55,264；
 - 没有 OCR；
 - 没有 embedding；
 - 没有向量数据库；
 - 没有先运行全文 LLM 结构化摘要；
-- 后续轮次复用了同一临时 TXT 目录；
-- 临时目录不具备跨会话缓存契约。
+- 没有页面图像工具调用；
+- T02 有一次 WebSocket 自动重连，turn 最终完成。
 
-该实验说明正常文字层 PDF 的全文 TXT 提取可以是快速本地原语，复杂研究任务可以由模型
-组合命令完成。它没有证明所有 PDF、扫描件或更大论文库都具有相同耗时。
+该实验说明正常文字层 PDF 可以由模型组合受限命令完成多轮研究，但本次 CLI 直接重复
+调用 `pdftotext`，没有建立跨会话缓存契约，也没有验证扫描件或视觉页面路径。
 
 ### 2.4 基线失败
 
-冻结 Codex 基线：
+旧桌面端基线的 `60/68`、Macro-F1 `95%`、`constraint_memory_failure` 等结论来自只有
+模型自报工具记录的旧回答，相关产物和报告已删除，不再作为当前设计事实。
 
-- required claim 严格正确：`60/68`
-- required claim 加权准确：`61/68`
-- required claim 完整：`62/68`
-- 全部 required claim 引用支持：`60/68`
-- 相关论文集合 Macro-F1：`95%`
-- 约束保持：`29/30`
-- 遍历完成：`3/4`
-- major error：`1`
-- 作者—方法归属：`100%`
-
-主要失败不是缺少向量 RAG，而是 T03 没有续用上一轮完整论文集合。因此 v2 在复现 Codex
-命令能力之外，只增加确定性的跨轮 `paper_set`。
+新的 Codex CLI 四轮回答和权威 trace 已冻结到私有 `runs/codex-cli-jsonl-v2/`，但尚未
+按同一 Gold 重新评分。在新的 `reports/codex-cli-jsonl-v2-report.md` 完成前，不声明
+主要失败类型、质量分数或 `paper_set` 的已测收益；v2 的集合不变量仍作为产品级通用
+完整性机制保留。
 
 ## 3. 设计原则
 
@@ -746,7 +741,9 @@ deadline、用户中断、确定性 guard 或失败终止；工具调用次数�
 - 使用现有 14 篇论文、冻结的四轮 query 和私有 Gold；
 - 从全新 Paper Copilot 会话开始，按顺序逐轮运行，不提供答案性纠正；
 - 使用完整 v2 工具表面和 `research-papers` Skill；
-- 复用既有 Codex 基线，不重新运行 Codex；
+- 复用 `runs/codex-cli-jsonl-v2/` 的权威 CLI 基线，不重新运行 Codex；
+- 在产品对比前先生成 `reports/codex-cli-jsonl-v2-report.md`，不得沿用已删除的桌面端
+  评分；
 - 保存完整产品 trace，并报告质量、跨轮约束、遍历完成、引用和工具行为；
 - 缓存、超时、网络隔离等确定性行为可引用 Slice 1–6 的既有验收，但不得用既有验收
   替代本次实际 trace；
@@ -769,17 +766,21 @@ Slice 7 完成，不能报告中位数或最差运行，也不能据此宣称 v2
 
 ### 10.2 质量门槛
 
-| 指标 | Codex | v2 最低门槛 |
-|---|---:|---:|
-| Required claim 严格正确 | 60/68 | ≥61/68 |
-| Required claim 加权准确 | 61/68 | >61/68 |
-| Required claim 完整 | 62/68 | ≥63/68 |
-| 全部 claim 引用支持 | 60/68 | ≥61/68 |
-| 相关论文集合 Macro-F1 | 95% | >95% |
-| 约束保持 | 29/30 | 30/30 |
-| 遍历完成 | 3/4 | 4/4 |
-| major error | 1 | 0 |
-| 作者—方法归属 | 100% | 100% |
+旧桌面端数值门槛已随旧报告退役。以下各项须先从
+`reports/codex-cli-jsonl-v2-report.md` 得到新的 Codex 值，再由用户确认 v2 门槛；在此
+之前不得沿用旧数值判定通过。
+
+| 指标 | Codex CLI JSONL v2 | v2 最低门槛 |
+|---|---|---|
+| Required claim 严格正确 | 待重新评分 | 待基线报告后冻结 |
+| Required claim 加权准确 | 待重新评分 | 待基线报告后冻结 |
+| Required claim 完整 | 待重新评分 | 待基线报告后冻结 |
+| 全部 claim 引用支持 | 待重新评分 | 待基线报告后冻结 |
+| 相关论文集合 Macro-F1 | 待重新评分 | 待基线报告后冻结 |
+| 约束保持 | 待重新评分 | 待基线报告后冻结 |
+| 遍历完成 | 待重新评分 | 待基线报告后冻结 |
+| major error | 待重新评分 | 0 |
+| 作者—方法归属 | 待重新评分 | 100% |
 
 重复运行要求：
 
@@ -1011,8 +1012,9 @@ session 重放；公开工具列表保持不变，留待 Slice 6 统一切换。
 
 目标：完成三次可审计四轮评测及第 10 节消融。
 
-当前状态：正式冻结评测尚未开始。用户已确认先按 10.0 节运行一次完整 v2 四轮预检，
-暂不重复 Codex，也不执行完整消融。预检结果不改变本节完成条件。
+当前状态：正式冻结评测尚未开始。Codex CLI JSONL 基线已重跑完成，旧桌面端基线和
+评分已删除；先按同一 Gold 生成新的 CLI 基线报告，再按 10.0 节运行一次完整 v2 四轮
+预检，暂不重复 Codex，也不执行完整消融。预检结果不改变本节完成条件。
 
 完成条件：
 
@@ -1056,8 +1058,9 @@ session 重放；公开工具列表保持不变，留待 Slice 6 统一切换。
 ### 11.1 v2 简化重构（2026-07-28）
 
 冻结 Query 1 暴露出模型可见 cache/paper-set 协议的协调成本：DeepSeek 在没有生成最终
-答案前已执行 103 次工具调用，其中 88 次为 `library_exec`。对照 Codex 基线后，用户
-确认改为 Codex 风格的模型表面，并将安全、缓存和覆盖记账收回 Runtime。
+答案前已执行 103 次工具调用，其中 88 次为 `library_exec`。对照当时的旧桌面端自报
+基线后，用户确认改为 Codex 风格的模型表面，并将安全、缓存和覆盖记账收回 Runtime。
+该比较只保留为历史决策背景，不作为当前量化基线。
 
 简化重构仍按 bounded slice 实施。第一 slice 只改变缓存准备：
 
@@ -1072,6 +1075,16 @@ session 重放；公开工具列表保持不变，留待 Slice 6 统一切换。
 本 slice 不删除 `paper_set`，不改变页级 evidence 协议，不引入持久 scratch，也不删除
 旧工具。后续 slice 是否继续缩减模型表面，取决于同一冻结 Query 1 的工具数、token、
 完整答案和引用结果。
+
+首次重跑在模型调用前暴露 preflight 使用了 observability schema 未声明的 entity。
+按固定 Codex commit
+`61a44880a85d2fd0d8770908dea5733495e571c8` 的
+`codex-rs/rollout-trace/README.md` 与 `src/raw_event.rs` 复核：Runtime 工作应与模型工具
+调用分开记录，尚未有专用语义时使用通用 `Other` raw observation。Paper Copilot 现有
+trace 只支持成对生命周期事件，没有同形的单事件 `Other`，因此最小适配为通用
+`runtime_operation` entity，并以 `kind=research_cache_preflight` 标识本次预处理；
+它不计入 `tool_call`，也不增加模型可见工具。Codex 的 trace 全局 best-effort 写入语义
+不在本次阻塞修复中改造，作为现有 observability 差异另行处理。
 
 ## 12. 依赖与成本
 
