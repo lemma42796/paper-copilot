@@ -28,7 +28,6 @@ from paper_copilot.shared.prompt_fingerprint import compute_prompt_sha256
 __all__ = [
     "AssistantMessage",
     "ContentBlock",
-    "EndTurnValidation",
     "Event",
     "LLMClientProtocol",
     "LLMResponse",
@@ -36,6 +35,8 @@ __all__ = [
     "LLMStreamEventCallback",
     "LoopConfig",
     "StopReason",
+    "StopHookOutcome",
+    "StopHookRequest",
     "TerminateReason",
     "Terminated",
     "TextBlock",
@@ -162,9 +163,15 @@ class ToolResultData:
 
 
 @dataclass(frozen=True, slots=True)
-class EndTurnValidation:
-    passed: bool
-    continuation_message: str | None = None
+class StopHookRequest:
+    stop_hook_active: bool
+    last_assistant_message: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class StopHookOutcome:
+    decision: Literal["allow", "block"] = "allow"
+    reason: str | None = None
 
 
 # ---- Events --------------------------------------------------------------
@@ -252,7 +259,8 @@ async def run_agent_loop(
         Awaitable[None],
     ]
     | None = None,
-    validate_end_turn: Callable[[str], EndTurnValidation] | None = None,
+    run_stop_hook: Callable[[StopHookRequest], Awaitable[StopHookOutcome]]
+    | None = None,
     stream_event_callback: LLMStreamEventCallback | None = None,
 ) -> AsyncIterator[Event]:
     """Drive an LLM with tools until it stops or a budget, deadline, or guard fires.
@@ -280,6 +288,7 @@ async def run_agent_loop(
     last_request_history_tokens: int | None = None
     previous_tool_signature: str | None = None
     consecutive_identical_tool_calls = 0
+    stop_hook_active = False
     prompt_sha256 = compute_prompt_sha256(
         system=system,
         tools=tools,
@@ -417,27 +426,36 @@ async def run_agent_loop(
             turns += 1
 
             if response.stop_reason == "end_turn":
-                if validate_end_turn is not None:
-                    candidate_text = "".join(
+                if run_stop_hook is not None:
+                    last_assistant_message = "".join(
                         block.text
                         for block in response.content
                         if isinstance(block, TextBlock)
+                    ) or None
+                    stop_outcome = await run_stop_hook(
+                        StopHookRequest(
+                            stop_hook_active=stop_hook_active,
+                            last_assistant_message=last_assistant_message,
+                        )
                     )
-                    validation = validate_end_turn(candidate_text)
-                    if not validation.passed:
-                        continuation = validation.continuation_message
+                    if stop_outcome.decision == "block":
+                        continuation = (stop_outcome.reason or "").strip()
                         if not continuation:
-                            raise AgentError(
-                                "blocked end-turn validation requires a continuation"
+                            _log.warning(
+                                "agent.stop_hook_block_ignored",
+                                agent=agent_name,
+                                reason="missing continuation reason",
                             )
-                        continuation_history = {
-                            "role": "user",
-                            "content": [{"type": "text", "text": continuation}],
-                        }
-                        history.append(continuation_history)
-                        if store is not None:
-                            store.append_message(role="user", text=continuation)
-                        continue
+                        else:
+                            continuation_history = {
+                                "role": "user",
+                                "content": [{"type": "text", "text": continuation}],
+                            }
+                            history.append(continuation_history)
+                            if store is not None:
+                                store.append_message(role="user", text=continuation)
+                            stop_hook_active = True
+                            continue
                 yield Terminated(reason="end_turn", cost=_cost_snapshot(cost))
                 return
 

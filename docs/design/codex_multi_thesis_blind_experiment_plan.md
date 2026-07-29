@@ -1,7 +1,7 @@
 # Codex 与 Paper Copilot 多论文盲测协议
 
-状态：Codex CLI 四轮已完成；Paper Copilot Query 1 未通过，后续轮次暂停
-日期：2026-07-28
+状态：Codex CLI 四轮已完成；Paper Copilot Query 1 已通过，Query 2 待运行
+日期：2026-07-29
 文档职责：只定义可复现的实验输入、隔离、运行、评分和验收规则。产品状态、工具设计和
 单次运行明细分别保存在 `TASKS.md`、工具设计文档和私有实验产物中。
 
@@ -251,8 +251,10 @@ undetermined
 
 ## 9. 当前执行状态
 
-Codex CLI 四轮 trace 已完成，基线仍需按同一 Gold 形成正式报告。Paper Copilot 的冻结
-Query 1 已运行，但因页级证据和最终引用合同缺口未通过，Query 2–4 与最终比较暂停。
+Codex CLI 四轮 trace 已完成，基线仍需按同一 Gold 形成正式报告。Paper Copilot 在
+Query 1–2 期间撤下了 Codex 默认不存在的论文专用结束拦截，并改为默认不阻断的通用
+Stop hook 与可点击论文页链接。为避免新旧实现混入同一组正式结果，下一步应在当前
+实现上从 Query 1 重新运行四轮；全部完成后再按同一 Gold 形成并列报告。
 
 本轮具体指标和产物路径见：
 

@@ -10,6 +10,8 @@ import pytest
 from paper_copilot.agents.loop import (
     Event,
     LoopConfig,
+    StopHookOutcome,
+    StopHookRequest,
     Terminated,
     ToolResult,
     ToolResultData,
@@ -66,6 +68,71 @@ def test_end_turn_terminates_with_cost_snapshot() -> None:
     assert isinstance(term.cost, CostSnapshot)
     assert term.cost.input_tokens == 30
     assert term.cost.output_tokens == 10
+
+
+def test_stop_hook_can_block_once_with_a_continuation_reason() -> None:
+    llm = MockLLM(
+        [
+            MockResponse(
+                content=[TextBlock(text="first draft")],
+                stop_reason="end_turn",
+            ),
+            MockResponse(
+                content=[TextBlock(text="final answer")],
+                stop_reason="end_turn",
+            ),
+        ]
+    )
+    requests: list[StopHookRequest] = []
+
+    async def dispatch_tool(req: ToolUseRequest) -> ToolResultData:
+        raise AssertionError("dispatch_tool must not be called on end_turn path")
+
+    async def run_stop_hook(request: StopHookRequest) -> StopHookOutcome:
+        requests.append(request)
+        if not request.stop_hook_active:
+            return StopHookOutcome(
+                decision="block",
+                reason="Please address the missing point.",
+            )
+        return StopHookOutcome()
+
+    async def run() -> list[Event]:
+        collected: list[Event] = []
+        async for event in run_agent_loop(
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[],
+            config=LoopConfig(max_budget_cny=10.0),
+            llm=llm,
+            dispatch_tool=dispatch_tool,
+            run_stop_hook=run_stop_hook,
+        ):
+            collected.append(event)
+        return collected
+
+    events = asyncio.run(run())
+
+    assert [type(event).__name__ for event in events] == [
+        "AssistantMessage",
+        "AssistantMessage",
+        "Terminated",
+    ]
+    assert requests == [
+        StopHookRequest(
+            stop_hook_active=False,
+            last_assistant_message="first draft",
+        ),
+        StopHookRequest(
+            stop_hook_active=True,
+            last_assistant_message="final answer",
+        ),
+    ]
+    assert llm.calls[1].messages[-1] == {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Please address the missing point."},
+        ],
+    }
 
 
 def test_max_budget_terminates_at_exact_threshold() -> None:

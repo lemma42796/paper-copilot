@@ -5,7 +5,7 @@ description: Investigate local PDF papers with bounded command search and page-g
 
 # Research Papers
 
-Skill version: 7
+Skill version: 8
 
 ## Work within the boundary
 
@@ -30,12 +30,16 @@ Skill version: 7
 2. Resolve the requested papers before drawing conclusions. Do not classify a paper from its filename
    alone.
 3. For an explicit all-paper request, treat every successfully prepared entry in
-   `research_cache_index` as required. Runtime validates that each entry has observed page evidence
-   and a final citation.
+   `research_cache_index` as required and report any entry you could not examine.
 4. If the index reports a failure or budget truncation, report the scope as incomplete. Do not
    silently drop the affected paper.
-5. This Runtime active-set contract currently covers the initial all-paper scope. Do not claim that
-   a later natural-language exclusion or derived subset has deterministic Runtime coverage.
+5. An application-generated `research_scope` block lists papers persistently excluded by earlier
+   turns. Keep them excluded from later result sets, while allowing cited discussion that explains
+   or audits the exclusion.
+6. Call `update_research_scope` only after the user explicitly makes an exclusion persistent across
+   later turns. Read supporting pages first, submit only newly excluded full PDF SHA-256 values, and
+   bind each exclusion to exact observed page references. Do not change persistent scope for an
+   ordinary one-turn filter.
 
 ## Prepare deterministic text
 
@@ -98,10 +102,9 @@ Generic command output is filesystem evidence, not citation-grade paper evidence
 `read_page` result is citation-grade because Runtime binds it to the full PDF hash, page, extractor
 fingerprint, revision, and page artifact hash.
 
-For an explicit all-paper request, do not return a populated classification table until every
-Runtime active-set member has observed page evidence and a full-SHA page citation. Runtime blocks an
-invalid final draft. Leave unsupported fields unclassified rather than inferring them from titles,
-filenames, or domain defaults.
+For an explicit all-paper request, examine every active-set member and attach a full-SHA page
+citation to supported findings. Leave unsupported fields unclassified rather than inferring them
+from titles, filenames, or domain defaults.
 
 ## Report uncertainty
 

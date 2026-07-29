@@ -97,13 +97,14 @@ Agent loop 根据请求调用工具、聚合证据并生成自然语言或 groun
 模型 `end_turn`、预算、deadline、用户中断或失败；Runtime 处理重复签名、工具超时和
 rollout deadline。
 
-当前模型只看到四个工具：
+当前模型只看到五个工具：
 
 | 工具 | 当前职责与边界 |
 |---|---|
 | `library_exec` | 在逻辑 workspace 中执行有界只读命令；`library/`、`cache/` 只读，调用级 `scratch/` 可写；无网络、无权限升级 |
 | `read_page` | 从 Runtime preflight 冻结的 cache revision 读取一页文本，并产生页证据事实 |
 | `inspect_page` | 按授权 PDF SHA-256、页码和可选 region 渲染单页图像；不做 OCR、批量处理或文本回退 |
+| `update_research_scope` | 仅在用户明确要求后续持续排除论文时，追加保存有本轮页面证据的排除项；不能搜索、推断或取消排除 |
 | `library_edit` | 授权论文库内的用户可见写操作；禁止静默覆盖和永久删除，需要时持久审批 |
 
 ### 5.1 研究上下文与缓存
@@ -122,23 +123,31 @@ Runtime 在模型循环前按论文预算准备内容寻址文本缓存，并注
 模型通过 `library_exec` 批量搜索逻辑路径；`paper-cache status/ensure/page` 不再暴露。
 页文本只能通过 `read_page` 按完整 PDF SHA-256 和正整数页码读取。
 
-### 5.2 页面证据与完成校验
+### 5.2 页面证据与引用展示
 
 `inspect_page` 只在模型支持图像输入时渲染 PNG。结果绑定 PDF SHA-256、页码、region
 和 render SHA-256；图像只进入当前模型上下文，不写入 session、日志或 trace。
 
 成功 `read_page` 或 `inspect_page` 后，Runtime 追加不含正文的
-`research_evidence.page_observed` event。Query 1 的 active set 是 preflight 成功准备的
-全部论文；`end_turn` 前 validator 要求每篇都有观察页面和完整 SHA-256/page 引用。
-失败草稿在同一 Agent loop 中继续修复，预算或 deadline 先结束时只发布 Runtime 生成的
-Incomplete 结果。验证通过后，Runtime 把用户可见引用渲染为
-`《论文题目》第 N 页`；完整 SHA-256/page 只保留在结构化 `evidence_refs`、session
-和 trace 中。设计见
+`research_evidence.page_observed` event，供审计、恢复和论文范围变更使用。它不作为
+最终回答的默认发布门槛。Agent loop 与 Codex 一样只提供默认关闭的通用 Stop hook；
+Paper Copilot 默认不配置 handler，因此模型 `end_turn` 后直接结束，不因论文覆盖率或
+引用格式自动重答。
+
+模型生成的完整 SHA-256/page 引用若能解析到当前论文，Runtime 会将其转换为标准
+Markdown 链接，用户看到 `《论文题目》第 N 页`，点击后由 macOS 客户端在授权目录内
+打开对应 PDF 页。无法解析的文本保持原样，不拦截回答。结构化 `evidence_refs` 保存
+成功解析的引用，不包含宿主绝对路径。设计见
 [runtime_research_evidence_codex_source_mapping.md](docs/design/runtime_research_evidence_codex_source_mapping.md)。
 
-Query 2–4 的派生集合尚无确定性 scope-transition 接口。旧 `paper_set` 事件和代码仅供
-历史 session 兼容，不再属于模型工具表面或 citation-grade coverage。其他旧读取、
-搜索、查询、比较、文件、笔记和 Composer 实现也仅作为不可调用回滚代码存在。
+`update_research_scope` 仍只追加保存用户明确要求在后续讨论中持续排除的论文，并校验
+完整 PDF SHA-256、本轮已观察页面和当前授权目录；后续 job 从同一 conversation 的
+已完成 session 重建排除集合并注入 `research_scope`。它不判断排除结论在语义上是否
+正确，也不管理普通的单轮筛选。
+
+旧 `paper_set` 事件和代码仅供历史 session 兼容，不再属于模型工具表面或
+citation-grade coverage。其他旧读取、搜索、查询、比较、文件、笔记和 Composer 实现
+也仅作为不可调用回滚代码存在。
 
 ## 6. 授权与信任
 

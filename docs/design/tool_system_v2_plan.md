@@ -1,7 +1,7 @@
 # Paper Copilot 工具系统 v2 计划
 
-状态：Runtime 页面证据 slice 已实施并完成定向验证；冻结 Query 1 尚未重跑；Slice 7 暂停
-日期：2026-07-28
+状态：冻结 Query 1 已通过；最小持续排除已实施并完成定向验证；待运行 Query 2
+日期：2026-07-29
 文档职责：只记录方向、阶段、决策门和 Definition of Done。工具契约、源码映射、实验
 明细和历史过程保存在第 9 节链接的专项文档中，不在本计划重复。
 
@@ -36,13 +36,13 @@
 | 工具 | 当前职责 | 状态 |
 |---|---|---|
 | `library_exec` | 在授权论文库和只读缓存上执行受限命令 | 已实施 |
+| `read_page` | 按完整论文标识读取一页缓存文本并登记页证据 | 已实施 |
 | `inspect_page` | 检查一张明确 PDF 页面或区域 | 已实施 |
-| `paper_set` | 创建、派生集合并记录覆盖 | 已实施，但证据合同有缺口 |
+| `update_research_scope` | 用户明确要求后续持续排除时，追加保存有本轮页面证据的排除项 | 已实施 |
 | `library_edit` | 执行授权论文库中的用户可见写操作 | 已实施 |
 
-`paper-cache` 当前不是独立模型工具，而是 `library_exec` 可调用的确定性 broker 命令，
-提供 `status`、`ensure` 和 `page`。Runtime preflight 已接管批量 `ensure`，模型仍可通过
-`paper-cache page` 读取页文本。
+Runtime preflight 负责批量 cache ensure；`library_exec` 不再接受 `paper-cache`
+broker 命令。模型通过 `read_page` 读取页文本。
 
 旧 `read_paper`、`paper_search`、query/compare/related、Composer 专用工具、
 `library_files` 和 `notes_patch` 已从模型工具表面移除，但回滚代码尚未删除。
@@ -60,8 +60,8 @@
 | 3 论文研究 Skill | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
 | 4 `inspect_page` | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
 | 5 `paper_set` | 历史兼容，不再模型可见 | `paper_set_codex_source_mapping.md` |
-| 6 公开工具切换 | 已切换为 `read_page` 表面，待验证 | `agent_infrastructure_codex_source_mapping.md` |
-| 7 冻结评测 | 未开始 | 被 Query 1 阻塞 |
+| 6 公开工具切换 | 已切换为五工具表面，Query 1 已验证 | `agent_infrastructure_codex_source_mapping.md` |
+| 7 冻结评测 | Query 1 已完成，Query 2 待运行 | `codex_multi_thesis_blind_experiment_plan.md` |
 | 8 删除旧实现 | 未开始 | 仅在 Slice 7 通过并获确认后执行 |
 
 已完成的底层能力包括：
@@ -74,9 +74,9 @@
 - `paper_set` 的 append-only 事件、集合快照、stale 检查和恢复；
 - session tool call 与 lifecycle trace 的 call ID 对齐。
 
-## 4. Query 1 当前结论
+## 4. Query 1 结论
 
-简化重构后的冻结 Query 1 正常 `end_turn`，但 bounded slice 未通过：
+旧实现的冻结 Query 1 正常 `end_turn`，但页面证据合同未通过：
 
 | 指标 | 结果 |
 |---|---:|
@@ -110,27 +110,39 @@ lifecycle 调用的结论已纠正，trace 修复不属于下一 slice。
 
 最后一个路径以实际 job 目录为准；专项实验文档保存完整统计和纠正记录。
 
-## 5. 当前阻塞
+修订后的冻结 Query 1 已通过：
 
-现有实现把“模型声称读过某页”和“Runtime 确实把该页交给模型”混为一谈：
+| 指标 | 结果 |
+|---|---:|
+| Runtime 论文准备 | 14/14 |
+| 不同观察页面 | 46 |
+| `library_exec` | 12 |
+| `read_page` | 74 |
+| 有效引用 | 28 |
+| active-set 引用覆盖率 | 1.0 |
+| LLM 调用 | 33 |
+| 总耗时 | 209.5 秒 |
+| 费用 | ¥0.19964604 |
 
-```text
-模型猜测页码
-→ paper_set record_evidence
-→ 只校验格式或页面存在
-→ coverage complete
-→ 短 hash 报告仍可 end_turn
-```
+## 5. 当前任务
 
-因此当前 14/14 coverage 和 `heuristic_v1` 不能证明 citation-grade 页面覆盖。继续
-Query 2–4 或完整消融不会解决该确定性合同缺口。
+为运行冻结 Query 2，已增加最小持续排除：
 
-## 6. 下一 bounded slice
+- 模型仅在用户明确要求后续持续排除时调用 `update_research_scope`；
+- Runtime 校验完整论文标识和本轮已观察页面引用，并追加保存事件；
+- 同一 conversation 的后续 job 重建排除集合并注入模型上下文；
+- 首次全论文请求仍强制覆盖全部 active set；
+- 后续研究轮次只要求实际引用来自已观察页面，且至少有一条有效引用；
+- 不判断排除理由的语义正确性，不实现通用范围引擎。
 
-### 6.1 目标
+相关定向测试与受影响测试 30/30 通过。当前待在同一 conversation 实际运行 Query 2。
 
-把页面读取、证据登记、集合覆盖和最终引用校验收回 Runtime，减少模型协调工具协议的
-负担。
+## 6. 页面证据 slice
+
+### 6.1 已完成目标
+
+把页面读取和证据登记收回 Runtime，减少模型协调工具协议的负担。论文专用最终引用
+校验后来因 Codex 默认不存在该机制而撤下。
 
 候选目标表面：
 
@@ -142,7 +154,7 @@ Query 2–4 或完整消融不会解决该确定性合同缺口。
 | `inspect_page` | 保留，负责视觉页面读取 |
 | active paper set | 本 slice 固定为 Query 1 的 Runtime preflight 论文预算 |
 | 页级证据 | `read_page`/`inspect_page` 成功后由 Runtime 自动登记 |
-| 完成性与引用 | Runtime 在接受 `end_turn` 前确定性校验 |
+| 完成性与引用 | 默认不拦截；可解析引用转成可点击论文页链接 |
 
 这会删除工具入口，不会删除底层能力：
 
@@ -151,7 +163,7 @@ Query 2–4 或完整消融不会解决该确定性合同缺口。
 - `read_page` 只暴露完整 SHA-256 和正整数页码，不接受任意路径；
 - evidence ledger 不保存完整正文、图片、PDF 或宿主绝对路径。
 
-### 6.2 实施前决策门
+### 6.2 已确认决策
 
 `runtime_research_evidence_codex_source_mapping.md` 已按 `read_page` 方向修订并冻结：
 
@@ -159,17 +171,17 @@ Query 2–4 或完整消融不会解决该确定性合同缺口。
 2. Query 1 active set 等于 Runtime preflight 成功准备的论文集合；
 3. 旧 `paper_set` 事件可重放但不再产生 citation-grade evidence；
 4. `library_exec` 明确拒绝全部 `paper-cache` broker 命令；
-5. end-turn guard 的 issue codes 和 incomplete 降级结果。
+5. 通用 Stop hook 默认关闭，Paper Copilot 不配置论文专用 handler。
 
-Query 2–4 的排除和派生集合没有确定性 Runtime 来源，不在本 slice 通过语义猜测实现，
-继续暂停并等待单独的结构化 scope-transition 设计。
+Query 2–4 不从自然语言或最终答案反推范围。后续增加的最小结构化接口只支持经用户
+明确要求的持续排除。
 
 该映射检查的固定 Codex source ref 为：
-`61a44880a85d2fd0d8770908dea5733495e571c8`。Codex 已提供 Stop hook 的
-block-and-continue 结构，但没有 PDF 页证据、论文集合或 Markdown 引用语义；这些只做
-最小 Paper Copilot 领域适配。
+`61a44880a85d2fd0d8770908dea5733495e571c8`。Codex 已提供可选 Stop hook 的
+block-and-continue 结构，但没有 PDF 页证据、论文集合或 Markdown 论文引用校验；
+当前只保留页面证据与安全链接这一最小领域适配。
 
-### 6.3 预期实现范围
+### 6.3 实现范围
 
 预计修改：
 
@@ -189,21 +201,19 @@ block-and-continue 结构，但没有 PDF 页证据、论文集合或 Markdown �
 - trace lifecycle 语义；
 - 旧实现删除范围。
 
-## 7. 下一 slice Definition of Done
+## 7. 页面证据 Definition of Done
 
-实施完成只代表可以重跑冻结 Query 1，必须满足：
+以下为当前实现条件；此前冻结 Query 1 的通过结果属于已撤下的结束拦截版本：
 
 - 模型工具表面不再包含 `paper_set`；
 - `library_exec` 不再接受 `paper-cache status/ensure/page`；
 - `read_page` 只能读取授权缓存中与完整 PDF SHA-256 匹配的一页；
 - 只有成功返回给模型的 `read_page` 或 `inspect_page` 能产生页证据事实；
-- approximate pages、搜索命中和旧 `record_evidence` 事件不能完成 coverage；
 - session/recovery 可确定性重建 active set 和 evidence ledger；
-- 短 hash、未观察页面和未覆盖目标集合的报告不能直接成功 `end_turn`；
-- 合法完整引用 `[<64-lowercase-hex>:page[<positive-int>]]` 可以通过；
-- 验证通过后用户可见引用渲染为 `《论文题目》第 N 页`，完整标识留在结构化证据；
-- 非论文直接回答不受 end-turn guard 影响；
-- `heuristic_v2` 只统计 validator 确认的完整引用；
+- 没有 Stop handler 时，任何模型 `end_turn` 都直接结束；
+- 合法完整引用 `[<64-lowercase-hex>:page[<positive-int>]]` 转成可点击页码链接；
+- 未知或格式错误的引用保持原样，不触发自动重答；
+- `heuristic_v3_unvalidated` 明确不冒充引用校验；
 - 不新增 LLM call site、依赖、网络、OCR、embedding 或固定逐篇模型调用；
 - session `tool_use` 与 trace `tool_call.started` 的 call ID 集合保持一致。
 
@@ -212,7 +222,7 @@ block-and-continue 结构，但没有 PDF 页证据、论文集合或 Markdown �
 
 ## 8. Slice 7 冻结评测
 
-只有下一 bounded slice 通过 Query 1 后，才恢复正式评测：
+Query 1 通过后恢复正式评测：
 
 1. 使用冻结的 14 篇论文、四轮 query 和私有 Gold；
 2. 先按同一 Gold 生成新的 Codex CLI JSONL v2 基线报告；
@@ -241,13 +251,13 @@ Slice 7 通过后，另行确认 Slice 8，才可删除旧工具和只服务旧�
 
 ## 10. 下一步
 
-当前接口已实施并完成定向验证，下一步按用户授权重跑冻结 Query 1：
+在运行过 Query 1 的同一 conversation 中运行冻结 Query 2，检查：
 
 ```text
-read_page + inspect_page
-→ Runtime evidence ledger
-→ Runtime active set coverage
-→ end-turn citation validator
+模型用本轮已观察页面提交持续排除
+→ Runtime 追加保存排除事件
+→ 后续轮次重建并注入排除集合
 ```
 
-本步骤不继续 Query 2–4、不运行完整消融、不删除旧实现。
+Query 2 通过后继续 Query 3–4；四轮完成后再按冻结 Gold 计算并列指标。本步骤不运行
+完整消融、不重复 Codex 基线、不删除旧实现。

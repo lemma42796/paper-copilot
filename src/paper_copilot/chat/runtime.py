@@ -17,6 +17,7 @@ from paper_copilot.agents.paper_copilot import (
     PaperCopilotRun,
     run_paper_copilot,
 )
+from paper_copilot.agents.research_scope_tool import ResearchScopeExclusion
 from paper_copilot.agents.tool_security import (
     ApprovalMode,
     ToolApprovalRequest,
@@ -69,10 +70,12 @@ async def handle_chat_request(
     event_callback: Callable[[Event], None] | None = None,
     stream_event_callback: LLMStreamEventCallback | None = None,
     conversation_context: str | None = None,
+    prior_research_exclusions: tuple[ResearchScopeExclusion, ...] = (),
     previous_compaction_summary: CompactionSummary | None = None,
     resume_history: list[dict[str, Any]] | None = None,
     resume_runtime_state: dict[str, Any] | None = None,
     recovery_source_session: str | None = None,
+    continuation_prompt: str | None = None,
     request_tool_approval: (
         Callable[[ToolApprovalRequest], Awaitable[bool]] | None
     ) = None,
@@ -145,10 +148,12 @@ async def handle_chat_request(
             event_callback=event_callback,
             stream_event_callback=stream_event_callback,
             conversation_context=conversation_context,
+            prior_research_exclusions=prior_research_exclusions,
             previous_compaction_summary=previous_compaction_summary,
             resume_history=resume_history,
             resume_runtime_state=resume_runtime_state,
             recovery_source_session=recovery_source_session,
+            continuation_prompt=continuation_prompt,
             request_tool_approval=request_tool_approval,
             approval_mode=approval_mode,
             approval_review_callback=approval_review_callback,

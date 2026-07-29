@@ -1,24 +1,27 @@
 # Runtime 页面证据与最终输出合同 Codex 源码映射
 
-状态：已按 `read_page` 方向实施并完成定向验证；待冻结 Query 1 验收
-日期：2026-07-28
+状态：按 Codex 默认行为修订；论文专用结束拦截已删除
+日期：2026-07-29
 Codex source ref：`61a44880a85d2fd0d8770908dea5733495e571c8`
 Codex worktree：`/Users/a123/Documents/agent学习/codex`
 
 ## 1. 目标与范围
 
-冻结 Query 1 证明当前模型可以在未读取 citation-grade 页面时使 `paper_set` complete，
-并以短 hash 结束任务。本 bounded slice 只修复 Query 1 的确定性合同：
+冻结 Query 1 的旧运行曾引入论文专用完成校验。随后对固定 Codex 源码重新核对，确认
+Codex 默认并不校验论文覆盖率或论文页码引用；它提供的是可选 Stop hook 和前端链接
+渲染。因此当前实现调整为：
 
 1. 用独立 `read_page` 取代模型通过 `library_exec` 调用 `paper-cache` broker；
 2. `read_page` 和 `inspect_page` 成功后由 Runtime 自动登记页证据；
-3. Query 1 active set 固定为 Runtime preflight 的论文预算；
-4. Runtime 接受 `end_turn` 前校验完整引用和 active-set coverage；
-5. 删除模型可见 `paper_set`。
+3. 保留 append-only 页面证据，供审计、恢复和范围变更使用；
+4. 删除论文专用 `end_turn` 校验、自动重答和 Incomplete 替换；
+5. 将能解析的论文页引用转换为安全的应用内 Markdown 链接；
+6. 删除模型可见 `paper_set`。
 
-Query 2–4 的自然语言排除和派生集合不属于本 slice。删除 `paper_set` 后，Runtime 没有
-确定性来源自动理解集合变化；在增加经确认的结构化接口前不得用语义猜测补齐。因此
-Query 2–4 继续暂停。
+修订后的冻结 Query 1 已通过。为继续 Query 2–4，后续增加了经用户确认的最小
+`update_research_scope`：模型只能在用户明确要求后续持续排除时追加排除项，Runtime
+校验完整论文标识和本轮已观察页面，再将事件保存到 session。它不从自然语言或最终
+答案猜测范围，也不实现通用集合版本、重新纳入或单轮筛选状态。
 
 Trace 不属于本 slice。当前产物的 session 与 trace 均包含相同的 113 个 started call
 ID，其中 99 completed、14 failed。
@@ -31,13 +34,13 @@ ID，其中 99 completed、14 failed。
 | 原始请求持久化 | `core/src/stream_events_utils.rs::handle_output_item_done`、`session/mod.rs::record_conversation_items` | 执行前保存 call，结果继续追加历史 | 当前已对齐 |
 | 参数失败反馈 | `tools/handlers/mod.rs::parse_arguments`、`tools/parallel.rs::failure_response` | 失败 output 保留 call ID，模型可修正重试 | 当前已对齐 |
 | 工具成功后处理 | `tools/registry.rs` PostToolUse 路径 | 受信任生命周期处理后再把结果交回模型 | 必要适配：持久化结果后登记页证据 |
-| 完成前阻断 | `session/turn.rs::run_turn`、`hook_runtime.rs::run_turn_stop_hooks`、`hooks/src/events/stop.rs` | Stop hook 可 block、注入 continuation 并继续同一 turn | 采用结构，增加默认关闭的 end-turn validator |
+| 完成前阻断 | `session/turn.rs::run_turn`、`hook_runtime.rs::run_turn_stop_hooks`、`hooks/src/events/stop.rs` | Stop hook 可选；没有 handler 就不阻断 | 通用 loop 保留默认关闭的 Stop hook，产品默认不配置 |
 | 页级论文证据 | 固定 Codex ref 无 PDF cache/page artifact 对象 | 无对应机制 | 增加最小 append-only evidence fact |
-| 论文集合 coverage | 固定 Codex ref 无论文集合语义 | 无对应机制 | Query 1 只使用 preflight set，不猜测派生集合 |
-| Markdown 引用合同 | 固定 Codex ref 无 SHA-256/page 引用语义 | 无对应机制 | 增加确定性 validator |
+| 论文集合 coverage | 固定 Codex ref 无论文集合语义 | 无对应机制 | 不增加结束拦截；范围只用于任务上下文 |
+| 跨轮次论文排除 | 固定 Codex ref 有 append-only session 和 recovery，但无论文范围语义 | 复用事件追加与恢复结构 | 增加经用户确认的最小领域工具，只追加排除 |
+| Markdown 引用展示 | `tui/src/markdown_render.rs` | 标准 Markdown 链接由目标地址解析和展示 | 使用安全应用链接，显示论文标题和页码 |
 
-Codex 的 JSON output schema 只能保证结构，不能证明 Markdown 引用对应已观察页面，因此
-不用于替代 Runtime validator。
+Paper Copilot 不再把 JSON schema 或页面证据当成默认的最终回答校验器。
 
 ## 3. `read_page`
 
@@ -110,7 +113,7 @@ dispatch
 若进程在 tool result 与 evidence event 之间中断，只会形成 incomplete，不会虚假
 complete。Resume 从 recovery source session 顺序重放 evidence events。
 
-## 5. Query 1 active set
+## 5. 论文范围
 
 本 slice 不建立新的模型集合工具。Runtime 在研究 attempt 启动时将
 `research_cache_index` 中成功准备的全部论文冻结为 active set：
@@ -118,46 +121,38 @@ complete。Resume 从 recovery source session 顺序重放 evidence events。
 - 成员使用完整 PDF SHA-256；
 - 保存 cache revision 和 extractor fingerprint 快照；
 - preflight 失败或预算截断必须显式进入 incomplete 原因；
-- 每个成员至少有一条匹配当前快照的 observed-page fact 才算 evidence covered；
-- stale、旧 `paper_set` evidence 和 approximate page 不计入。
+- observed-page fact 绑定当前缓存快照，供审计和范围变更校验使用；
+- stale、旧 `paper_set` evidence 和 approximate page 不写入该 ledger。
 
-该定义适用于 Query 1 的“当前目录全部论文”任务。它不声称能表达后续轮次的排除、
-optional/required 或派生集合。恢复 Query 2–4 前必须单独解决结构化 scope transition，
-不能从模型自然语言或最终答案反推 active set。
+该定义适用于 Query 1 的“当前目录全部论文”任务。后续轮次的持续排除使用独立的
+`research_scope.exclusions_updated` application event：
 
-## 6. End-turn validator
+- 输入包含完整 PDF SHA-256、原因和至少一条本轮已观察页面引用；
+- Runtime 只接受当前授权论文、当前缓存快照和本轮 ledger 中的页面；
+- 同一 conversation 的后续 job 从已完成 session 顺序重建排除集合；
+- Runtime 只验证标识、页面证据和追加规则，不判断排除理由在语义上是否正确；
+- 普通提问、单轮筛选、重新纳入和通用集合派生不产生范围状态。
 
-通用 `agents/loop.py` 增加默认关闭的 `validate_end_turn` 回调；通用 loop 不导入 PDF、
-evidence 或集合类型。模型给出候选 `end_turn` 时：
+注入给模型的受信任范围只包含论文标识和逻辑定位信息，不把模型此前生成的排除理由
+重新提升为受信任指令。
 
-1. 候选 assistant message继续追加到 session；
-2. 应用 validator 检查 evidence 与引用；
-3. 通过后才产生 `Terminated(reason="end_turn")`；
-4. 未通过时追加有界 issue codes 和修复要求，继续既有 loop。
+## 6. Stop hook 与引用链接
 
-稳定 issue codes：
+通用 `agents/loop.py` 暴露默认关闭的 Stop hook。请求只包含
+`stop_hook_active` 和 `last_assistant_message`；handler 可以允许结束，也可以给出原因
+并让同一任务继续。若 handler 请求阻断却没有原因，Runtime 忽略该无效结果并结束。
+Paper Copilot 当前不配置 handler，所以不存在论文引用检查和自动重答。
 
-- `active_set_preflight_incomplete`
-- `active_set_evidence_incomplete`
-- `active_set_stale`
-- `citation_id_not_full_sha256`
-- `citation_not_observed`
-- `citation_paper_coverage_incomplete`
-
-有效引用格式为 `[<64-lowercase-hex>:page[<positive-int>]]`。每条引用必须命中 ledger；
-Query 1 最终报告必须覆盖 active set 的每个成员。Validator 不判断自然语言 entailment。
-任何形似 `[…:page[n]]` 但不满足完整格式的候选都必须拒绝，包括带省略号的短 hash。
-验证通过后，Runtime 将用户可见文本中的规范引用渲染为 `《论文题目》第 N 页`；原始
-完整引用继续保存在结构化 `evidence_refs`、session 和 trace 中。
-
-失败 continuation 不新增 LLM call site，但可能增加既有 loop turn，仍受总预算、
-deadline、context limit 和用户中断约束。若终止前始终未通过，Runtime 不发布最后一个
-无效草稿为成功报告，只输出有界 `Incomplete` 结果和 validation issues。
+模型仍按 Skill 生成 `[<64-lowercase-hex>:page[<positive-int>]]`。Runtime 只做链接
+解析：标识属于当前论文且页码未越界时，将其替换成标准 Markdown 链接，显示为
+`《论文题目》第 N 页`。链接目标使用 `paper-copilot://` 和逻辑 locator，不暴露宿主
+绝对路径；macOS 客户端再次限制目标必须位于授权目录内。短标识、未知论文和越界页码
+保持原样，不阻断回答。
 
 ## 7. 质量摘要与兼容
 
-- `heuristic_v2` 只统计 validator 确认的完整引用；
-- final payload 保存 validator version、passed、issues 和 active-set coverage；
+- `heuristic_v3_unvalidated` 只统计成功解析的链接，明确标记未运行引用校验；
+- final payload 保存 `research_citations`，不再保存 validator 结果；
 - 旧 `paper_set` application events 继续可重放，但不计为有效 evidence；
 - 模型工具表面删除 `paper_set`，Runtime 对调用返回 unsupported；
 - `termination_reason` 保持现有值，避免修改 Swift、API 和 MCP transport；
@@ -176,8 +171,8 @@ deadline、context limit 和用户中断约束。若终止前始终未通过，R
 - 新增 `agents/research_evidence.py`
 - research Skill、工具注册和相关状态文档
 
-不修改 SwiftUI、API/MCP transport、数据库 schema、PDF cache 格式、模型、依赖、
-trace lifecycle、Query 2–4 或旧实现删除范围。
+不修改 API/MCP transport、数据库 schema、PDF cache 格式、模型、依赖或 trace
+lifecycle。
 
 完成条件：
 
@@ -185,14 +180,13 @@ trace lifecycle、Query 2–4 或旧实现删除范围。
 - `read_page` 只读取 active index 中完整 SHA-256 对应的一页；
 - 只有成功 `read_page`/`inspect_page` 产生 observed-page fact；
 - recovery 可重建相同 ledger 和 active set；
-- approximate page、搜索命中和旧 evidence 不能完成 coverage；
-- 短 hash、未观察页面和未覆盖 active set 的报告不能成功结束；
-- 合法完整引用和非论文直接回答按各自策略通过；
-- `heuristic_v2` 不统计无效引用；
+- 没有 Stop handler 时，模型 `end_turn` 直接结束；
+- 可选 Stop handler 的 block 原因会作为 continuation 继续同一任务；
+- 合法完整引用变成可点击论文页链接，无法解析的引用不拦截；
+- `heuristic_v3_unvalidated` 不冒充引用校验；
 - 不新增依赖、模型、LLM call site、网络、OCR 或 embedding；
 - 冻结 Query 1 重跑时报告工具调用、页面证据、coverage、引用、LLM 次数、token、费用、
   耗时和所有 failure/partial/unverifiable 字段。
 
-代码已按本映射实施。定向验证已覆盖工具表面、broker 拒绝、真实页读取、evidence
-recovery、引用 validator、end-turn continuation、预算降级和非论文直答。按照仓库规则，
-冻结 Query 1 重跑仍需单独授权。
+此前 Query 1 和 Query 2 是在论文专用拦截存在时运行，不能与修订后的实现混作同一组
+正式评测。若继续四轮对比，应从 Query 1 重新开始记录。

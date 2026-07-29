@@ -25,6 +25,13 @@ Codex 在采样后根据实际 token 使用量决定是否开始新的上下文�
 在下一次模型调用前依据估算值压缩。后者保留，以免把超出 provider 上限的请求发出；数值和
 显示公式与 Codex 对齐。
 
+macOS 客户端把同一 conversation 的每次用户追问持久化为独立 job/session。正常追问从
+上一轮已完成 session 重建完整 rollout history，注入最新 Runtime context 后将追问追加为
+新的 user turn；它不恢复上一轮的 cost 或其他 attempt 运行时状态。这样最近一次模型调用
+看到的是追加后的活动历史，其 `total_tokens` 可直接作为工作窗口读数。只有 compaction
+替换工作历史后，该读数才允许下降。中断后恢复同一 job 仍使用原 attempt 的 recovery
+history 和 runtime state。
+
 ## 保持不变
 
 - 压缩目标仍为 80K；

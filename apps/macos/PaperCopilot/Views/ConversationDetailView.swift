@@ -470,10 +470,10 @@ private struct ConversationTimeline: View {
     @EnvironmentObject private var appModel: AppModel
     let conversation: ChatConversation
 
-    private var latestActivityUpdate: String {
+    private var latestActivityBoundary: String {
         for job in conversation.jobs.reversed() {
             if let sequence = appModel.jobEvents[job.id]?.last(where: {
-                $0.activityID != nil
+                $0.activityID != nil && $0.activityPhase != "delta"
             })?.seq {
                 return "\(job.id):\(sequence)"
             }
@@ -502,7 +502,7 @@ private struct ConversationTimeline: View {
             .onChange(of: appModel.jobs) { _ in
                 scrollToTimelineBottom(using: proxy)
             }
-            .onChange(of: latestActivityUpdate) { _ in
+            .onChange(of: latestActivityBoundary) { _ in
                 scrollToTimelineBottom(using: proxy)
             }
             .onAppear {
@@ -571,7 +571,10 @@ private struct JobTurnView: View {
 
             if let report = job.result?.reportMarkdown {
                 VStack(alignment: .leading, spacing: 4) {
-                    MarkdownReportView(markdown: report)
+                    MarkdownReportView(
+                        markdown: report,
+                        pdfDirectory: job.spec.pdfDir
+                    )
                     CopyMessageButton(text: report)
                 }
             } else if let error = job.error, !job.status.isActive {

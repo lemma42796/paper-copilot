@@ -23,12 +23,8 @@ from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.knowledge.graph_store import append_links
 from paper_copilot.schemas import CrossPaperLink
 from paper_copilot.session import (
-    FinalOutput,
     Message,
     SessionStore,
-    SystemMessage,
-    ToolResult,
-    ToolUse,
 )
 from paper_copilot.session.paths import compute_paper_id
 
@@ -302,33 +298,31 @@ def test_dispatch_paper_copilot_tools_browse_search_and_query(tmp_path: Path) ->
         assert {item["paper_id"] for item in query_data["evidence"]} == {"paperA"}
 
 
-def test_paper_tool_schemas_expose_locator_and_query_contract() -> None:
+def test_paper_tool_schemas_expose_v2_contract() -> None:
     tools = {tool["name"]: tool for tool in paper_copilot_tools()}
 
-    assert "search_papers" in tools
-    assert {"list_papers", "list_pdfs", "search_library"}.isdisjoint(tools)
-    search_properties = tools["search_papers"]["input_schema"]["properties"]
-    assert set(search_properties) == {"query", "scope", "filters", "limit"}
-    search_schema_text = json.dumps(tools["search_papers"]["input_schema"])
-    assert "max_chunks_per_paper" not in search_schema_text
-    assert "evidence_pool_per_paper" not in search_schema_text
-    assert "inspect_paper" not in tools
-    assert "query_paper" in tools
-    assert tools["read_paper"]["input_schema"]["required"] == ["paper"]
-    locator = tools["read_paper"]["input_schema"]["$defs"]["_PaperLocatorInput"]
-    assert len(locator["anyOf"]) == 3
-    locator_defs = tools["read_paper"]["input_schema"]["$defs"]
-    required_options = {
-        tuple(locator_defs[option["$ref"].rsplit("/", maxsplit=1)[-1]]["required"])
-        for option in locator["anyOf"]
+    assert set(tools) == {
+        "library_exec",
+        "read_page",
+        "inspect_page",
+        "update_research_scope",
+        "library_edit",
     }
-    assert required_options == {("paper_id",), ("title",), ("pdf_path",)}
-    assert "Ambiguous titles" in tools["read_paper"]["description"]
-    assert "Search is restricted to the selected paper" in tools["query_paper"]["description"]
-    compare_properties = tools["compare_papers"]["input_schema"]["properties"]
-    assert set(compare_properties) == {"papers", "aspects"}
-    related_properties = tools["find_related_papers"]["input_schema"]["properties"]
-    assert set(related_properties) == {"paper", "direction", "relation_types", "limit"}
+    assert tools["library_exec"]["input_schema"]["required"] == ["cmd"]
+    assert tools["read_page"]["input_schema"]["required"] == ["pdf_sha256", "page"]
+    read_page_properties = tools["read_page"]["input_schema"]["properties"]
+    assert read_page_properties["pdf_sha256"]["pattern"] == "^[0-9a-f]{64}$"
+    assert read_page_properties["page"]["minimum"] == 1
+    assert tools["inspect_page"]["input_schema"]["required"] == [
+        "paper_id",
+        "page",
+        "purpose",
+    ]
+    assert tools["update_research_scope"]["input_schema"]["required"] == [
+        "exclusions"
+    ]
+    assert tools["library_edit"]["input_schema"]["required"] == ["operation"]
+    assert "paper-cache commands are not supported" in tools["library_exec"]["description"]
 
 
 def test_dispatch_rejects_string_numeric_inputs(tmp_path: Path) -> None:
@@ -1053,163 +1047,8 @@ def test_run_paper_copilot_separates_stable_system_and_runtime_context(
     second_content = second_call.messages[0]["content"]
     assert isinstance(first_content, list)
     assert isinstance(second_content, list)
-    assert first_content[1] == {"type": "text", "text": "first prompt"}
-    assert second_content[1] == {"type": "text", "text": "second prompt"}
-
-
-def test_run_paper_copilot_uses_tool_loop_and_records_trace(tmp_path: Path) -> None:
-    with FieldsStore.open(tmp_path / "fields.db") as fs:
-        fs.upsert("paperA", _payload(), datetime.now(UTC).isoformat())
-        context = PaperCopilotContext(fields_store=fs)
-        llm = MockLLM(
-            [
-                MockResponse(
-                    content=[
-                        ToolUseBlock(
-                            id="query1",
-                            name="query_paper",
-                            input={
-                                "paper": {"paper_id": "paperA"},
-                                "question": "What is this paper about?",
-                            },
-                        )
-                    ],
-                    stop_reason="tool_use",
-                    usage={"input_tokens": 10, "output_tokens": 4},
-                ),
-                MockResponse(
-                    content=[TextBlock(text="## Findings\n\npaperA is relevant.")],
-                    stop_reason="end_turn",
-                    usage={"input_tokens": 20, "output_tokens": 8},
-                ),
-            ]
-        )
-
-        run = asyncio.run(
-            run_paper_copilot(
-                prompt="sparse attention",
-                llm=llm,
-                context=context,
-                root=tmp_path,
-                max_budget_cny=1.0,
-            )
-        )
-
-    assert run.termination_reason == "end_turn"
-    assert run.termination_summary.reason == "end_turn"
-    assert run.termination_summary.events_count == len(run.events)
-    assert run.termination_summary.paper_budget["touched_paper_ids"] == ["paperA"]
-    assert run.termination_summary.last_tool_error is None
-    assert "paperA is relevant" in run.report_markdown
-    assert run.cost.input_tokens == 30
-    assert run.tool_names == ("query_paper",)
-    assert run.composer_used is False
-
-    paper_id = run.session_path.parent.name
-    entries = SessionStore.load(paper_id, root=tmp_path).read_all()
-    assert any(isinstance(e, ToolUse) and e.name == "query_paper" for e in entries)
-    assert any(isinstance(e, ToolResult) and e.is_error is False for e in entries)
-    final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
-    assert final.payload["prompt"] == "sparse attention"
-    assert final.payload["tool_names"] == ["query_paper"]
-    assert "request_route" not in final.payload
-    assert final.payload["termination_reason"] == "end_turn"
-    assert final.payload["evidence_refs"] == []
-    assert final.payload["quality"] == {
-        "method": "heuristic_v1",
-        "evidence_ref_count": 0,
-        "findings_claim_count": 1,
-        "findings_inline_ref_count": 0,
-        "claims_without_refs_count": 1,
-        "evidence_coverage_ratio": 0.0,
-    }
-    assert final.payload["termination_summary"]["reason"] == "end_turn"
-    assert final.payload["termination_summary"]["paper_budget"]["touched_count"] == 1
-    initial = next(e for e in entries if isinstance(e, Message) and e.role == "user")
-    assert initial.text == "sparse attention"
-    system = next(e for e in entries if isinstance(e, SystemMessage))
-    assert "decide whether to answer directly or call" in system.text
-    assert "Answer greetings, casual conversation" in system.text
-    assert "Do not call a tool merely to classify" in system.text
-    assert "untrusted source material" in system.text
-    assert "Tool inputs must match their JSON schemas exactly" in system.text
-    assert "PDF directory:" not in system.text
-    assert "问题定义" not in system.text
-
-
-def test_run_paper_copilot_activates_composer_after_model_uses_tool(tmp_path: Path) -> None:
-    pdf_dir = tmp_path / "pdfs"
-    for pool in ("ccf_a", "ccf_b", "other"):
-        (pdf_dir / pool).mkdir(parents=True)
-    with FieldsStore.open(tmp_path / "fields.db") as fs:
-        fs.upsert("paperA", _payload(), datetime.now(UTC).isoformat())
-        context = PaperCopilotContext(fields_store=fs, pdf_dir=pdf_dir)
-        llm = MockLLM(
-            [
-                MockResponse(
-                    content=[
-                        ToolUseBlock(
-                            id="composer-list",
-                            name="list_composer_library",
-                            input={},
-                        )
-                    ],
-                    stop_reason="tool_use",
-                    usage={"input_tokens": 8, "output_tokens": 3},
-                ),
-                MockResponse(
-                    content=[
-                        TextBlock(
-                            text=(
-                                "## Idea\n\n"
-                                "Use diffusion priors for robust segmentation.\n\n"
-                                "## Evidence\n\n"
-                                "- Paper A supports sparse attention [paperA:methods[0]]."
-                            )
-                        )
-                    ],
-                    stop_reason="end_turn",
-                    usage={"input_tokens": 10, "output_tokens": 4},
-                ),
-            ]
-        )
-
-        run = asyncio.run(
-            run_paper_copilot(
-                prompt="基于 diffusion model 和医学图像分割, 帮我找一个可做的创新点",
-                llm=llm,
-                context=context,
-                root=tmp_path,
-                max_budget_cny=1.0,
-            )
-        )
-
-    paper_id = run.session_path.parent.name
-    entries = SessionStore.load(paper_id, root=tmp_path).read_all()
-    initial = next(e for e in entries if isinstance(e, Message) and e.role == "user")
-    system = next(e for e in entries if isinstance(e, SystemMessage))
-    final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
-
-    assert initial.text == "基于 diffusion model 和医学图像分割, 帮我找一个可做的创新点"
-    assert "问题定义" not in system.text
-    assert "list_composer_library" in system.text
-    assert len(llm.calls) == 2
-    assert '"max_words": 900' not in _system_text(llm.calls[0].system)
-    first_request = json.dumps(llm.calls[0].messages, ensure_ascii=False)
-    second_request = json.dumps(llm.calls[1].messages, ensure_ascii=False)
-    assert "final_report_contract" not in first_request
-    assert "final_report_contract" in second_request
-    assert "问题定义" in second_request
-    second_tool_results = llm.calls[1].messages[-1]["content"]
-    assert isinstance(second_tool_results, list)
-    composer_payload = json.loads(second_tool_results[0]["content"])
-    assert composer_payload["composer_plan"]["final_report_contract"]["max_words"] == 900
-    assert final.payload["tool_names"] == ["list_composer_library"]
-    assert "request_route" not in final.payload
-    assert final.payload["quality"]["findings_claim_count"] == 1
-    assert final.payload["proposal_check"]["passed"] is False
-    assert final.payload["proposal_repair"]["attempted"] is False
-    assert final.payload["proposal_repair"]["skip_reason"] == "plan_not_ready"
+    assert first_content[-1] == {"type": "text", "text": "first prompt"}
+    assert second_content[-1] == {"type": "text", "text": "second prompt"}
 
 
 def test_run_paper_copilot_repairs_invalid_ready_composer_report_once(
@@ -1321,193 +1160,6 @@ def test_run_paper_copilot_skips_composer_repair_when_budget_is_exhausted(
     assert run.final_payload["proposal_check"]["passed"] is False
 
 
-def test_run_paper_copilot_can_answer_from_read_paper_summary(tmp_path: Path) -> None:
-    with FieldsStore.open(tmp_path / "fields.db") as fs:
-        fs.upsert("paperA", _payload(), datetime.now(UTC).isoformat())
-        pdir = tmp_path / "papers" / "paperA"
-        pdir.mkdir(parents=True)
-        (pdir / "session.jsonl").write_text("", encoding="utf-8")
-        (pdir / "report.md").write_text("# Paper A", encoding="utf-8")
-        context = PaperCopilotContext(fields_store=fs, root=tmp_path, max_papers=1)
-        llm = MockLLM(
-            [
-                MockResponse(
-                    content=[
-                        ToolUseBlock(
-                            id="read1",
-                            name="read_paper",
-                            input={"paper": {"paper_id": "paperA"}},
-                        )
-                    ],
-                    stop_reason="tool_use",
-                    usage={"input_tokens": 10, "output_tokens": 4},
-                ),
-                MockResponse(
-                    content=[
-                        TextBlock(
-                            text=(
-                                "## Findings\n\n"
-                                "`paperA` is Paper A and uses Sparse Attention."
-                            )
-                        )
-                    ],
-                    stop_reason="end_turn",
-                    usage={"input_tokens": 20, "output_tokens": 8},
-                ),
-            ]
-        )
-
-        run = asyncio.run(
-            run_paper_copilot(
-                prompt="read then summarize",
-                llm=llm,
-                context=context,
-                root=tmp_path,
-                max_budget_cny=1.0,
-            )
-        )
-
-    assert run.termination_reason == "end_turn"
-    assert "Sparse Attention" in run.report_markdown
-    assert run.termination_summary.paper_budget["touched_paper_ids"] == ["paperA"]
-
-    paper_id = run.session_path.parent.name
-    entries = SessionStore.load(paper_id, root=tmp_path).read_all()
-    tool_names = [e.name for e in entries if isinstance(e, ToolUse)]
-    assert tool_names == ["read_paper"]
-    tool_results = [e for e in entries if isinstance(e, ToolResult)]
-    assert '"can_query_same_paper": true' in tool_results[0].output
-    assert "Sparse Attention" in tool_results[0].output
-
-
-def test_run_paper_copilot_synthesis_path_uses_related_and_compare(tmp_path: Path) -> None:
-    link_to_b = {
-        "related_paper_id": "paperB",
-        "related_title": "Paper B",
-        "relation_type": "shares_method",
-        "explanation": "both use sparse attention variants",
-    }
-    with FieldsStore.open(tmp_path / "fields.db") as fs:
-        fs.upsert(
-            "paperA",
-            _payload(
-                "Paper A",
-                method_name="Sparse Attention",
-                cross_paper_links=[link_to_b],
-            ),
-            datetime.now(UTC).isoformat(),
-        )
-        fs.upsert(
-            "paperB",
-            _payload("Paper B", method_name="Windowed Sparse Attention"),
-            datetime.now(UTC).isoformat(),
-        )
-        pdir = tmp_path / "papers" / "paperA"
-        pdir.mkdir(parents=True)
-        (pdir / "session.jsonl").write_text("", encoding="utf-8")
-        (pdir / "report.md").write_text("# Paper A", encoding="utf-8")
-        context = PaperCopilotContext(fields_store=fs, root=tmp_path, max_papers=2)
-        llm = MockLLM(
-            [
-                MockResponse(
-                    content=[
-                        ToolUseBlock(
-                            id="read1",
-                            name="read_paper",
-                            input={"paper": {"paper_id": "paperA"}},
-                        )
-                    ],
-                    stop_reason="tool_use",
-                    usage={"input_tokens": 10, "output_tokens": 4},
-                ),
-                MockResponse(
-                    content=[
-                        ToolUseBlock(
-                            id="related1",
-                            name="find_related_papers",
-                            input={"paper": {"paper_id": "paperA"}, "limit": 1},
-                        )
-                    ],
-                    stop_reason="tool_use",
-                    usage={"input_tokens": 14, "output_tokens": 5},
-                ),
-                MockResponse(
-                    content=[
-                        ToolUseBlock(
-                            id="compare1",
-                            name="compare_papers",
-                            input={
-                                "papers": [
-                                    {"paper_id": "paperA"},
-                                    {"paper_id": "paperB"},
-                                ]
-                            },
-                        )
-                    ],
-                    stop_reason="tool_use",
-                    usage={"input_tokens": 18, "output_tokens": 6},
-                ),
-                MockResponse(
-                    content=[
-                        TextBlock(
-                            text=(
-                                "## Findings\n\n"
-                                "`paperA` and `paperB` share sparse-attention evidence.\n\n"
-                                "## Evidence\n\n"
-                                "- `paperA` uses Sparse Attention "
-                                "[paperA:methods[0]].\n"
-                                "- `paperB` uses Windowed Sparse Attention "
-                                "[paperB:methods[0]]."
-                            )
-                        )
-                    ],
-                    stop_reason="end_turn",
-                    usage={"input_tokens": 20, "output_tokens": 8},
-                ),
-            ]
-        )
-
-        run = asyncio.run(
-            run_paper_copilot(
-                prompt="synthesize related sparse attention papers",
-                llm=llm,
-                context=context,
-                root=tmp_path,
-                max_budget_cny=1.0,
-            )
-        )
-
-    assert run.termination_reason == "end_turn"
-    assert run.termination_summary.paper_budget["touched_paper_ids"] == [
-        "paperA",
-        "paperB",
-    ]
-    paper_id = run.session_path.parent.name
-    entries = SessionStore.load(paper_id, root=tmp_path).read_all()
-    tool_names = [e.name for e in entries if isinstance(e, ToolUse)]
-    assert tool_names == [
-        "read_paper",
-        "find_related_papers",
-        "compare_papers",
-    ]
-    tool_results = [e for e in entries if isinstance(e, ToolResult)]
-    assert "related_papers" in tool_results[1].output
-    assert "pairwise_alignment" in tool_results[-1].output
-    final = next(e for e in reversed(entries) if isinstance(e, FinalOutput))
-    assert final.payload["evidence_refs"] == [
-        {"paper_id": "paperA", "field": "methods[0]", "raw": "[paperA:methods[0]]"},
-        {"paper_id": "paperB", "field": "methods[0]", "raw": "[paperB:methods[0]]"},
-    ]
-    assert final.payload["quality"] == {
-        "method": "heuristic_v1",
-        "evidence_ref_count": 2,
-        "findings_claim_count": 1,
-        "findings_inline_ref_count": 0,
-        "claims_without_refs_count": 0,
-        "evidence_coverage_ratio": 1.0,
-    }
-
-
 def test_run_paper_copilot_summary_records_last_tool_error(tmp_path: Path) -> None:
     with FieldsStore.open(tmp_path / "fields.db") as fs:
         context = PaperCopilotContext(fields_store=fs)
@@ -1544,4 +1196,7 @@ def test_run_paper_copilot_summary_records_last_tool_error(tmp_path: Path) -> No
 
     assert run.termination_summary.last_tool_error is not None
     assert run.termination_summary.last_tool_error["tool_use_id"] == "missing1"
-    assert "unknown research tool" in run.termination_summary.last_tool_error["output"]
+    assert (
+        "tool is not exposed to the agent: unknown_tool"
+        in run.termination_summary.last_tool_error["output"]
+    )

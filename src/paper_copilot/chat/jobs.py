@@ -23,6 +23,10 @@ from paper_copilot.agents.loop import (
     ToolUse,
 )
 from paper_copilot.agents.llm_client import WORKING_CONTEXT_LIMIT_TOKENS
+from paper_copilot.agents.research_scope_tool import (
+    ResearchScopeExclusion,
+    load_research_scope_exclusions,
+)
 from paper_copilot.agents.tool_security import (
     ApprovalMode,
     ToolApprovalRequest,
@@ -528,9 +532,12 @@ class ChatJobRegistry:
                 attempt=attempt_number,
                 message="本地 Agent 已开始执行。",
             )
-            conversation_context, previous_compaction_summary = (
-                self._build_conversation_context(record)
-            )
+            (
+                conversation_context,
+                previous_compaction_summary,
+                prior_research_exclusions,
+                previous_conversation_record,
+            ) = self._build_conversation_context(record)
 
         rollout_started_at = time.perf_counter()
         recorder: RolloutRecorder | None = None
@@ -559,6 +566,7 @@ class ChatJobRegistry:
             resume_history: list[dict[str, Any]] | None = None
             resume_runtime_state: dict[str, Any] | None = None
             recovery_source_session: str | None = None
+            continuation_prompt: str | None = None
             if (
                 source_attempt is not None
                 and Path(source_attempt.session_path).is_file()
@@ -576,6 +584,31 @@ class ChatJobRegistry:
                 resume_history = recovered.history
                 resume_runtime_state = recovered.runtime_state
                 recovery_source_session = source_attempt.session_path
+                if recovered.compaction_summary is not None:
+                    previous_compaction_summary = CompactionSummary.model_validate(
+                        recovered.compaction_summary
+                    )
+            elif previous_conversation_record is not None:
+                previous_result = previous_conversation_record.result
+                assert previous_result is not None
+                previous_session_path = Path(previous_result.session_path)
+                if not previous_session_path.is_file():
+                    raise JobError(
+                        "completed conversation session is unavailable: "
+                        f"{previous_session_path}"
+                    )
+                recovered = reconstruct_rollout(
+                    SessionStore(previous_session_path, last_id="").read_all(),
+                    fallback_history=[
+                        {
+                            "role": "user",
+                            "content": previous_conversation_record.spec.request,
+                        }
+                    ],
+                )
+                resume_history = recovered.history
+                recovery_source_session = str(previous_session_path)
+                continuation_prompt = record.spec.request
                 if recovered.compaction_summary is not None:
                     previous_compaction_summary = CompactionSummary.model_validate(
                         recovered.compaction_summary
@@ -728,10 +761,12 @@ class ChatJobRegistry:
                         event_callback=record_event,
                         stream_event_callback=record_stream_event,
                         conversation_context=conversation_context,
+                        prior_research_exclusions=prior_research_exclusions,
                         previous_compaction_summary=previous_compaction_summary,
                         resume_history=resume_history,
                         resume_runtime_state=resume_runtime_state,
                         recovery_source_session=recovery_source_session,
+                        continuation_prompt=continuation_prompt,
                         request_tool_approval=request_tool_approval,
                         approval_mode=record.spec.approval_mode,
                         approval_review_callback=record_approval_review,
@@ -1075,10 +1110,15 @@ class ChatJobRegistry:
     def _build_conversation_context(
         self,
         current: ChatJobRecord,
-    ) -> tuple[str | None, CompactionSummary | None]:
+    ) -> tuple[
+        str | None,
+        CompactionSummary | None,
+        tuple[ResearchScopeExclusion, ...],
+        ChatJobRecord | None,
+    ]:
         conversation_id = current.spec.conversation_id
         if conversation_id is None:
-            return None, None
+            return None, None, (), None
         previous = [
             self._read_record(path.parent.name)
             for path in self._job_files()
@@ -1117,8 +1157,32 @@ class ChatJobRegistry:
                     "assistant": record.result.report_markdown,
                 }
             )
+        exclusions_by_id: dict[str, ResearchScopeExclusion] = {}
+        for record in completed:
+            assert record.result is not None
+            session_path = Path(record.result.session_path)
+            if not session_path.is_file():
+                raise JobError(
+                    "completed conversation session is unavailable: "
+                    f"{session_path}"
+                )
+            for exclusion in load_research_scope_exclusions(
+                SessionStore(session_path, last_id="")
+            ):
+                existing = exclusions_by_id.get(exclusion.pdf_sha256)
+                if existing is not None:
+                    raise JobError(
+                        "conversation contains duplicate research exclusion: "
+                        f"{exclusion.pdf_sha256}"
+                    )
+                exclusions_by_id[exclusion.pdf_sha256] = exclusion
         if not active_turns:
-            return None, checkpoint_summary
+            return (
+                None,
+                checkpoint_summary,
+                tuple(exclusions_by_id.values()),
+                completed[-1] if completed else None,
+            )
         payload = {
             "conversation_id": conversation_id,
             "compaction_summary": (
@@ -1133,7 +1197,12 @@ class ChatJobRegistry:
             f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n"
             "</conversation_context>"
         )
-        return context, checkpoint_summary
+        return (
+            context,
+            checkpoint_summary,
+            tuple(exclusions_by_id.values()),
+            completed[-1],
+        )
 
     def _job_dir(self, job_id: str) -> Path:
         _validate_job_id(job_id)

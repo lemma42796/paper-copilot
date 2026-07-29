@@ -4,7 +4,7 @@
 > [AGENTS.md](AGENTS.md)，当前架构见 [ARCHITECTURE.md](ARCHITECTURE.md)，详细设计见
 > [docs/design/](docs/design/)，历史实现过程见 Git。
 
-更新于 2026-07-28。
+更新于 2026-07-29。
 
 ## 1. 当前方向
 
@@ -19,19 +19,19 @@ Server 复用同一 Python Core。
 
 ## 2. 当前工作：工具系统 v2
 
-状态：Runtime 页面证据 slice 已完成代码实施和定向验证；冻结 Query 1 待授权，
-Query 2–4 和 Slice 7 暂停。
+状态：已删除论文专用结束拦截并改为 Codex 式默认不阻断；论文引用改为可点击页码链接。
+此前 Query 1–2 使用旧机制，正式对比需要从 Query 1 重新开始。
 
 已完成：
 
 - 冻结 14 篇、1169 页论文、四轮 Query 和私有 Gold；
 - 完成原生 Codex CLI 四轮运行并保存逐轮 JSONL 与原生 rollout；
 - 完成内容寻址 TXT 缓存、`library_exec`、研究 Skill、`inspect_page`、`paper_set` 和
-  四工具公开表面；
+  五工具公开表面；
 - 将批量 cache ensure 移到模型循环前的 Runtime preflight；
 - 确认 session 与 lifecycle trace 的 113 个 started call ID 完全一致。
 
-冻结 Query 1 当前结论：
+冻结 Query 1 旧失败运行结论：
 
 - Preflight 14/14 成功，0 失败，309 ms；
 - 113 次模型工具调用，比旧版 103 次增加 10 次；
@@ -40,7 +40,7 @@ Query 2–4 和 Slice 7 暂停。
 - 最终引用使用 8 位短 hash，`heuristic_v1` 仍误报 coverage 1.0；
 - 正常 `end_turn`，但不满足 bounded slice 的完成条件。
 
-当前阻塞是确定性证据合同，而不是 trace：
+旧阻塞是确定性证据合同，而不是 trace：
 
 ```text
 模型声明页码
@@ -50,40 +50,50 @@ Query 2–4 和 Slice 7 暂停。
 ```
 
 [Runtime 证据源码映射](docs/design/runtime_research_evidence_codex_source_mapping.md)
-及以下接口已完成代码实施：
+最初实施了以下接口：
 
 ```text
 read_page + inspect_page
 → Runtime evidence ledger
 → Query 1 preflight active-set coverage
-→ end-turn citation validator
+→ 论文专用结束校验
 ```
 
 实现删除模型可见 `paper_set`，并从 `library_exec` 移除 `paper-cache` broker；底层
-内容寻址缓存、集合状态、stale、coverage 和恢复能力继续由 Runtime 持有。Query 2–4
-的派生集合不在本 slice 猜测实现。
+内容寻址缓存、集合状态、stale、coverage 和恢复能力继续由 Runtime 持有。
 
-定向验证已确认新四工具表面、broker 拒绝、真实缓存页读取、短 hash 拒绝、evidence
-recovery、end-turn continuation、预算 Incomplete 降级和非论文直接回答。现有 Agent
-loop 测试 14/14 通过；旧 `test_paper_copilot.py` 有 19 项通过、7 项因仍断言 v2 之前的
-公开工具和 Skill 布局而失败，未为兼容旧断言恢复已删除工具。
+冻结 Query 1 修订后重跑确认 Runtime 获得 14/14 论文、46 个不同页面的真实证据；
+12 次 `library_exec` 和 74 次 `read_page` 均完成且无失败，最终 28 条引用全部有效，
+active-set 引用覆盖率为 1.0，正常 `end_turn`。本轮 33 次模型调用、耗时 209.5 秒、
+费用 0.19964604 元。该结果属于已撤下的论文专用结束校验实现，只保留为历史记录。
 
-冻结 Query 1 首次重跑确认 Runtime 获得 14/14 论文、63 页真实证据，74 次工具调用均
-进入权威 trace 且无失败；同时暴露省略号短引用未被识别的问题。当前实现已扩大非法
-引用候选扫描，并在验证通过后把用户可见引用渲染为 `《论文题目》第 N 页`，完整
-SHA-256/page 仅保留在结构化证据和 trace 中；该修订尚未重跑验证。
+为继续 Query 2–4，新增最小 `update_research_scope`：仅在用户明确要求后续持续排除时，
+接受完整 PDF SHA-256、原因和本轮已观察页面引用，追加保存排除项；后续 job 从同一
+conversation 的已完成 session 重建并注入排除集合。该机制不判断排除结论的语义
+正确性，也不管理普通单轮筛选。
 
-本 slice 当前仍缺：
+固定 Codex 源码复核后，确认 Codex 默认没有论文覆盖或页码引用校验。当前实现因此：
 
-- 用冻结 Query 1 重跑端到端验收；
-- 根据实际 trace 判断是否通过并决定后续 scope-transition 设计。
+- 通用 Agent loop 只保留可选 Stop hook，默认没有 handler；
+- Paper Copilot 不再拦截模型回答，不再自动重答或替换为 Incomplete；
+- 能解析的完整论文页引用转成安全的应用内 Markdown 链接；
+- macOS 点击链接后在授权目录内打开对应 PDF 页；
+- 流式增量事件不再每个字都强制滚动到底部；
+- 页面证据 ledger 和持续排除范围继续保留，二者不作为最终回答门槛。
+
+本次定向验证：Agent loop、论文范围和 Paper Copilot 测试 38/38 通过；macOS Debug
+构建成功。
+
+当前仍缺：
+
+- 从 Query 1 重新运行四轮 Paper Copilot，避免新旧机制混入同一正式评测；
+- 四轮完成后按冻结 Gold 生成 Codex 与 Paper Copilot 并列报告。
 
 当前不做：
 
-- 不继续 Query 2–4；
 - 不运行三次重复或完整消融；
 - 不重复运行 Codex；
-- 不修改模型、依赖、SwiftUI、API、MCP 或缓存格式；
+- 不修改模型、依赖、API、MCP 或缓存格式；
 - 不删除旧实现。
 
 主计划见 [tool_system_v2_plan.md](docs/design/tool_system_v2_plan.md)，实验协议见
@@ -110,8 +120,8 @@ SHA-256/page 仅保留在结构化证据和 trace 中；该修订尚未重跑验
 | 3 `research-papers` Skill | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
 | 4 `inspect_page` | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
 | 5 `paper_set` 原接口 | 历史兼容，不再模型可见 | `paper_set_codex_source_mapping.md` |
-| 6 公开工具切换 | 已切换为 `library_exec/read_page/inspect_page/library_edit`，待验证 | `agent_infrastructure_codex_source_mapping.md` |
-| 7 冻结评测 | 未开始 | 被 Query 1 证据合同阻塞 |
+| 6 公开工具切换 | 已切换为 `library_exec/read_page/inspect_page/update_research_scope/library_edit`，Query 1 已验证 | `agent_infrastructure_codex_source_mapping.md` |
+| 7 冻结评测 | Query 1 已完成，Query 2 待运行 | `codex_multi_thesis_blind_experiment_plan.md` |
 | 8 删除旧实现 | 未开始 | 仅在 Slice 7 通过并获确认后执行 |
 
 旧读取、搜索、查询、比较、文件、笔记和 Composer 工具已从模型表面移除，但仍作为不可

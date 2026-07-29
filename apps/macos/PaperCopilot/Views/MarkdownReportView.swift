@@ -1,12 +1,16 @@
 import Foundation
+import PDFKit
 import SwiftUI
 
 struct MarkdownReportView: View {
     let markdown: String
+    let pdfDirectory: String?
     @State private var document: MarkdownDocument
+    @State private var citationDestination: PaperCitationDestination?
 
-    init(markdown: String) {
+    init(markdown: String, pdfDirectory: String?) {
         self.markdown = markdown
+        self.pdfDirectory = pdfDirectory
         _document = State(
             initialValue: MarkdownDocument(markdown: markdown)
         )
@@ -45,6 +49,123 @@ struct MarkdownReportView: View {
         .onChange(of: markdown) { updatedMarkdown in
             document = MarkdownDocument(markdown: updatedMarkdown)
         }
+        .environment(\.openURL, OpenURLAction { url in
+            openCitation(url)
+        })
+        .sheet(item: $citationDestination) { destination in
+            PaperCitationPreview(destination: destination)
+        }
+    }
+
+    private func openCitation(_ url: URL) -> OpenURLAction.Result {
+        guard url.scheme == "paper-copilot", url.host == "open" else {
+            return .systemAction
+        }
+        guard
+            let pdfDirectory,
+            let components = URLComponents(
+                url: url,
+                resolvingAgainstBaseURL: false
+            ),
+            let locator = components.queryItems?.first(where: {
+                $0.name == "locator"
+            })?.value,
+            let pageText = components.queryItems?.first(where: {
+                $0.name == "page"
+            })?.value,
+            let page = Int(pageText),
+            page > 0
+        else {
+            return .discarded
+        }
+
+        let root = URL(fileURLWithPath: pdfDirectory, isDirectory: true)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let target = root
+            .appendingPathComponent(locator)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let rootPrefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        guard
+            target.path.hasPrefix(rootPrefix),
+            target.pathExtension.lowercased() == "pdf",
+            FileManager.default.fileExists(atPath: target.path)
+        else {
+            return .discarded
+        }
+
+        citationDestination = PaperCitationDestination(url: target, page: page)
+        return .handled
+    }
+}
+
+private struct PaperCitationDestination: Identifiable {
+    let url: URL
+    let page: Int
+
+    var id: String {
+        "\(url.path)#page=\(page)"
+    }
+}
+
+private struct PaperCitationPreview: View {
+    let destination: PaperCitationDestination
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("\(destination.url.deletingPathExtension().lastPathComponent) · 第 \(destination.page) 页")
+                    .font(.headline)
+                    .lineLimit(1)
+                Spacer()
+                Button("关闭") {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding()
+
+            Divider()
+
+            PaperPDFView(url: destination.url, page: destination.page)
+        }
+        .frame(minWidth: 760, minHeight: 640)
+    }
+}
+
+private struct PaperPDFView: NSViewRepresentable {
+    let url: URL
+    let page: Int
+
+    func makeNSView(context: Context) -> PDFView {
+        let pdfView = PDFView()
+        pdfView.autoScales = true
+        pdfView.displayMode = .singlePageContinuous
+        pdfView.displayDirection = .vertical
+        showPage(in: pdfView)
+        return pdfView
+    }
+
+    func updateNSView(_ pdfView: PDFView, context: Context) {
+        showPage(in: pdfView)
+    }
+
+    private func showPage(in pdfView: PDFView) {
+        if pdfView.document?.documentURL != url {
+            pdfView.document = PDFDocument(url: url)
+        }
+        guard
+            let document = pdfView.document,
+            document.pageCount > 0,
+            let targetPage = document.page(
+                at: min(page - 1, document.pageCount - 1)
+            )
+        else {
+            return
+        }
+        pdfView.go(to: targetPage)
     }
 }
 
@@ -489,21 +610,10 @@ private enum MarkdownParser {
     }
 }
 
-private let evidenceReferenceExpression = try? NSRegularExpression(
-    pattern:
-        #"\[[A-Za-z0-9_-]{3,64}:(?:chunks\[\d+\]|[A-Za-z_][A-Za-z0-9_]*(?:\[\d+(?:-\d+)?\])?(?:\.[A-Za-z_][A-Za-z0-9_]*(?:\[\d+(?:-\d+)?\])?)*)\]"#
-)
-
 private func inlineMarkdown(_ source: String) -> AttributedString {
-    let range = NSRange(source.startIndex..., in: source)
-    let displaySource = evidenceReferenceExpression?.stringByReplacingMatches(
-        in: source,
-        range: range,
-        withTemplate: "`$0`"
-    ) ?? source
     let options = AttributedString.MarkdownParsingOptions(
         interpretedSyntax: .inlineOnlyPreservingWhitespace
     )
-    return (try? AttributedString(markdown: displaySource, options: options))
+    return (try? AttributedString(markdown: source, options: options))
         ?? AttributedString(source)
 }
