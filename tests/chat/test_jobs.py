@@ -28,7 +28,6 @@ from paper_copilot.chat.jobs import (
     ChatJobRegistry,
     ChatJobSpec,
 )
-from paper_copilot.session import SessionStore
 from paper_copilot.shared.errors import AgentError
 
 
@@ -123,6 +122,7 @@ def test_http_job_completes_after_request_client_disconnects(
         )
 
     assert completed["result"]["report_markdown"] == "恢复验收完成"
+    assert completed["result"]["citation_targets"] == {}
     assert completed["attempts"][0]["status"] == "completed"
     assert [event["type"] for event in events["events"]] == [
         "created",
@@ -357,74 +357,6 @@ def test_follow_up_job_appends_completed_rollout_history(
         second_completed.context_usage.context_tokens
         > first_completed.context_usage.context_tokens
     )
-
-
-def test_conversation_context_carries_persistent_research_exclusions(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _ConversationLLM.calls = []
-    monkeypatch.setattr(runtime, "LLMClient", _ConversationLLM)
-    monkeypatch.setattr(runtime, "default_pdf_dir", lambda: None)
-    registry = ChatJobRegistry(tmp_path)
-    first = registry.create(
-        ChatJobSpec(
-            request="后续排除主要无监督论文",
-            record_quality=False,
-            update_report=False,
-        )
-    )
-    first_completed = _wait_for_registry_status(
-        registry,
-        first.id,
-        expected="completed",
-    )
-    assert first_completed.result is not None
-    first_store = SessionStore(
-        Path(first_completed.result.session_path),
-        last_id="",
-    )
-    excluded_pdf_sha256 = "a" * 64
-    first_store.append_application_event(
-        namespace="research_scope",
-        name="exclusions_updated",
-        payload={
-            "schema_version": 1,
-            "exclusions": [
-                {
-                    "pdf_sha256": excluded_pdf_sha256,
-                    "reason": "主要设定为无监督学习",
-                    "evidence_refs": [
-                        f"[{excluded_pdf_sha256}:page[4]]"
-                    ],
-                }
-            ],
-        },
-    )
-    conversation_id = first_completed.spec.conversation_id
-    assert conversation_id is not None
-    pending = ChatJobRecord(
-        id="job-follow-up-scope",
-        status="queued",
-        created_at="9999-01-01T00:00:00+00:00",
-        updated_at="9999-01-01T00:00:00+00:00",
-        spec=ChatJobSpec(
-            request="继续复核",
-            conversation_id=conversation_id,
-            record_quality=False,
-            update_report=False,
-        ),
-    )
-
-    _context, _summary, exclusions, previous_record = (
-        registry._build_conversation_context(pending)
-    )
-
-    assert [exclusion.pdf_sha256 for exclusion in exclusions] == [
-        excluded_pdf_sha256
-    ]
-    assert previous_record is not None
-    assert previous_record.id == first_completed.id
 
 
 def _use_llm(

@@ -34,6 +34,7 @@ def test_handle_chat_request_allows_direct_answer_without_index(tmp_path: Path) 
     assert result.quality_run_path is None
     assert result.eval_report_path is None
     assert result.report_markdown == "你好"
+    assert result.citation_targets == {}
 
     entries = SessionStore(result.session_path, last_id="").read_all()
     user_message = next(

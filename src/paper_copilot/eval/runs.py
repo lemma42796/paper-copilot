@@ -23,7 +23,13 @@ from typing import Any
 from paper_copilot.eval._paths import default_runs_dir, find_project_root
 from paper_copilot.eval.retrieval import RetrievalEvalResult
 from paper_copilot.eval.suite import SuiteResult
-from paper_copilot.session import FinalOutput, LLMCall, SessionHeader, SessionStore
+from paper_copilot.session import (
+    ApplicationEvent,
+    FinalOutput,
+    LLMCall,
+    SessionHeader,
+    SessionStore,
+)
 from paper_copilot.shared.errors import EvalError
 from paper_copilot.shared.prompt_fingerprint import compute_prompt_bundle_sha256
 
@@ -43,6 +49,7 @@ class RunRow:
     budget_passed: bool
     model: str | None = None
     prompt_bundle_sha256: str | None = None
+    page_evidence_count: int | None = None
     evidence_ref_count: int | None = None
     findings_claim_count: int | None = None
     findings_inline_ref_count: int | None = None
@@ -87,6 +94,7 @@ class RunRow:
         }
         raw.update({key: value for key, value in identity.items() if value is not None})
         quality = {
+            "page_evidence_count": self.page_evidence_count,
             "evidence_ref_count": self.evidence_ref_count,
             "findings_claim_count": self.findings_claim_count,
             "findings_inline_ref_count": self.findings_inline_ref_count,
@@ -141,6 +149,7 @@ class RunRow:
             budget_passed=raw["budget_passed"],
             model=raw.get("model"),
             prompt_bundle_sha256=raw.get("prompt_bundle_sha256"),
+            page_evidence_count=raw.get("page_evidence_count"),
             evidence_ref_count=raw.get("evidence_ref_count"),
             findings_claim_count=raw.get("findings_claim_count"),
             findings_inline_ref_count=raw.get("findings_inline_ref_count"),
@@ -275,9 +284,13 @@ def write_research_quality_run(
         raise EvalError(f"run file already exists: {path}")
 
     header, final, prompt_bundle_sha256 = _read_research_final(session_path)
-    quality = _quality_payload(final)
+    quality = _optional_quality_payload(final)
     cost = _cost_payload(final)
-    unsupported_count = _int_quality(quality, "claims_without_refs_count")
+    unsupported_count = (
+        _int_quality(quality, "claims_without_refs_count")
+        if quality is not None
+        else 0
+    )
     proposal_failure_count = _proposal_failure_count(final)
     failure_count = unsupported_count + proposal_failure_count
     row = RunRow(
@@ -298,11 +311,28 @@ def write_research_quality_run(
         budget_passed=True,
         model=header.model,
         prompt_bundle_sha256=prompt_bundle_sha256,
-        evidence_ref_count=_int_quality(quality, "evidence_ref_count"),
-        findings_claim_count=_int_quality(quality, "findings_claim_count"),
-        findings_inline_ref_count=_int_quality(quality, "findings_inline_ref_count"),
-        claims_without_refs_count=unsupported_count,
-        evidence_coverage_ratio=_float_quality(quality, "evidence_coverage_ratio"),
+        page_evidence_count=_page_evidence_count(session_path),
+        evidence_ref_count=(
+            _int_quality(quality, "evidence_ref_count")
+            if quality is not None
+            else None
+        ),
+        findings_claim_count=(
+            _int_quality(quality, "findings_claim_count")
+            if quality is not None
+            else None
+        ),
+        findings_inline_ref_count=(
+            _int_quality(quality, "findings_inline_ref_count")
+            if quality is not None
+            else None
+        ),
+        claims_without_refs_count=unsupported_count if quality is not None else None,
+        evidence_coverage_ratio=(
+            _float_quality(quality, "evidence_coverage_ratio")
+            if quality is not None
+            else None
+        ),
         proposal_check_passed=_optional_nested_bool(
             final,
             parent="proposal_check",
@@ -398,11 +428,18 @@ def _read_research_final(
     return header, final, prompt_bundle_sha256
 
 
-def _quality_payload(final: FinalOutput) -> dict[str, Any]:
+def _optional_quality_payload(final: FinalOutput) -> dict[str, Any] | None:
     quality = final.payload.get("quality")
-    if not isinstance(quality, dict):
-        raise EvalError("final_output.quality missing; rerun research with M17 quality payload")
-    return quality
+    return quality if isinstance(quality, dict) else None
+
+
+def _page_evidence_count(session_path: Path) -> int:
+    return sum(
+        isinstance(entry, ApplicationEvent)
+        and entry.namespace == "research_evidence"
+        and entry.name == "page_observed"
+        for entry in SessionStore(session_path, last_id="").read_all()
+    )
 
 
 def _cost_payload(final: FinalOutput) -> dict[str, Any]:

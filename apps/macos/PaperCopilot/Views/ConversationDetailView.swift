@@ -472,6 +472,9 @@ private struct ConversationTimeline: View {
 
     private var latestActivityBoundary: String {
         for job in conversation.jobs.reversed() {
+            guard job.status.isActive else {
+                continue
+            }
             if let sequence = appModel.jobEvents[job.id]?.last(where: {
                 $0.activityID != nil && $0.activityPhase != "delta"
             })?.seq {
@@ -481,15 +484,20 @@ private struct ConversationTimeline: View {
         return ""
     }
 
+    private var latestCompletionBoundary: String {
+        conversation.jobs.last(where: { $0.status == .completed })?.id ?? ""
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 20) {
+                VStack(spacing: 20) {
                     ForEach(conversation.jobs) { job in
                         JobTurnView(
                             job: job,
                             events: appModel.jobEvents[job.id, default: []]
                         )
+                        .id(job.id)
                     }
                     Color.clear
                         .frame(height: 1)
@@ -499,10 +507,16 @@ private struct ConversationTimeline: View {
                 .frame(maxWidth: 860)
                 .frame(maxWidth: .infinity)
             }
-            .onChange(of: appModel.jobs) { _ in
-                scrollToTimelineBottom(using: proxy)
+            .onChange(of: latestCompletionBoundary) { completedJobID in
+                guard !completedJobID.isEmpty else {
+                    return
+                }
+                scrollToJob(completedJobID, using: proxy)
             }
             .onChange(of: latestActivityBoundary) { _ in
+                guard !latestActivityBoundary.isEmpty else {
+                    return
+                }
                 scrollToTimelineBottom(using: proxy)
             }
             .onAppear {
@@ -517,6 +531,19 @@ private struct ConversationTimeline: View {
             transaction.disablesAnimations = true
             withTransaction(transaction) {
                 proxy.scrollTo("timeline-bottom", anchor: .bottom)
+            }
+        }
+    }
+
+    private func scrollToJob(
+        _ jobID: String,
+        using proxy: ScrollViewProxy
+    ) {
+        DispatchQueue.main.async {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(jobID, anchor: .top)
             }
         }
     }
@@ -573,7 +600,8 @@ private struct JobTurnView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     MarkdownReportView(
                         markdown: report,
-                        pdfDirectory: job.spec.pdfDir
+                        pdfDirectory: job.spec.pdfDir,
+                        citationTargets: job.result?.citationTargets ?? [:]
                     )
                     CopyMessageButton(text: report)
                 }

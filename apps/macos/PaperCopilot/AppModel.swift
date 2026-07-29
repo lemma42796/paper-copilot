@@ -62,6 +62,7 @@ final class AppModel: ObservableObject {
     private var eventCursors: [String: Int] = [:]
     private var observationTasks: [String: Task<Void, Never>] = [:]
     private var requestedDiagnosticAttempts: [String: Int] = [:]
+    private var hasInitializedConversationSelection = false
     private static let approvalModeKey = "approvalMode"
 
     init() {
@@ -539,6 +540,7 @@ final class AppModel: ObservableObject {
     }
 
     func selectConversation(_ conversationID: String?) {
+        hasInitializedConversationSelection = true
         selectedConversationID = conversationID
         guard
             let conversation = conversations.first(
@@ -744,7 +746,8 @@ final class AppModel: ObservableObject {
         }
         do {
             jobs = try await api.listJobs()
-            if selectedConversationID == nil {
+            if !hasInitializedConversationSelection {
+                hasInitializedConversationSelection = true
                 selectedConversationID = conversations.first?.id
             }
             for record in jobs where record.status.isActive {

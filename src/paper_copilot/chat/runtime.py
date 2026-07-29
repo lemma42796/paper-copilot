@@ -17,7 +17,6 @@ from paper_copilot.agents.paper_copilot import (
     PaperCopilotRun,
     run_paper_copilot,
 )
-from paper_copilot.agents.research_scope_tool import ResearchScopeExclusion
 from paper_copilot.agents.tool_security import (
     ApprovalMode,
     ToolApprovalRequest,
@@ -48,6 +47,7 @@ class ChatRunResult:
     cost_cny: float
     events_count: int
     paper_budget: dict[str, object]
+    citation_targets: dict[str, str]
     composer_plan: dict[str, Any] | None
     proposal_check: dict[str, Any] | None
     conversation_compaction: CompactionSummary | None = None
@@ -70,7 +70,6 @@ async def handle_chat_request(
     event_callback: Callable[[Event], None] | None = None,
     stream_event_callback: LLMStreamEventCallback | None = None,
     conversation_context: str | None = None,
-    prior_research_exclusions: tuple[ResearchScopeExclusion, ...] = (),
     previous_compaction_summary: CompactionSummary | None = None,
     resume_history: list[dict[str, Any]] | None = None,
     resume_runtime_state: dict[str, Any] | None = None,
@@ -148,7 +147,6 @@ async def handle_chat_request(
             event_callback=event_callback,
             stream_event_callback=stream_event_callback,
             conversation_context=conversation_context,
-            prior_research_exclusions=prior_research_exclusions,
             previous_compaction_summary=previous_compaction_summary,
             resume_history=resume_history,
             resume_runtime_state=resume_runtime_state,
@@ -202,6 +200,7 @@ def _persist_chat_result(
         cost_cny=run.cost.cost_cny,
         events_count=len(run.events),
         paper_budget=run.termination_summary.paper_budget,
+        citation_targets=run.citation_targets,
         composer_plan=_optional_payload_dict(run.final_payload.get("composer_plan")),
         proposal_check=_optional_payload_dict(run.final_payload.get("proposal_check")),
         conversation_compaction=run.conversation_compaction,

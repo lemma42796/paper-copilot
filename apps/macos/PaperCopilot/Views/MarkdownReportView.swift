@@ -5,12 +5,18 @@ import SwiftUI
 struct MarkdownReportView: View {
     let markdown: String
     let pdfDirectory: String?
+    let citationTargets: [String: String]
     @State private var document: MarkdownDocument
     @State private var citationDestination: PaperCitationDestination?
 
-    init(markdown: String, pdfDirectory: String?) {
+    init(
+        markdown: String,
+        pdfDirectory: String?,
+        citationTargets: [String: String]
+    ) {
         self.markdown = markdown
         self.pdfDirectory = pdfDirectory
+        self.citationTargets = citationTargets
         _document = State(
             initialValue: MarkdownDocument(markdown: markdown)
         )
@@ -67,9 +73,10 @@ struct MarkdownReportView: View {
                 url: url,
                 resolvingAgainstBaseURL: false
             ),
-            let locator = components.queryItems?.first(where: {
-                $0.name == "locator"
+            let citationRef = components.queryItems?.first(where: {
+                $0.name == "ref"
             })?.value,
+            let locator = citationTargets[citationRef],
             let pageText = components.queryItems?.first(where: {
                 $0.name == "page"
             })?.value,

@@ -364,12 +364,14 @@ struct ChatJobResult: Codable, Equatable {
     let reportMarkdown: String
     let terminationReason: String
     let costCNY: Double
+    let citationTargets: [String: String]?
 
     enum CodingKeys: String, CodingKey {
         case request
         case reportMarkdown = "report_markdown"
         case terminationReason = "termination_reason"
         case costCNY = "cost_cny"
+        case citationTargets = "citation_targets"
     }
 }
 

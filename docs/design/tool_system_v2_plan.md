@@ -38,7 +38,6 @@
 | `library_exec` | 在授权论文库和只读缓存上执行受限命令 | 已实施 |
 | `read_page` | 按完整论文标识读取一页缓存文本并登记页证据 | 已实施 |
 | `inspect_page` | 检查一张明确 PDF 页面或区域 | 已实施 |
-| `update_research_scope` | 用户明确要求后续持续排除时，追加保存有本轮页面证据的排除项 | 已实施 |
 | `library_edit` | 执行授权论文库中的用户可见写操作 | 已实施 |
 
 Runtime preflight 负责批量 cache ensure；`library_exec` 不再接受 `paper-cache`
@@ -60,7 +59,7 @@ broker 命令。模型通过 `read_page` 读取页文本。
 | 3 论文研究 Skill | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
 | 4 `inspect_page` | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
 | 5 `paper_set` | 历史兼容，不再模型可见 | `paper_set_codex_source_mapping.md` |
-| 6 公开工具切换 | 已切换为五工具表面，Query 1 已验证 | `agent_infrastructure_codex_source_mapping.md` |
+| 6 公开工具切换 | 已切换为四工具表面，Query 1 已验证 | `agent_infrastructure_codex_source_mapping.md` |
 | 7 冻结评测 | Query 1 已完成，Query 2 待运行 | `codex_multi_thesis_blind_experiment_plan.md` |
 | 8 删除旧实现 | 未开始 | 仅在 Slice 7 通过并获确认后执行 |
 
@@ -124,18 +123,12 @@ lifecycle 调用的结论已纠正，trace 修复不属于下一 slice。
 | 总耗时 | 209.5 秒 |
 | 费用 | ¥0.19964604 |
 
-## 5. 当前任务
+## 5. 已撤下的持续排除工具
 
-为运行冻结 Query 2，已增加最小持续排除：
-
-- 模型仅在用户明确要求后续持续排除时调用 `update_research_scope`；
-- Runtime 校验完整论文标识和本轮已观察页面引用，并追加保存事件；
-- 同一 conversation 的后续 job 重建排除集合并注入模型上下文；
-- 首次全论文请求仍强制覆盖全部 active set；
-- 后续研究轮次只要求实际引用来自已观察页面，且至少有一条有效引用；
-- 不判断排除理由的语义正确性，不实现通用范围引擎。
-
-相关定向测试与受影响测试 30/30 通过。当前待在同一 conversation 实际运行 Query 2。
+曾为运行冻结 Query 2 增加最小 `update_research_scope`。Codex 四轮基线没有发生
+`constraint_memory_failure`，Paper Copilot 实跑又确认模型可能不调用该工具，因此它
+不是由基线失败支持的有效改造，现已从工具表面、Runtime 恢复和上下文注入中删除。
+历史 session 事件保持 append-only，仅作为原始实验记录。
 
 ## 6. 页面证据 slice
 
@@ -173,8 +166,8 @@ lifecycle 调用的结论已纠正，trace 修复不属于下一 slice。
 4. `library_exec` 明确拒绝全部 `paper-cache` broker 命令；
 5. 通用 Stop hook 默认关闭，Paper Copilot 不配置论文专用 handler。
 
-Query 2–4 不从自然语言或最终答案反推范围。后续增加的最小结构化接口只支持经用户
-明确要求的持续排除。
+Query 2–4 的范围约束继续由冻结用户消息和同一 conversation 的历史表达，不再维护
+产品特定的结构化排除状态。
 
 该映射检查的固定 Codex source ref 为：
 `61a44880a85d2fd0d8770908dea5733495e571c8`。Codex 已提供可选 Stop hook 的
@@ -251,13 +244,5 @@ Slice 7 通过后，另行确认 Slice 8，才可删除旧工具和只服务旧�
 
 ## 10. 下一步
 
-在运行过 Query 1 的同一 conversation 中运行冻结 Query 2，检查：
-
-```text
-模型用本轮已观察页面提交持续排除
-→ Runtime 追加保存排除事件
-→ 后续轮次重建并注入排除集合
-```
-
-Query 2 通过后继续 Query 3–4；四轮完成后再按冻结 Gold 计算并列指标。本步骤不运行
-完整消融、不重复 Codex 基线、不删除旧实现。
+从全新 conversation 重新运行冻结 Query 1–4；四轮完成后再按冻结 Gold 计算并列
+指标。本步骤不运行完整消融、不重复 Codex 基线、不删除其他旧实现。

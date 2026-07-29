@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlencode
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,19 +11,13 @@ from paper_copilot.shared.errors import KnowledgeError
 __all__ = [
     "ActivePaperSnapshot",
     "PageEvidenceFact",
-    "ResearchCitation",
     "append_page_evidence",
-    "extract_research_citations",
     "load_page_evidence",
-    "render_research_citation_links",
 ]
 
 _NAMESPACE = "research_evidence"
 _PAGE_OBSERVED = "page_observed"
 _SCHEMA_VERSION = 1
-_EXACT_REF_RE = re.compile(
-    r"\[(?P<pdf_sha256>[0-9a-f]{64}):page\[(?P<page>[1-9][0-9]*)\]\]"
-)
 
 
 class ActivePaperSnapshot(BaseModel):
@@ -55,17 +47,6 @@ class PageEvidenceFact(BaseModel):
     cache_revision_id: str | None = None
     region: dict[str, float] | None = None
     render_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-
-
-class ResearchCitation(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    pdf_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    page: int = Field(ge=1)
-    raw: str
-    title: str
-    source_locator: str
-    href: str
 
 
 def append_page_evidence(
@@ -112,64 +93,6 @@ def load_page_evidence(store: SessionStore) -> tuple[PageEvidenceFact, ...]:
         call_ids.add(fact.source_tool_call_id)
         facts.append(fact)
     return tuple(facts)
-
-
-def extract_research_citations(
-    report_markdown: str,
-    *,
-    active_papers: tuple[ActivePaperSnapshot, ...],
-) -> tuple[ResearchCitation, ...]:
-    active_by_id = {paper.pdf_sha256: paper for paper in active_papers}
-    citations: list[ResearchCitation] = []
-    seen: set[tuple[str, int]] = set()
-    for match in _EXACT_REF_RE.finditer(report_markdown):
-        key = (match.group("pdf_sha256"), int(match.group("page")))
-        if key in seen:
-            continue
-        active_paper = active_by_id.get(key[0])
-        if active_paper is None or key[1] > active_paper.page_count:
-            continue
-        seen.add(key)
-        title = Path(active_paper.source_locator).stem
-        href = "paper-copilot://open?" + urlencode(
-            {
-                "paper": key[0],
-                "page": key[1],
-                "locator": active_paper.source_locator,
-            }
-        )
-        citations.append(
-            ResearchCitation(
-                pdf_sha256=key[0],
-                page=key[1],
-                raw=match.group(0),
-                title=title,
-                source_locator=active_paper.source_locator,
-                href=href,
-            )
-        )
-    return tuple(citations)
-
-
-def render_research_citation_links(
-    report_markdown: str,
-    *,
-    citations: tuple[ResearchCitation, ...],
-) -> str:
-    rendered = report_markdown
-    for citation in citations:
-        label = _escape_markdown_link_label(
-            f"《{citation.title}》第 {citation.page} 页"
-        )
-        rendered = rendered.replace(
-            citation.raw,
-            f"[{label}]({citation.href})",
-        )
-    return rendered
-
-
-def _escape_markdown_link_label(label: str) -> str:
-    return label.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
 
 
 def _research_evidence_events(

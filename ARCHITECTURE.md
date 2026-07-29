@@ -97,14 +97,13 @@ Agent loop 根据请求调用工具、聚合证据并生成自然语言或 groun
 模型 `end_turn`、预算、deadline、用户中断或失败；Runtime 处理重复签名、工具超时和
 rollout deadline。
 
-当前模型只看到五个工具：
+当前模型只看到四个工具：
 
 | 工具 | 当前职责与边界 |
 |---|---|
 | `library_exec` | 在逻辑 workspace 中执行有界只读命令；`library/`、`cache/` 只读，调用级 `scratch/` 可写；无网络、无权限升级 |
 | `read_page` | 从 Runtime preflight 冻结的 cache revision 读取一页文本，并产生页证据事实 |
 | `inspect_page` | 按授权 PDF SHA-256、页码和可选 region 渲染单页图像；不做 OCR、批量处理或文本回退 |
-| `update_research_scope` | 仅在用户明确要求后续持续排除论文时，追加保存有本轮页面证据的排除项；不能搜索、推断或取消排除 |
 | `library_edit` | 授权论文库内的用户可见写操作；禁止静默覆盖和永久删除，需要时持久审批 |
 
 ### 5.1 研究上下文与缓存
@@ -118,7 +117,8 @@ Runtime 在模型循环前按论文预算准备内容寻址文本缓存，并注
 - 授权 PDF locator；
 - 完整 PDF SHA-256；
 - 页数；
-- 逻辑 `cache/.../layout.txt` 路径。
+- 逻辑 `cache/.../layout.txt` 路径；
+- Runtime 分配的应用内 `citation_base`。
 
 模型通过 `library_exec` 批量搜索逻辑路径；`paper-cache status/ensure/page` 不再暴露。
 页文本只能通过 `read_page` 按完整 PDF SHA-256 和正整数页码读取。
@@ -134,16 +134,13 @@ Runtime 在模型循环前按论文预算准备内容寻址文本缓存，并注
 Paper Copilot 默认不配置 handler，因此模型 `end_turn` 后直接结束，不因论文覆盖率或
 引用格式自动重答。
 
-模型生成的完整 SHA-256/page 引用若能解析到当前论文，Runtime 会将其转换为标准
-Markdown 链接，用户看到 `《论文题目》第 N 页`，点击后由 macOS 客户端在授权目录内
-打开对应 PDF 页。无法解析的文本保持原样，不拦截回答。结构化 `evidence_refs` 保存
-成功解析的引用，不包含宿主绝对路径。设计见
+模型直接用 `research_cache_index` 中的 `citation_base` 生成最终 Markdown 链接；
+引用处理层不解析、验证、替换或清理模型答案。Chat result 另行携带本次运行生成的
+`citation ref -> 授权逻辑 locator` 映射。用户点击链接后，macOS 客户端先从该可信
+映射解析 locator，再校验目标位于授权目录内、扩展名为 PDF 且文件存在，随后打开指定
+页。缺失或无效链接不阻断回答，也不触发重试。引用处理后的正文、session report 和 UI
+使用同一份文本。设计见
 [runtime_research_evidence_codex_source_mapping.md](docs/design/runtime_research_evidence_codex_source_mapping.md)。
-
-`update_research_scope` 仍只追加保存用户明确要求在后续讨论中持续排除的论文，并校验
-完整 PDF SHA-256、本轮已观察页面和当前授权目录；后续 job 从同一 conversation 的
-已完成 session 重建排除集合并注入 `research_scope`。它不判断排除结论在语义上是否
-正确，也不管理普通的单轮筛选。
 
 旧 `paper_set` 事件和代码仅供历史 session 兼容，不再属于模型工具表面或
 citation-grade coverage。其他旧读取、搜索、查询、比较、文件、笔记和 Composer 实现

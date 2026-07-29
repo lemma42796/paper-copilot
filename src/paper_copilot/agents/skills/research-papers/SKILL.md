@@ -33,20 +33,13 @@ Skill version: 8
    `research_cache_index` as required and report any entry you could not examine.
 4. If the index reports a failure or budget truncation, report the scope as incomplete. Do not
    silently drop the affected paper.
-5. An application-generated `research_scope` block lists papers persistently excluded by earlier
-   turns. Keep them excluded from later result sets, while allowing cited discussion that explains
-   or audits the exclusion.
-6. Call `update_research_scope` only after the user explicitly makes an exclusion persistent across
-   later turns. Read supporting pages first, submit only newly excluded full PDF SHA-256 values, and
-   bind each exclusion to exact observed page references. Do not change persistent scope for an
-   ordinary one-turn filter.
-
 ## Prepare deterministic text
 
 Runtime prepares deterministic text before the model loop and provides, for each successful entry,
-the authorized PDF locator, full PDF SHA-256, page count, and exact `cache/.../layout.txt` path in
-`research_cache_index`. Use those paths directly in one or more bounded `library_exec` commands. Do
-not issue `paper-cache` commands; they are not exposed through `library_exec`.
+the authorized PDF locator, full PDF SHA-256, page count, exact `cache/.../layout.txt` path, and
+application citation base in `research_cache_index`. Use those paths directly in one or more bounded
+`library_exec` commands. Do not issue `paper-cache` commands; they are not exposed through
+`library_exec`.
 
 If an index entry reports a preparation failure, report that paper as a gap. Do not replace the
 deterministic cache workflow with ad hoc full-PDF extraction, copied PDFs, Python scripts, or one-off
@@ -79,8 +72,10 @@ page. Do not confuse printed page labels with PDF page numbers.
 2. Verify that the returned PDF hash, page, cache revision, and artifact reference correspond to the
    intended PDF.
 3. Base concrete claims on the bounded page text, not on the earlier `rg` snippet alone.
-4. Cite grounded claims as `[<pdf_sha256>:page[<page>]]`. Keep the title and author next to the claim
-   when comparing multiple papers.
+4. Cite grounded claims with a final Markdown link built from the paper's supplied `citation_base`
+   by appending `&page=<page>`, for example
+   `[《论文题目》第 4 页](paper-copilot://open?ref=324a2128&page=4)`. Never put the PDF
+   SHA-256, locator, or cache path in the answer.
 5. Quote only the short span needed to support the claim and preserve its qualifiers.
 6. Check nearby pages when a sentence, table, figure, footnote, or section boundary makes the isolated
    page ambiguous.

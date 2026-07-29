@@ -264,6 +264,46 @@ def test_write_research_quality_run_records_final_output_quality(tmp_path: Path)
     assert row.proposal_repair_attempted is None
 
 
+def test_write_research_quality_run_records_page_evidence_without_citation_quality(
+    tmp_path: Path,
+) -> None:
+    store = SessionStore.create(
+        "research-session",
+        model="qwen",
+        agent="PaperCopilot",
+        root=tmp_path,
+    )
+    store.append_application_event(
+        namespace="research_evidence",
+        name="page_observed",
+        payload={"source_tool_call_id": "tool-1"},
+    )
+    store.append_final_output(
+        {
+            "cost": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cache_read_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cost_cny": 0.01,
+            },
+        }
+    )
+
+    path = write_research_quality_run(
+        store.path,
+        runs_dir=tmp_path / "runs",
+        run_id="research-no-citation-quality",
+        git_sha="sha",
+    )
+
+    row = RunRow.from_json(json.loads(path.read_text(encoding="utf-8")))
+    assert row.page_evidence_count == 1
+    assert row.evidence_ref_count is None
+    assert row.findings_claim_count is None
+    assert row.evidence_coverage_ratio is None
+
+
 def test_write_research_quality_run_counts_failed_composer_check(tmp_path: Path) -> None:
     store = SessionStore.create(
         "composer-session",

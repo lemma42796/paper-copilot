@@ -23,10 +23,6 @@ from paper_copilot.agents.loop import (
     ToolUse,
 )
 from paper_copilot.agents.llm_client import WORKING_CONTEXT_LIMIT_TOKENS
-from paper_copilot.agents.research_scope_tool import (
-    ResearchScopeExclusion,
-    load_research_scope_exclusions,
-)
 from paper_copilot.agents.tool_security import (
     ApprovalMode,
     ToolApprovalRequest,
@@ -103,6 +99,7 @@ class ChatJobResult(BaseModel):
     cost_cny: float
     events_count: int
     paper_budget: dict[str, object]
+    citation_targets: dict[str, str] = Field(default_factory=dict)
     composer_plan: dict[str, object] | None
     proposal_check: dict[str, object] | None
     conversation_compaction: CompactionSummary | None = None
@@ -124,6 +121,7 @@ class ChatJobResult(BaseModel):
             cost_cny=run.cost_cny,
             events_count=run.events_count,
             paper_budget=run.paper_budget,
+            citation_targets=run.citation_targets,
             composer_plan=run.composer_plan,
             proposal_check=run.proposal_check,
             conversation_compaction=run.conversation_compaction,
@@ -535,7 +533,6 @@ class ChatJobRegistry:
             (
                 conversation_context,
                 previous_compaction_summary,
-                prior_research_exclusions,
                 previous_conversation_record,
             ) = self._build_conversation_context(record)
 
@@ -761,7 +758,6 @@ class ChatJobRegistry:
                         event_callback=record_event,
                         stream_event_callback=record_stream_event,
                         conversation_context=conversation_context,
-                        prior_research_exclusions=prior_research_exclusions,
                         previous_compaction_summary=previous_compaction_summary,
                         resume_history=resume_history,
                         resume_runtime_state=resume_runtime_state,
@@ -1113,12 +1109,11 @@ class ChatJobRegistry:
     ) -> tuple[
         str | None,
         CompactionSummary | None,
-        tuple[ResearchScopeExclusion, ...],
         ChatJobRecord | None,
     ]:
         conversation_id = current.spec.conversation_id
         if conversation_id is None:
-            return None, None, (), None
+            return None, None, None
         previous = [
             self._read_record(path.parent.name)
             for path in self._job_files()
@@ -1157,30 +1152,10 @@ class ChatJobRegistry:
                     "assistant": record.result.report_markdown,
                 }
             )
-        exclusions_by_id: dict[str, ResearchScopeExclusion] = {}
-        for record in completed:
-            assert record.result is not None
-            session_path = Path(record.result.session_path)
-            if not session_path.is_file():
-                raise JobError(
-                    "completed conversation session is unavailable: "
-                    f"{session_path}"
-                )
-            for exclusion in load_research_scope_exclusions(
-                SessionStore(session_path, last_id="")
-            ):
-                existing = exclusions_by_id.get(exclusion.pdf_sha256)
-                if existing is not None:
-                    raise JobError(
-                        "conversation contains duplicate research exclusion: "
-                        f"{exclusion.pdf_sha256}"
-                    )
-                exclusions_by_id[exclusion.pdf_sha256] = exclusion
         if not active_turns:
             return (
                 None,
                 checkpoint_summary,
-                tuple(exclusions_by_id.values()),
                 completed[-1] if completed else None,
             )
         payload = {
@@ -1200,7 +1175,6 @@ class ChatJobRegistry:
         return (
             context,
             checkpoint_summary,
-            tuple(exclusions_by_id.values()),
             completed[-1],
         )
 

@@ -305,7 +305,6 @@ def test_paper_tool_schemas_expose_v2_contract() -> None:
         "library_exec",
         "read_page",
         "inspect_page",
-        "update_research_scope",
         "library_edit",
     }
     assert tools["library_exec"]["input_schema"]["required"] == ["cmd"]
@@ -317,9 +316,6 @@ def test_paper_tool_schemas_expose_v2_contract() -> None:
         "paper_id",
         "page",
         "purpose",
-    ]
-    assert tools["update_research_scope"]["input_schema"]["required"] == [
-        "exclusions"
     ]
     assert tools["library_edit"]["input_schema"]["required"] == ["operation"]
     assert "paper-cache commands are not supported" in tools["library_exec"]["description"]

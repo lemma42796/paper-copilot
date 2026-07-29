@@ -19,7 +19,8 @@ Server 复用同一 Python Core。
 
 ## 2. 当前工作：工具系统 v2
 
-状态：已删除论文专用结束拦截并改为 Codex 式默认不阻断；论文引用改为可点击页码链接。
+状态：已删除论文专用结束拦截并改为 Codex 式默认不阻断；模型直接输出可点击页码链接，
+Runtime 引用层不再改写最终答案。
 此前 Query 1–2 使用旧机制，正式对比需要从 Query 1 重新开始。
 
 已完成：
@@ -27,7 +28,7 @@ Server 复用同一 Python Core。
 - 冻结 14 篇、1169 页论文、四轮 Query 和私有 Gold；
 - 完成原生 Codex CLI 四轮运行并保存逐轮 JSONL 与原生 rollout；
 - 完成内容寻址 TXT 缓存、`library_exec`、研究 Skill、`inspect_page`、`paper_set` 和
-  五工具公开表面；
+  四工具公开表面；
 - 将批量 cache ensure 移到模型循环前的 Runtime preflight；
 - 确认 session 与 lifecycle trace 的 113 个 started call ID 完全一致。
 
@@ -67,19 +68,22 @@ read_page + inspect_page
 active-set 引用覆盖率为 1.0，正常 `end_turn`。本轮 33 次模型调用、耗时 209.5 秒、
 费用 0.19964604 元。该结果属于已撤下的论文专用结束校验实现，只保留为历史记录。
 
-为继续 Query 2–4，新增最小 `update_research_scope`：仅在用户明确要求后续持续排除时，
-接受完整 PDF SHA-256、原因和本轮已观察页面引用，追加保存排除项；后续 job 从同一
-conversation 的已完成 session 重建并注入排除集合。该机制不判断排除结论的语义
-正确性，也不管理普通单轮筛选。
+曾为 Query 2–4 增加 `update_research_scope`，把持续排除保存为结构化 session 事件。
+Codex 四轮基线没有出现范围记忆失败，Paper Copilot 实跑又确认模型可能只在正文声明
+排除而不调用工具，因此该产品特定机制已删除。历史 session 中的事件保留为原始记录，
+后续任务不再读取或注入。
 
 固定 Codex 源码复核后，确认 Codex 默认没有论文覆盖或页码引用校验。当前实现因此：
 
 - 通用 Agent loop 只保留可选 Stop hook，默认没有 handler；
 - Paper Copilot 不再拦截模型回答，不再自动重答或替换为 Incomplete；
-- 能解析的完整论文页引用转成安全的应用内 Markdown 链接；
+- `research_cache_index` 给模型提供 Runtime 分配的应用内 citation base，模型直接输出
+  最终 Markdown 链接；
+- Runtime 引用层不解析、验证、替换或清理模型最终答案；
+- Chat result 携带可信 citation ref 映射，macOS 解析后继续执行授权目录和 PDF 校验；
 - macOS 点击链接后在授权目录内打开对应 PDF 页；
 - 流式增量事件不再每个字都强制滚动到底部；
-- 页面证据 ledger 和持续排除范围继续保留，二者不作为最终回答门槛。
+- 页面证据 ledger 继续保留，但不作为最终回答门槛。
 
 本次定向验证：Agent loop、论文范围和 Paper Copilot 测试 38/38 通过；macOS Debug
 构建成功。
@@ -120,7 +124,7 @@ conversation 的已完成 session 重建并注入排除集合。该机制不判�
 | 3 `research-papers` Skill | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
 | 4 `inspect_page` | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
 | 5 `paper_set` 原接口 | 历史兼容，不再模型可见 | `paper_set_codex_source_mapping.md` |
-| 6 公开工具切换 | 已切换为 `library_exec/read_page/inspect_page/update_research_scope/library_edit`，Query 1 已验证 | `agent_infrastructure_codex_source_mapping.md` |
+| 6 公开工具切换 | 已切换为 `library_exec/read_page/inspect_page/library_edit`，Query 1 已验证 | `agent_infrastructure_codex_source_mapping.md` |
 | 7 冻结评测 | Query 1 已完成，Query 2 待运行 | `codex_multi_thesis_blind_experiment_plan.md` |
 | 8 删除旧实现 | 未开始 | 仅在 Slice 7 通过并获确认后执行 |
 

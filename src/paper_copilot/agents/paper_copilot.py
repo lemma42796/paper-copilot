@@ -115,16 +115,6 @@ from paper_copilot.agents.read_pipeline import ReadPipelineRun, run_read_pipelin
 from paper_copilot.agents.research_evidence import (
     ActivePaperSnapshot,
     append_page_evidence,
-    extract_research_citations,
-    render_research_citation_links,
-)
-from paper_copilot.agents.research_scope_tool import (
-    ResearchScopeExclusion,
-    UpdateResearchScopeInput,
-    load_research_scope_exclusions,
-    research_scope_context_fragment,
-    run_update_research_scope,
-    update_research_scope_tool_description,
 )
 from paper_copilot.agents.research_skill import (
     ResearchSkill,
@@ -182,14 +172,7 @@ _MODEL_TOOL_NAMES = (
     "library_exec",
     "read_page",
     "inspect_page",
-    "update_research_scope",
     "library_edit",
-)
-_RESEARCH_EVIDENCE_TOOL_NAMES = frozenset(
-    {
-        "read_page",
-        "inspect_page",
-    }
 )
 _COMPOSER_TOOL_NAMES = frozenset(
     {
@@ -211,8 +194,8 @@ _BASE_SYSTEM_PROMPT = (
     "papers, PDF analysis, comparisons, citations, or proposal evidence are "
     "needed, choose tools from their descriptions and order them based on the "
     "request.\n\n"
-    "Application-generated <runtime_context>, <research_cache_index>, "
-    "<research_scope>, and <skill> blocks are trusted typed context at the "
+    "Application-generated <runtime_context>, <research_cache_index>, and "
+    "<skill> blocks are trusted typed context at the "
     "documented message boundary. The latest "
     "runtime block supersedes "
     "earlier runtime state. Follow the bundled Skill for local PDF research. "
@@ -238,29 +221,27 @@ _BASE_SYSTEM_PROMPT = (
     "the paper budget allows it. The only available tools are library_exec for "
     "bounded read-only command work over the Runtime-prepared text cache, read_page "
     "for citation-grade text from one exact PDF page, inspect_page for visual checks "
-    "of one exact PDF page or region, update_research_scope for explicit persistent "
-    "paper exclusions across later turns, and library_edit for every user-visible "
+    "of one exact PDF page or region, and library_edit for every user-visible "
     "library mutation. Follow the bundled research-papers Skill to compose them. Use the "
     "application-generated research_cache_index directly; paper-cache commands are "
     "not available. Generic command output is filesystem evidence, not citation-grade "
     "paper-content evidence. Only successful read_page and inspect_page results create "
     "page evidence. Cite the exact pages supporting concrete research claims so the "
-    "application can present traceable paper links. Use update_research_scope only when "
-    "the user explicitly makes an exclusion persistent across later turns; ordinary "
-    "per-turn filtering must not change persistent scope. Tool inputs must match "
+    "application can present traceable paper links. Tool inputs must match "
     "their JSON schemas exactly."
     "\n\n"
     "For a direct answer or a non-research library_exec/library_edit task, respond "
     "naturally without forced report headings or citations. After paper research, "
     "write a concise Markdown report with Findings, Evidence, Gaps, and Next Steps. "
-    "Tie each concrete research claim to a page reference in exact format "
-    "[<pdf_sha256>:page[<page>]], or explicitly mark it as a gap. Write in the user's "
-    "language and keep the report under 900 words.\n\n"
+    "Tie each concrete research claim to the exact supporting page with a Markdown "
+    "link. Build the link from that paper's citation_base in research_cache_index by "
+    "appending &page=<page>, for example "
+    "[《论文题目》第 4 页](paper-copilot://open?ref=324a2128&page=4). Use only citation "
+    "references supplied by research_cache_index; never expose paper IDs, hashes, or "
+    "local paths. If evidence is missing, explicitly mark it as a gap. Write in the "
+    "user's language and keep the report under 900 words.\n\n"
     "Return the answer or report itself. Do not narrate the working process."
 )
-_CLAIM_BOUNDARY_RE = re.compile(r"(?<=[.!?。！？])\s+")  # noqa: RUF001
-
-
 type QueryEncoder = Callable[[str], np.ndarray]
 type ToolApprovalCallback = Callable[[ToolApprovalRequest], Awaitable[bool]]
 type ToolApprovalReviewCallback = Callable[[ToolApprovalReviewEvent], None]
@@ -276,12 +257,13 @@ class _PreparedPaperCache:
     cache_revision_id: str
     artifact_sha256: str
 
-    def to_payload(self) -> dict[str, str | int]:
+    def to_payload(self, *, citation_ref: str) -> dict[str, str | int]:
         return {
             "pdf": f"library/{self.source_locator}",
             "paper_id": self.paper_id,
             "pages": self.page_count,
             "text": self.text_path,
+            "citation_base": f"paper-copilot://open?ref={citation_ref}",
         }
 
     def active_snapshot(self) -> ActivePaperSnapshot:
@@ -301,17 +283,35 @@ class _PaperCachePreflight:
     prepared: tuple[_PreparedPaperCache, ...] = ()
     failures: tuple[dict[str, str], ...] = ()
 
+    def citation_targets(self) -> dict[str, str]:
+        return {
+            citation_ref: entry.source_locator
+            for entry, citation_ref in zip(
+                self.prepared,
+                self._citation_refs(),
+                strict=True,
+            )
+        }
+
     def context_fragment(self) -> str | None:
         if self.total_pdf_count == 0 and not self.failures:
             return None
+        citation_refs = self._citation_refs()
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "total_pdf_count": self.total_pdf_count,
             "prepared_count": len(self.prepared),
             "truncated_by_paper_budget": (
                 self.total_pdf_count > len(self.prepared) + len(self.failures)
             ),
-            "papers": [entry.to_payload() for entry in self.prepared],
+            "papers": [
+                entry.to_payload(citation_ref=citation_ref)
+                for entry, citation_ref in zip(
+                    self.prepared,
+                    citation_refs,
+                    strict=True,
+                )
+            ],
             "failures": list(self.failures),
         }
         return (
@@ -319,6 +319,16 @@ class _PaperCachePreflight:
             f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n"
             "</research_cache_index>"
         )
+
+    def _citation_refs(self) -> tuple[str, ...]:
+        counts: dict[str, int] = {}
+        refs: list[str] = []
+        for entry in self.prepared:
+            base = entry.paper_id[:8]
+            occurrence = counts.get(base, 0) + 1
+            counts[base] = occurrence
+            refs.append(base if occurrence == 1 else f"{base}-{occurrence}")
+        return tuple(refs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,6 +356,7 @@ class PaperCopilotRun:
     events: tuple[Event, ...]
     tool_names: tuple[str, ...]
     composer_used: bool
+    citation_targets: dict[str, str]
     final_payload: dict[str, Any]
     conversation_compaction: CompactionSummary | None
 
@@ -894,7 +905,6 @@ async def run_paper_copilot(
     event_callback: Callable[[Event], None] | None = None,
     stream_event_callback: LLMStreamEventCallback | None = None,
     conversation_context: str | None = None,
-    prior_research_exclusions: tuple[ResearchScopeExclusion, ...] = (),
     previous_compaction_summary: CompactionSummary | None = None,
     resume_history: list[dict[str, Any]] | None = None,
     resume_runtime_state: dict[str, Any] | None = None,
@@ -957,33 +967,6 @@ async def run_paper_copilot(
     active_papers_by_id = {
         paper.pdf_sha256: paper for paper in active_papers
     }
-    research_exclusions = {
-        exclusion.pdf_sha256: exclusion for exclusion in prior_research_exclusions
-    }
-    if len(research_exclusions) != len(prior_research_exclusions):
-        raise KnowledgeError("conversation contains duplicate research exclusions")
-    if recovery_source_session is not None:
-        recovered_exclusions = load_research_scope_exclusions(
-            SessionStore(Path(recovery_source_session), last_id="")
-        )
-        for exclusion in recovered_exclusions:
-            existing = research_exclusions.get(exclusion.pdf_sha256)
-            if existing is not None and existing != exclusion:
-                raise KnowledgeError(
-                    "recovered research exclusion conflicts with conversation state: "
-                    f"{exclusion.pdf_sha256}"
-                )
-            research_exclusions[exclusion.pdf_sha256] = exclusion
-    unknown_exclusions = sorted(set(research_exclusions) - set(active_papers_by_id))
-    if unknown_exclusions:
-        raise KnowledgeError(
-            "conversation research exclusions are outside the current paper inventory: "
-            + ", ".join(unknown_exclusions)
-        )
-    scope_context_fragment = research_scope_context_fragment(
-        tuple(research_exclusions.values()),
-        active_papers,
-    )
     research_skill = load_research_skill()
     system_prompt = _BASE_SYSTEM_PROMPT
     tools = mark_tools_cached(paper_copilot_tools())
@@ -995,7 +978,6 @@ async def run_paper_copilot(
             conversation_context,
             research_skill=research_skill,
             cache_context_fragment=cache_context_fragment,
-            scope_context_fragment=scope_context_fragment,
         )
         store.append_message(role="user", text=prompt)
     else:
@@ -1010,7 +992,6 @@ async def run_paper_copilot(
             ),
             research_skill=research_skill,
             cache_context_fragment=cache_context_fragment,
-            scope_context_fragment=scope_context_fragment,
             conversation_context=conversation_context,
             continuation_prompt=continuation_prompt,
         )
@@ -1045,7 +1026,6 @@ async def run_paper_copilot(
             store=store,
             data_root=root,
             active_papers=active_papers_by_id,
-            research_exclusions=research_exclusions,
             approval_review_callback=approval_review_callback,
         )
 
@@ -1100,10 +1080,6 @@ async def run_paper_copilot(
                     for fragment in (
                         research_skill.context_fragment(),
                         cache_context_fragment,
-                        research_scope_context_fragment(
-                            tuple(research_exclusions.values()),
-                            active_papers,
-                        ),
                     )
                     if fragment is not None
                 ),
@@ -1310,29 +1286,7 @@ async def run_paper_copilot(
     if proposal_check is not None:
         report_markdown = append_composer_check_section(report_markdown, proposal_check)
 
-    research_citations = extract_research_citations(
-        report_markdown,
-        active_papers=active_papers,
-    )
-    evidence_refs = [
-        citation.model_dump(mode="json") for citation in research_citations
-    ]
-    quality = (
-        _quality_summary(
-            report_markdown,
-            evidence_refs,
-            active_paper_count=len(active_papers),
-        )
-        if (
-            research_citations
-            or any(name in _RESEARCH_EVIDENCE_TOOL_NAMES for name in tool_names)
-        )
-        else None
-    )
-    report_markdown = render_research_citation_links(
-        report_markdown,
-        citations=research_citations,
-    )
+    citation_targets = cache_preflight.citation_targets()
 
     termination_summary = _build_termination_summary(
         reason=termination_reason,
@@ -1345,22 +1299,13 @@ async def run_paper_copilot(
         "prompt": prompt,
         "termination_reason": termination_reason,
         "report_markdown": report_markdown,
-        "evidence_refs": evidence_refs,
         "tool_names": list(tool_names),
         "cost": asdict(cost.snapshot()),
         "paper_budget": _paper_budget_payload(context),
         "termination_summary": asdict(termination_summary),
         "skill": research_skill.trace_attributes(),
-        "research_citations": evidence_refs,
-        "research_scope": {
-            "persistent_exclusions": [
-                exclusion.model_dump(mode="json")
-                for exclusion in research_exclusions.values()
-            ],
-        },
+        "citation_targets": citation_targets,
     }
-    if quality is not None:
-        final_payload["quality"] = quality
     if composer_used:
         final_payload["composer_plan"] = context.composer_plan.to_payload()
     if proposal_check is not None:
@@ -1378,6 +1323,7 @@ async def run_paper_copilot(
         events=tuple(events),
         tool_names=tool_names,
         composer_used=composer_used,
+        citation_targets=citation_targets,
         final_payload=final_payload,
         conversation_compaction=conversation_compaction,
     )
@@ -1617,11 +1563,6 @@ def _tool_schema_templates() -> list[dict[str, Any]]:
             InspectPageInput,
         ),
         _tool_schema(
-            "update_research_scope",
-            update_research_scope_tool_description(),
-            UpdateResearchScopeInput,
-        ),
-        _tool_schema(
             "paper_set",
             paper_set_tool_description(),
             PaperSetInput,
@@ -1656,7 +1597,6 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "library_exec": LibraryExecInput,
         "read_page": ReadPageInput,
         "inspect_page": InspectPageInput,
-        "update_research_scope": UpdateResearchScopeInput,
         "paper_set": PaperSetInput,
         "library_edit": LibraryEditInput,
         "notes_patch": NotesPatchInput,
@@ -1678,7 +1618,6 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "library_exec": frozenset({"read_library", "execute_command"}),
         "read_page": frozenset({"read_library"}),
         "inspect_page": frozenset({"read_library"}),
-        "update_research_scope": frozenset({"read_library", "update_job_state"}),
         "paper_set": frozenset({"read_library", "update_job_state"}),
         "library_edit": frozenset({"read_library", "write_library"}),
         "notes_patch": frozenset({"read_library", "write_library"}),
@@ -1692,7 +1631,6 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "library_exec": 64_000,
         "read_page": 40_000,
         "inspect_page": 16_000,
-        "update_research_scope": 40_000,
         "paper_set": 40_000,
         "library_edit": 40_000,
         "notes_patch": 40_000,
@@ -1804,10 +1742,6 @@ def _dispatch_parsed_tool(
             return _err("inspect_page requires the asynchronous tool dispatcher")
         case "paper_set":
             return _err("paper_set requires the asynchronous tool dispatcher")
-        case "update_research_scope":
-            return _err(
-                "update_research_scope requires the asynchronous tool dispatcher"
-            )
         case "library_edit":
             return _ok(
                 run_library_edit(
@@ -1840,7 +1774,6 @@ async def dispatch_paper_copilot_tool_async(
     store: SessionStore | None = None,
     data_root: Path | None = None,
     active_papers: dict[str, ActivePaperSnapshot] | None = None,
-    research_exclusions: dict[str, ResearchScopeExclusion] | None = None,
     approval_review_callback: ToolApprovalReviewCallback | None = None,
 ) -> ToolResultData:
     if req.name not in _MODEL_TOOL_NAMES:
@@ -1980,30 +1913,6 @@ async def dispatch_paper_copilot_tool_async(
                 inspect_page_run.output,
                 images=inspect_page_run.images,
                 trace_attributes=inspect_page_run.trace_attributes,
-            )
-        elif req.name == "update_research_scope":
-            if store is None:
-                return _err("update_research_scope requires an active session")
-            scope_output = run_update_research_scope(
-                cast(UpdateResearchScopeInput, parsed_input),
-                store=store,
-                active_papers=active_papers or {},
-                evidence_facts=load_page_evidence(store),
-                existing_exclusions=(
-                    research_exclusions if research_exclusions is not None else {}
-                ),
-            )
-            tool_result = _ok(
-                scope_output,
-                trace_attributes={
-                    "research_scope_schema_version": 1,
-                    "newly_excluded_paper_count": len(
-                        scope_output["newly_excluded_paper_ids"]
-                    ),
-                    "persistent_excluded_paper_count": len(
-                        scope_output["persistent_excluded_paper_ids"]
-                    ),
-                },
             )
         elif req.name == "paper_set":
             if store is None:
@@ -3643,102 +3552,6 @@ def _last_tool_error(events: list[Event]) -> dict[str, Any] | None:
     return None
 
 
-def _quality_summary(
-    report_markdown: str,
-    evidence_refs: list[dict[str, Any]],
-    *,
-    active_paper_count: int,
-) -> dict[str, Any]:
-    findings_text = _quality_claim_section(report_markdown)
-    findings_claims = _claim_units(findings_text)
-    valid_raw_refs = {
-        item["raw"] for item in evidence_refs if isinstance(item.get("raw"), str)
-    }
-    findings_inline_ref_count = sum(raw in findings_text for raw in valid_raw_refs)
-    findings_claim_count = len(findings_claims)
-    evidence_ref_count = len(evidence_refs)
-    cited_paper_ids = {
-        item["pdf_sha256"]
-        for item in evidence_refs
-        if isinstance(item.get("pdf_sha256"), str)
-    }
-    coverage_ratio = (
-        min(1.0, evidence_ref_count / findings_claim_count)
-        if findings_claim_count
-        else 0.0
-    )
-
-    return {
-        "method": "heuristic_v3_unvalidated",
-        "citation_validation": "not_run",
-        "evidence_ref_count": evidence_ref_count,
-        "invalid_evidence_ref_count": None,
-        "findings_claim_count": findings_claim_count,
-        "findings_inline_ref_count": findings_inline_ref_count,
-        "claims_without_refs_count": max(0, findings_claim_count - evidence_ref_count),
-        "evidence_coverage_ratio": coverage_ratio,
-        "active_set_citation_coverage_ratio": (
-            len(cited_paper_ids) / active_paper_count
-            if active_paper_count
-            else 0.0
-        ),
-    }
-
-
-def _quality_claim_section(report_markdown: str) -> str:
-    for title in (
-        "Findings",
-        "Proposed Composition",
-        "Idea",
-        "Why It Might Work",
-        "组合方案",
-        "核心方案",
-        "创新点",
-        "为什么可行",
-        "候选模块",
-    ):
-        section = _markdown_section(report_markdown, title)
-        if section:
-            return section
-    return ""
-
-
-def _markdown_section(markdown: str, title: str) -> str:
-    heading = re.search(
-        rf"^##[ \t]+{re.escape(title)}[ \t]*$",
-        markdown,
-        flags=re.IGNORECASE | re.MULTILINE,
-    )
-    if heading is None:
-        return ""
-
-    start = heading.end()
-    next_heading = re.search(r"^##[ \t]+", markdown[start:], flags=re.MULTILINE)
-    end = start + next_heading.start() if next_heading is not None else len(markdown)
-    return markdown[start:end].strip()
-
-
-def _claim_units(section_text: str) -> list[str]:
-    lines = [line.strip() for line in section_text.splitlines()]
-    bullets = [line for line in lines if re.match(r"^[-*]\s+\S", line)]
-    if bullets:
-        return bullets
-
-    paragraphs = [
-        paragraph.strip()
-        for paragraph in re.split(r"\n\s*\n", section_text)
-        if paragraph.strip()
-    ]
-    claims: list[str] = []
-    for paragraph in paragraphs:
-        claims.extend(
-            sentence.strip()
-            for sentence in _CLAIM_BOUNDARY_RE.split(paragraph)
-            if sentence.strip()
-        )
-    return claims
-
-
 def _tool_schema(name: str, description: str, model: type[BaseModel]) -> dict[str, Any]:
     return {
         "name": name,
@@ -3913,7 +3726,6 @@ def _build_initial_messages(
     *,
     research_skill: ResearchSkill | None = None,
     cache_context_fragment: str | None = None,
-    scope_context_fragment: str | None = None,
 ) -> list[dict[str, Any]]:
     active_skill = (
         research_skill if research_skill is not None else load_research_skill()
@@ -3924,8 +3736,6 @@ def _build_initial_messages(
     ]
     if cache_context_fragment is not None:
         content.append({"type": "text", "text": cache_context_fragment})
-    if scope_context_fragment is not None:
-        content.append({"type": "text", "text": scope_context_fragment})
     if conversation_context is not None:
         content.append({"type": "text", "text": conversation_context})
     content.append({"type": "text", "text": prompt})
@@ -3943,7 +3753,6 @@ def _append_resume_turn(
     runtime_context: str,
     research_skill: ResearchSkill | None = None,
     cache_context_fragment: str | None = None,
-    scope_context_fragment: str | None = None,
     conversation_context: str | None,
     continuation_prompt: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -3958,10 +3767,6 @@ def _append_resume_turn(
     if cache_context_fragment is not None:
         continuation_blocks.append(
             {"type": "text", "text": cache_context_fragment}
-        )
-    if scope_context_fragment is not None:
-        continuation_blocks.append(
-            {"type": "text", "text": scope_context_fragment}
         )
     if conversation_context is not None and continuation_prompt is None:
         continuation_blocks.append({"type": "text", "text": conversation_context})
