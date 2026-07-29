@@ -589,7 +589,13 @@ private struct JobTurnView: View {
 
             if job.result == nil, let answer = streamingAnswer,
                !answer.text.isEmpty {
-                StreamingActivityText(text: answer.text)
+                StreamingActivityText(
+                    text: answer.text,
+                    isFinalized: answer.phase != .started
+                        && answer.phase != .delta,
+                    pdfDirectory: job.spec.pdfDir,
+                    citationTargets: [:]
+                )
             }
 
             if let approval = job.pendingApproval {
@@ -1806,13 +1812,119 @@ private struct ReasoningTranscriptText: View {
 
 private struct StreamingActivityText: View {
     let text: String
+    let isFinalized: Bool
+    var pdfDirectory: String? = nil
+    var citationTargets: [String: String] = [:]
+    @State private var stream: StreamingMarkdownAccumulator
+
+    init(
+        text: String,
+        isFinalized: Bool = false,
+        pdfDirectory: String? = nil,
+        citationTargets: [String: String] = [:]
+    ) {
+        self.text = text
+        self.isFinalized = isFinalized
+        self.pdfDirectory = pdfDirectory
+        self.citationTargets = citationTargets
+        var stream = StreamingMarkdownAccumulator()
+        stream.receive(text)
+        if isFinalized {
+            stream.finalize()
+        }
+        stream.advanceFrame()
+        _stream = State(initialValue: stream)
+    }
 
     var body: some View {
-        Text(text)
-            .font(.body)
-            .foregroundStyle(.primary)
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 4)
+        Group {
+            if !stream.displayedSource.isEmpty {
+                MarkdownReportView(
+                    markdown: stream.displayedSource,
+                    pdfDirectory: pdfDirectory,
+                    citationTargets: citationTargets
+                )
+            }
+        }
+        .onChange(of: text) { updatedText in
+            stream.receive(updatedText)
+            if isFinalized {
+                stream.finalize()
+            }
+        }
+        .onChange(of: isFinalized) { finalized in
+            if finalized {
+                stream.finalize()
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 33_000_000)
+                if stream.hasPendingSource {
+                    stream.advanceFrame()
+                }
+            }
+        }
+    }
+}
+
+private struct StreamingMarkdownAccumulator {
+    private static let catchUpLineThreshold = 8
+
+    private(set) var displayedSource = ""
+    private var receivedSource = ""
+    private var incompleteSource = ""
+    private var pendingSourceLines: [String] = []
+
+    var hasPendingSource: Bool {
+        !pendingSourceLines.isEmpty
+    }
+
+    mutating func receive(_ source: String) {
+        guard source.hasPrefix(receivedSource) else {
+            reset()
+            append(source)
+            return
+        }
+        append(String(source.dropFirst(receivedSource.count)))
+    }
+
+    mutating func finalize() {
+        guard !incompleteSource.isEmpty else {
+            return
+        }
+        pendingSourceLines.append(incompleteSource)
+        incompleteSource = ""
+    }
+
+    mutating func advanceFrame() {
+        guard !pendingSourceLines.isEmpty else {
+            return
+        }
+        let lineCount = pendingSourceLines.count >= Self.catchUpLineThreshold
+            ? pendingSourceLines.count
+            : 1
+        displayedSource += pendingSourceLines.prefix(lineCount).joined()
+        pendingSourceLines.removeFirst(lineCount)
+    }
+
+    private mutating func append(_ delta: String) {
+        guard !delta.isEmpty else {
+            return
+        }
+        receivedSource += delta
+        incompleteSource += delta
+        while let newline = incompleteSource.firstIndex(of: "\n") {
+            let lineEnd = incompleteSource.index(after: newline)
+            pendingSourceLines.append(String(incompleteSource[..<lineEnd]))
+            incompleteSource.removeSubrange(..<lineEnd)
+        }
+    }
+
+    private mutating func reset() {
+        displayedSource = ""
+        receivedSource = ""
+        incompleteSource = ""
+        pendingSourceLines.removeAll(keepingCapacity: true)
     }
 }

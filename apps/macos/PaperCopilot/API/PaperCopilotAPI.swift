@@ -1,4 +1,4 @@
-import Foundation
+ import Foundation
 
 final class PaperCopilotAPI {
     private struct ErrorEnvelope: Decodable {
