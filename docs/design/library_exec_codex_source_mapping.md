@@ -1,7 +1,7 @@
 # `library_exec` Codex 源码映射
 
-状态：Slice 2 Runtime 与 `.app` 打包验收通过
-日期：2026-07-27  
+状态：现有 Runtime 已实施；Codex 执行反馈对齐为下一待实施 bounded slice
+日期：2026-07-31
 Codex source ref：`61a44880a85d2fd0d8770908dea5733495e571c8`  
 Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地修改
 
@@ -134,3 +134,78 @@ Codex 没有 Paper Copilot 的论文授权、内容寻址 cache 和应用内引�
 这保留了 Paper Copilot 的确定性缓存、页码证据和引用边界，同时消除模型拼接长缓存路径
 和逐论文启动命令的主要协调成本。是否实际降低工具调用和 token，仍需在同一冻结问题集
 上做受控评测；本实现本身不把预期收益记为已验证结论。
+
+## 6. 2026-07-31 工具调用粒度诊断
+
+### 6.1 运行证据
+
+同一 `deepseek-v4-pro`、reasoning effort `max` 的既有 trace 显示：
+
+- Codex CLI 共 19 次原生 function call，其中 2 次环境发现、17 次论文研究；
+- Paper Copilot 禁用 Skill 的当前实现共 59 次 `library_exec`；
+- Codex 每次工具输出平均 11142 字符，PC 平均 5035 字符；
+- PC 总工具输出更多，但按“定位—局部读取—修正范围—再次读取”分散在更多轮次；
+- PC 没有权限或协议失败，现有通用 shell、循环、管道、`pdftotext` 和受控 Python
+  已足以表达跨论文批处理；
+- Codex 的较少调用同时伴随 UDA 误判和 T03 漏项，不能把最低调用数直接等同于更强
+  Agent。
+
+当前 PC 存在两个具体容量差异：
+
+1. `LibraryExecInput.max_output_tokens` 默认和硬上限均为 10000；
+2. `LibraryEnvironment` 在模型侧 token 截断之前，先以 64000 bytes 的 head-tail
+   buffer 收集原始输出。
+
+最新 V4 Pro 运行中已有一次命令在第二层省略 88810 bytes。因此只修改 prompt 或仅提高
+schema 上限都不能验证 Codex 式批量读取；底层收集和模型侧截断必须作为同一协议切片
+处理。
+
+### 6.2 固定 Codex 源码依据
+
+固定源码 `fe01054a28fa4bd04716d9ceadb410f2443a50ce`：
+
+- `core/src/tools/handlers/shell_spec.rs`：`exec_command` 与 `write_stdin` 暴露
+  `max_output_tokens`，描述为较大请求可由 policy 限制，而不是在 schema 中固定
+  10000 上限；
+- `core/src/tools/context.rs::ExecCommandToolOutput::response_text`：模型可见结果按
+  chunk、wall time、exit/session、original token count 和 output 组成稳定文本；
+- `ExecCommandToolOutput::truncated_output`：token 截断与底层 collection omission
+  分别标记，不静默把两者合并；
+- `core/src/unified_exec/process_manager.rs`：completed 与 yielded 共享 output
+  collection metadata，并由 `write_stdin` 返回后续增量。
+
+### 6.3 下一 bounded slice
+
+目标是让同一模型获得与 Codex 等价的执行反馈和批量证据带宽，不追求固定调用次数。
+
+实施范围：
+
+1. 将 `library_exec` / `library_write_stdin` 的模型可见结果改为固定 Codex 的文本分节
+   语义；结构化 sandbox identity、命令解析和授权信息继续只进入权威 trace；
+2. 采用 Codex 的 `max_output_tokens` policy 形态，允许较大请求由 Runtime policy
+   限制，不在 Pydantic schema 中把最大值固定为默认值；
+3. 联动调整原始 output collection，使其容量与模型侧 token budget 一致，并继续
+   暴露准确的 `original_token_count`、collection omitted bytes 和截断 marker；
+4. 保留 PC 的必要领域边界：固定 logical cwd、只读 `library/cache/papers`、仅
+   `scratch` 可写、无网络、无权限升级、无 PTY/login shell/任意 workdir；
+5. 用简洁环境事实声明现有 `pdftotext` 和受控 Python 可用于批处理，不增加论文专用
+   搜索、待办或 Query 模板。
+
+非目标：
+
+- 不设置工具调用硬预算或强制一次读取多少篇论文；
+- 不针对冻结四轮 Query、Gold claim 或论文名称编码工作流；
+- 不修改模型、reasoning effort、Skill、provider wire、cache 格式或引用合同；
+- 不以取消 sandbox 换取调用数；
+- 不在同一 slice 调整 system prompt 的研究策略。
+
+Definition of Done：
+
+- completed、yielded 和 poll 的模型可见字段与固定 Codex 语义逐项映射；
+- 大批量命令不会在模型侧 token policy 之前被未说明的 64 KB 上限静默截断；
+- collection omission 与模型侧 token truncation 可在 trace 和模型反馈中区分；
+- 现有授权、网络和写入边界不扩大；
+- 实施状态保持“未完成”，直到代码、经用户要求的验证和隔离评测分别完成。
+
+评测主门槛为二选一：质量超过 Codex CLI，或在质量不下降时 total tokens 低于 Codex
+CLI。工具调用数和平均输出/调用只作为机制诊断；单次运行不作显著性结论。

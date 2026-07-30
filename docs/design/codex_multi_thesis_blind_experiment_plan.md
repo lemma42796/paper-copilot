@@ -277,9 +277,21 @@ Runtime/System Prompt。结果为 71.8% strict、77.5% weighted、87.3% coverage
 基线还使用旧 Agent/Runtime/工具表面。其工具调用数与历史基线同为 62，支持“高调用数
 还来自模型的逐论文检索策略”，不支持“禁用 Skill 自然减少工具调用”的推断。
 
-这些结果只有一次运行，属于描述性工作评分，不能用于统计显著性结论。用户已取消独立
-评分复核，也不再次运行相同四轮。下一任务使用同一 DeepSeek V4 Pro 的两套既有运行，
-只读研究 Codex CLI 与 Paper Copilot Agent 差距的产生位置。
+2026-07-30 随后在相同提交 `46d048c`、相同禁用 Skill runner 上只把模型配置切换为
+DeepSeek V4 Pro/max，完成单次连续四轮运行。结果为 76.1% strict、80.3% weighted、
+85.9% coverage；63 次模型调用、59 次 `library_exec`、4872896 total tokens、
+0.787 元。完整产物位于
+`runs/paper-copilot-v4-pro-no-skill-max/formal-single-2026-07-30/`。
+
+与既有 Codex CLI + V4 Pro/max trace 比较，Codex 有 19 次原生 function call
+（2 次环境发现、17 次研究），PC 有 59 次研究命令。该对照确认提高模型档位和禁用
+Skill 都没有自然形成 Codex 的调用粒度；PC 的单次输出带宽、执行反馈协议和检索路径
+仍是下一步机制变量。详细诊断与拟议切片只记录在
+`library_exec_codex_source_mapping.md`，本实验协议不把它写成已实施改造。
+
+这些结果都只有一次运行，属于描述性工作评分，不能用于统计显著性结论。用户已取消
+独立评分复核，也不再次运行相同四轮。后续只有在完成单变量 bounded slice 并明确授权
+后，才创建新的隔离会话评测。
 
 本轮具体指标和产物路径见：
 

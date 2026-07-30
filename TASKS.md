@@ -4,7 +4,7 @@
 > [AGENTS.md](AGENTS.md)，当前架构见 [ARCHITECTURE.md](ARCHITECTURE.md)，详细设计见
 > [docs/design/](docs/design/)，历史实现过程见 Git。
 
-更新于 2026-07-30。
+更新于 2026-07-31。
 
 ## 1. 当前方向
 
@@ -24,9 +24,9 @@ Server 复用同一 Python Core。
 Environment、E4 Controlled Python、E5 Tool Registry 与 E7 Skill Registry /
 On-demand Loading 均已写入工作区；Codex 式跨论文批量研究视图也已写入工作区。
 2026-07-30 快速验证覆盖 session、recovery、Agent、chat 与当前工具 schema，共
-45/45 通过；macOS Debug 构建成功。随后完成一次禁用 Skill 的 V4 Flash 单次四轮
-诊断运行。尚未运行完整测试、完整工具协议集，亦未完成当前实现的同模型、同代码、
-仅切换 Skill 的成对消融。
+45/45 通过；macOS Debug 构建成功。随后完成禁用 Skill 的 V4 Flash/high 和
+V4 Pro/max 单次四轮诊断运行。尚未运行完整测试、完整工具协议集，亦未完成当前实现
+启用/禁用 Skill 的严格成对消融。
 
 目标：以固定 Codex 源码 `fe01054a28fa4bd04716d9ceadb410f2443a50ce` 为真源，把
 Agent 的 session、上下文、执行环境、工具 registry、provider wire 与 Skill 生命周期
@@ -239,10 +239,52 @@ Codex CLI + DeepSeek V4 Pro 单次四轮结果：
 - 不修改模型、依赖、API、MCP 或缓存格式；
 - 不删除旧实现。
 
+### 2.2 当前重点：Codex 式工具调用粒度
+
+状态：诊断与下一 bounded slice 已记录，尚未实施代码改造或重跑。
+
+2026-07-30 在提交 `46d048c` 上完成禁用 Skill、DeepSeek V4 Pro、reasoning
+effort `max` 的全新连续四轮运行：
+
+- conversation 为 `conversation-20260730T153015-a2f7ff3237`，4/4 正常完成；
+- 63 次模型调用、59 次 `library_exec`、0 次 `load_skill`，没有权限或工具协议错误；
+- total tokens 4872896，费用 0.787 元；
+- Gold revision 2 单次工作评分为 76.1% strict、80.3% weighted、85.9% coverage；
+- 一次宽查询在底层 bounded buffer 中省略 88810 bytes，证明当前批量输出容量会影响
+  模型可见证据；
+- 与 Codex CLI + 同一 V4 Pro/max 相比，质量接近，但 PC 使用更多工具调用和 token。
+
+权威 trace 复核显示，Codex CLI 有 19 次原生 function call，其中 2 次用于环境发现、
+17 次用于论文研究；Paper Copilot 有 59 次研究命令。两边工具输出的描述性统计为：
+
+| 系统 | 调用数 | 总输出字符 | 平均字符/调用 | 中位数 | 最大值 |
+|---|---:|---:|---:|---:|---:|
+| Codex CLI + V4 Pro/max | 19 | 211704 | 11142 | 5055 | 58930 |
+| Paper Copilot + V4 Pro/max/no Skill | 59 | 297086 | 5035 | 2350 | 32544 |
+
+因此当前证据不支持“缺少通用 shell”或“安全拒绝导致高调用数”：PC 已提供循环、管道、
+`rg`、`pdftotext` 和受控 Python，本轮也没有 sandbox denial。主要可检验差异是
+`library_exec` 的模型可见结果协议、输出预算与底层收集容量，以及产品 Runtime 文本对
+检索路径的影响。Codex 的低调用数也包含少读导致的遗漏，不能把调用次数本身作为质量
+目标。
+
+下一 bounded slice 只对齐 `library_exec` / `library_write_stdin` 的 Codex 执行反馈：
+
+1. 按固定 Codex 源码对齐模型可见 completed/yielded 文本结构与截断提示；
+2. 联动调整 `max_output_tokens` 策略和原始输出收集，避免只提高 schema 上限却仍在
+   64 KB buffer 中提前丢失正文；
+3. 保持固定 logical cwd、只读论文根、scratch-only 写入、无网络和无权限升级；
+4. 不同时修改模型、Skill、provider、引用合同或增加论文 Query 专用工具；
+5. 实施后才做同提交、同模型、同配置的隔离评测。主要目标是质量超过 Codex CLI，或
+   在质量不下降的前提下 total tokens 低于 Codex CLI；调用数只作诊断指标。
+
+详细源码映射、非目标和验收门见
+[library_exec_codex_source_mapping.md](docs/design/library_exec_codex_source_mapping.md)。
+
 主计划见 [tool_system_v2_plan.md](docs/design/tool_system_v2_plan.md)，实验协议见
 [codex_multi_thesis_blind_experiment_plan.md](docs/design/codex_multi_thesis_blind_experiment_plan.md)。
 
-### 2.2 E4–E7 实施与边界决策
+### 2.3 E4–E7 实施与边界决策
 
 - **E4 Controlled Python：** `library_exec` 新增受控 Python；继承同一 Seatbelt、
   logical cwd、process store 和 bounded output，只读标准库/library/cache，只写
