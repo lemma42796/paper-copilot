@@ -233,7 +233,7 @@ private struct ModelEditorContext: Identifiable {
                 cacheCreationPricePerMillion: 0,
                 cacheHitPricePerMillion: 0,
                 outputPricePerMillion: 0,
-                thinkingProtocol: .qwen,
+                thinkingProtocol: nil,
                 reasoningEffort: .high,
                 inputModalities: [.text, .image],
                 isEnabled: true
@@ -269,15 +269,23 @@ private struct ModelEditorView: View {
                     TextField("厂商名称", text: $configuration.providerName)
                     TextField("Model ID", text: $configuration.modelID)
                     TextField("API Base URL", text: $configuration.baseURL)
+                    if configuration.baseURL.contains("{WorkspaceId}") {
+                        Text("请将 {WorkspaceId} 替换为阿里云百炼业务空间 ID")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     SecureField("API Key", text: $apiKey)
-                    Picker(
-                        "Thinking 协议",
-                        selection: $configuration.thinkingProtocol
-                    ) {
-                        ForEach(ModelThinkingProtocol.allCases) { protocolType in
-                            Text(protocolType.displayName)
-                                .tag(Optional(protocolType))
-                        }
+                    LabeledContent("Thinking 协议") {
+                        Text(
+                            configuration.effectiveThinkingProtocol?
+                                .displayName
+                                ?? "根据 Model ID 和 Base URL 自动识别"
+                        )
+                        .foregroundStyle(
+                            configuration.effectiveThinkingProtocol == nil
+                                ? .secondary
+                                : .primary
+                        )
                     }
                     Picker(
                         configuration.reasoningControlTitle,

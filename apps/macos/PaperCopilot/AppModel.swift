@@ -630,8 +630,7 @@ final class AppModel: ObservableObject {
                 .map(\.rawValue)
                 .joined(separator: ","),
         ]
-        let selectedHost = URL(string: selectedModel.baseURL)?.host ?? ""
-        let dashscopeAPIKey = selectedHost.contains("dashscope.aliyuncs.com")
+        let dashscopeAPIKey = selectedModel.isDashScopeEndpoint
             ? providerKey
             : try credentialStore.read(.dashscopeAPIKey)
         if !dashscopeAPIKey.isEmpty {
@@ -659,7 +658,9 @@ final class AppModel: ObservableObject {
         )
         let legacyModelID = defaults.string(forKey: "llmModel")
         if qwenWasEnabled || legacyModelID == "qwen3.6-flash" {
-            let qwen = ModelConfiguration.qwen36Flash()
+            var qwen = ModelConfiguration.qwen36Flash()
+            qwen.baseURL =
+                "https://dashscope.aliyuncs.com/compatible-mode/v1"
             try modelStore.save([qwen])
             modelStore.saveSelectedID(qwen.id)
         }

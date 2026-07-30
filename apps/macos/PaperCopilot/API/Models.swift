@@ -196,8 +196,21 @@ struct ModelConfiguration: Codable, Identifiable, Equatable {
         effectiveInputModalities.contains(.image)
     }
 
+    var isDashScopeEndpoint: Bool {
+        guard let host = URL(string: baseURL)?.host?.lowercased() else {
+            return false
+        }
+        return host == "dashscope.aliyuncs.com"
+            || (
+                host.hasPrefix("dashscope-")
+                    && host.hasSuffix(".aliyuncs.com")
+            )
+            || host.hasSuffix(".maas.aliyuncs.com")
+    }
+
     var hasValidEndpoint: Bool {
         guard
+            !baseURL.contains("{WorkspaceId}"),
             let components = URLComponents(string: baseURL),
             let scheme = components.scheme?.lowercased(),
             scheme == "https" || scheme == "http",
@@ -223,22 +236,19 @@ struct ModelConfiguration: Codable, Identifiable, Equatable {
     }
 
     var effectiveThinkingProtocol: ModelThinkingProtocol? {
-        if let thinkingProtocol {
-            return thinkingProtocol
-        }
         let normalizedModel = modelID.lowercased()
-        let host = URL(string: baseURL)?.host?.lowercased() ?? ""
         if normalizedModel.hasPrefix("qwen")
-            || host.contains("dashscope.aliyuncs.com")
+            || isDashScopeEndpoint
         {
             return .qwen
         }
+        let host = URL(string: baseURL)?.host?.lowercased() ?? ""
         if normalizedModel.hasPrefix("deepseek")
             || host.contains("deepseek.com")
         {
             return .deepSeek
         }
-        return nil
+        return thinkingProtocol
     }
 
     var availableReasoningEfforts: [ReasoningEffort] {
@@ -280,7 +290,8 @@ struct ModelConfiguration: Codable, Identifiable, Equatable {
             displayName: "Qwen 3.6 Flash",
             providerName: "阿里云百炼",
             modelID: "qwen3.6-flash",
-            baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            baseURL:
+                "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
             inputPricePerMillion: 1.2,
             cacheCreationPricePerMillion: 1.5,
             cacheHitPricePerMillion: 0.12,

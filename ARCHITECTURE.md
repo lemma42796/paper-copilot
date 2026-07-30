@@ -207,6 +207,8 @@ Embedding 当前固定为 DashScope `text-embedding-v4`、1024 维；模型或�
 ## 8. 模型与上下文
 
 - 所有 LLM 调用经过 `agents/llm_client.py`。
+- 阿里云百炼 OpenAI 兼容 Chat 的地域端点、业务空间专属域名和迁移说明见
+  [aliyun_bailian_openai_chat.md](docs/design/aliyun_bailian_openai_chat.md)。
 - 一次任务使用客户端选择的同一模型，不做模型分层。
 - 主 Agent 和回答修复不设置客户端 `max_tokens`；有界专用调用可按契约设置。
 - OpenAI-compatible endpoint 必须支持所选 Thinking 与流式协议，不能静默退化。

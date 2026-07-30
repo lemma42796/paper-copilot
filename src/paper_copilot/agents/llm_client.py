@@ -212,7 +212,7 @@ class LLMClient:
             "/"
         )
         self._endpoint = _chat_completions_endpoint(self._base_url)
-        self._is_dashscope = "dashscope.aliyuncs.com" in (urlparse(self._base_url).hostname or "")
+        self._is_dashscope = _is_dashscope_base_url(self._base_url)
         self._thinking_protocol = _thinking_protocol(self._base_url, DEFAULT_MODEL)
         self._reasoning_effort = _reasoning_effort()
         self._api_key = api_key or os.environ.get("LLM_API_KEY")
@@ -335,10 +335,10 @@ def _thinking_protocol(base_url: str, model: str) -> ThinkingProtocol:
         raise AgentError(
             "LLM_THINKING_PROTOCOL must be either 'qwen' or 'deepseek'"
         )
-    hostname = urlparse(base_url).hostname or ""
     normalized_model = model.lower()
-    if "dashscope.aliyuncs.com" in hostname or normalized_model.startswith("qwen"):
+    if _is_dashscope_base_url(base_url) or normalized_model.startswith("qwen"):
         return "qwen"
+    hostname = urlparse(base_url).hostname or ""
     if "deepseek" in hostname or normalized_model.startswith("deepseek"):
         return "deepseek"
     raise AgentError(
@@ -354,6 +354,18 @@ def _reasoning_effort() -> ReasoningEffort:
     raise AgentError(
         "LLM_REASONING_EFFORT must be one of "
         "'low', 'medium', 'high', 'xhigh', or 'max'"
+    )
+
+
+def _is_dashscope_base_url(base_url: str) -> bool:
+    hostname = (urlparse(base_url).hostname or "").lower()
+    return (
+        hostname == "dashscope.aliyuncs.com"
+        or (
+            hostname.startswith("dashscope-")
+            and hostname.endswith(".aliyuncs.com")
+        )
+        or hostname.endswith(".maas.aliyuncs.com")
     )
 
 
