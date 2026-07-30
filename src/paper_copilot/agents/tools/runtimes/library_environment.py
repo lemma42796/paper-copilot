@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import atexit
 import asyncio
+import hashlib
+import json
 import os
 import signal
 import subprocess
@@ -28,6 +30,23 @@ class LibraryProcessOutput:
     wall_time_seconds: float
     output_omitted_bytes: int
     total_output_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class LibraryResearchPaper:
+    alias: str
+    source_locator: str
+    text_source: Path
+    page_count: int
+    citation_base: str
+
+    def manifest_payload(self) -> dict[str, str | int]:
+        return {
+            "pdf": f"library/{self.source_locator}",
+            "text": f"papers/{self.alias}",
+            "pages": self.page_count,
+            "citation_base": self.citation_base,
+        }
 
 
 class _ChunkBuffer:
@@ -142,6 +161,39 @@ class LibraryEnvironment:
         self._process_lock = threading.Lock()
         self._processes: dict[str, _ManagedProcess] = {}
         self._configured_roots: tuple[Path, Path] | None = None
+
+    def configure_research_view(
+        self,
+        papers: tuple[LibraryResearchPaper, ...],
+    ) -> str:
+        with self._configuration_lock:
+            self._ensure_directory(self.root)
+            self._ensure_directory(self.workspace)
+            papers_directory = self.workspace / "papers"
+            manifests_directory = self.workspace / "research-manifests"
+            self._ensure_directory(papers_directory)
+            self._ensure_directory(manifests_directory)
+            for paper in papers:
+                self._ensure_symlink(
+                    papers_directory / paper.alias,
+                    paper.text_source,
+                )
+            manifest = "".join(
+                json.dumps(
+                    paper.manifest_payload(),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n"
+                for paper in papers
+            ).encode()
+            manifest_digest = hashlib.sha256(manifest).hexdigest()[:16]
+            manifest_path = (
+                manifests_directory
+                / f"manifest-{manifest_digest}.jsonl"
+            )
+            self._ensure_immutable_file(manifest_path, manifest)
+        return manifest_path.relative_to(self.workspace).as_posix()
 
     def configure(
         self,
@@ -323,6 +375,21 @@ class LibraryEnvironment:
                 f"library environment path is not a symlink: {link.name}"
             )
         link.symlink_to(target, target_is_directory=target.is_dir())
+
+    @staticmethod
+    def _ensure_immutable_file(path: Path, content: bytes) -> None:
+        if path.is_symlink():
+            raise KnowledgeError(
+                f"library environment file must not be a symlink: {path.name}"
+            )
+        if path.exists():
+            if not path.is_file() or path.read_bytes() != content:
+                raise KnowledgeError(
+                    f"library environment file content changed: {path.name}"
+                )
+            return
+        with path.open("xb") as stream:
+            stream.write(content)
 
     @staticmethod
     def _ensure_directory(path: Path) -> None:

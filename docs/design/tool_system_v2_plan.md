@@ -59,7 +59,7 @@ broker 命令。模型直接读取 `research_cache_index` 给出的逻辑缓存�
 | 3 论文研究 Skill | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
 | 4 `inspect_page` | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
 | 5 `paper_set` | 历史兼容，不再模型可见 | `paper_set_codex_source_mapping.md` |
-| 6 公开工具切换 | 已切换为按能力暴露的统一 registry；当前最多五工具，新增部分未验证 | `agent_infrastructure_codex_source_mapping.md` |
+| 6 公开工具切换 | 已切换为按能力暴露的统一 registry；当前最多五工具；快速测试 45/45 通过 | `agent_infrastructure_codex_source_mapping.md` |
 | 7 冻结评测 | 三套目标系统单次四轮均完成并形成工作评分；独立复核已取消，结果仅作诊断输入 | `codex_multi_thesis_blind_experiment_plan.md` |
 | 8 删除旧实现 | 未开始 | 仅在 Slice 7 通过并获确认后执行 |
 

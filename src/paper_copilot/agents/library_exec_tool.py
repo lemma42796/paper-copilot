@@ -63,8 +63,9 @@ class LibraryExecInput(BaseModel):
         max_length=_COMMAND_MAX_CHARS,
         description=(
             "Shell command to run in a bounded Codex-style sandbox. The fixed logical "
-            "working directory contains read-only library/ and cache/ roots plus a "
-            "writable scratch/ directory. Network access and reads outside the "
+            "working directory contains read-only library/, cache/, and papers/ roots, "
+            "read-only research-manifests/, plus a writable scratch/ directory. "
+            "Network access and reads outside the "
             "authorized roots are blocked."
         ),
     )
@@ -167,7 +168,9 @@ def library_exec_tool_description() -> str:
     return (
         "Run a bounded command in a Codex-style macOS sandbox. The fixed logical "
         "workspace exposes the configured paper library as read-only library/, "
-        "derived text cache as read-only cache/, and only scratch/ as writable "
+        "derived text cache as read-only cache/, short prepared-text aliases as "
+        "read-only papers/, research-manifests/ as their machine-readable indexes, "
+        "and only scratch/ as writable "
         "persistent storage for this conversation. Runtime provides prepared cache paths in "
         "research_cache_index. Read and search those page-delimited text files "
         "directly; the returned command output becomes model-visible evidence. "
@@ -418,7 +421,15 @@ def _resolve_external_commands() -> _ExternalCommandSet:
                 error_type=error.__class__.__name__,
             )
             continue
-        commands.append((command_name, executable))
+        command_aliases = (
+            (command_name, "python3")
+            if command_name == "python"
+            else (command_name,)
+        )
+        commands.extend(
+            (command_alias, executable)
+            for command_alias in command_aliases
+        )
         sandbox_files.update(command_files)
         sandbox_directories.update(path.parent for path in command_files)
         if command_name == "python":

@@ -22,8 +22,11 @@ Server 复用同一 Python Core。
 
 状态：E1 Conversation-owned Session、E2 World State、E3 Unified Library
 Environment、E4 Controlled Python、E5 Tool Registry 与 E7 Skill Registry /
-On-demand Loading 均已写入工作区。按仓库规则尚未运行完整测试、
-工具协议验证、真实 provider smoke 或模型评测。
+On-demand Loading 均已写入工作区；Codex 式跨论文批量研究视图也已写入工作区。
+2026-07-30 快速验证覆盖 session、recovery、Agent、chat 与当前工具 schema，共
+45/45 通过；macOS Debug 构建成功。随后完成一次禁用 Skill 的 V4 Flash 单次四轮
+诊断运行。尚未运行完整测试、完整工具协议集，亦未完成当前实现的同模型、同代码、
+仅切换 Skill 的成对消融。
 
 目标：以固定 Codex 源码 `fe01054a28fa4bd04716d9ceadb410f2443a50ce` 为真源，把
 Agent 的 session、上下文、执行环境、工具 registry、provider wire 与 Skill 生命周期
@@ -39,6 +42,9 @@ Agent 的 session、上下文、执行环境、工具 registry、provider wire �
    store；
 5. 新增 `library_write_stdin`，支持写字符或空写轮询后续输出；
 6. 用户中断和 conversation 删除终止环境内全部进程组。
+7. Runtime 为已准备论文生成内容寻址 JSONL manifest 和短 `papers/*.layout.txt`
+   只读别名；受控 `python3` 与 `python` 等价，Skill 要求跨论文任务先批量发现、再按页
+   聚焦。
 
 Definition of Done：
 
@@ -48,6 +54,7 @@ Definition of Done：
 - completed/yielded 输出使用统一字段；
 - 中断终止整个进程组；
 - 越权读取、library/cache 写入和网络继续被 Seatbelt 阻止。
+- manifest 与短别名不扩大授权范围，原始 cache 路径仍作为内部调用的兼容退路。
 
 详细计划见
 [codex_paper_copilot_agent_gap_investigation.md](docs/design/codex_paper_copilot_agent_gap_investigation.md)。
@@ -92,7 +99,7 @@ Copilot + DeepSeek V4 Pro。
 - 裁决 Gold 中张耀斌论文的监督设定为 UDA，并删除与冻结 Query 冲突的工具自报要求；
 - 生成 Gold revision 2 的三方工作评分；
 - 完成内容寻址 TXT 缓存、`library_exec`、研究 Skill、`inspect_page`、`paper_set` 和
-  四工具公开表面；
+  当时冻结实验使用的四工具公开表面（历史基线，非当前 registry）；
 - 将批量 cache ensure 移到模型循环前的 Runtime preflight；
 - 确认 session 与 lifecycle trace 的 113 个 started call ID 完全一致。
 
@@ -161,6 +168,24 @@ DeepSeek V4 Flash 四轮结果：
 - Query 2 的 Markdown 引用链路可用，Query 3–4 退化为裸页码；
 - 最终 11 篇论文集合正确，但 Query 2 曾错误排除李之赫，Query 4 未做到关键单元格
   逐项可追溯。
+
+当前实现禁用 Skill 的 DeepSeek V4 Flash 单次诊断运行：
+
+- 仅在实验 runner 中隐藏 `load_skill`、Skill catalog 和强制加载指令，不删除产品
+  Skill 实现；保留当前 Runtime、manifest、短论文别名和其他 system prompt；
+- 配置 reasoning effort 为 `low`，但当前 DeepSeek 适配器将所有非 `max` 档记录为
+  effective `high`，因此不能把结果解释为供应商原生最低思考档；
+- conversation 为 `conversation-20260730T144955-133e5806eb`，4/4 正常
+  `end_turn`，总耗时约 227 秒，总费用 0.21706872 元；
+- 25 次模型调用，62 次 `library_exec`，`load_skill` 为 0；uncached input
+  136534、cache read 1534336、output 24924，总 token 1695794；
+- Gold revision 2 单次工作评分：严格正确率 71.8%，加权正确率 77.5%，claim
+  coverage 87.3%；
+- 工具调用总数没有低于历史 V4 Flash 的 62 次。Skill 缺席后模型仍按论文拆分并行
+  读取，说明高调用数不只来自 Skill，也来自模型在通用命令表面上的检索策略；
+- 本轮相对历史 V4 Flash 的质量、费用和耗时均改善，但两次运行之间还包含 Agent、
+  Runtime 和工具表面变化，不能把差异全部归因于禁用 Skill。严格因果判断仍需在当前
+  同一提交上补跑启用 Skill 的成对对照。
 
 Gold revision 2：
 
@@ -254,7 +279,7 @@ Codex CLI + DeepSeek V4 Pro 单次四轮结果：
 | 3 `research-papers` Skill | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
 | 4 `inspect_page` | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
 | 5 `paper_set` 原接口 | 历史兼容，不再模型可见 | `paper_set_codex_source_mapping.md` |
-| 6 公开工具切换 | 当前为 `library_exec/inspect_page/library_edit`；严格采用 Codex 式命令输出历史，尚未运行验证 | `agent_infrastructure_codex_source_mapping.md` |
+| 6 公开工具切换 | 当前按能力最多暴露 `load_skill/library_exec/library_write_stdin/inspect_page/library_edit`；快速测试 45/45 通过 | `agent_infrastructure_codex_source_mapping.md` |
 | 7 冻结评测 | 三套目标系统单次四轮均完成并形成 Gold revision 2 工作评分；独立复核已取消，结果仅作诊断输入 | `codex_multi_thesis_blind_experiment_plan.md` |
 | 8 删除旧实现 | 未开始 | 仅在 Slice 7 通过并获确认后执行 |
 

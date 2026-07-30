@@ -1,7 +1,7 @@
 # Codex CLI 与 Paper Copilot 同模型 Agent 差距根因研究
 
-状态：只读根因分析已完成；固定 900 词上限、固定报告标题和模型可见的页面文本专用读取工具已删除，
-尚未重跑模型验证
+状态：只读根因分析已完成；固定 900 词上限、固定报告标题和模型可见的页面文本专用读取工具已删除；
+已完成一次禁用 Skill 的 V4 Flash 诊断运行，尚缺当前实现启用 Skill 的严格成对对照
 日期：2026-07-30
 文档职责：定义根因研究的问题、证据、分层方法、停止条件和 Definition of Done；不在
 本阶段设计或实施修复。
@@ -275,10 +275,15 @@ T03 深页复核
    绑定率与答案长度；不同时修改工具或上下文。
 2. **Codex 式文本读取表面消融。** 已删除模型可见的 `read_page`/`read_pages`，改为
    仅由 `library_exec` 批量搜索和读取带 PDF 页边界的缓存文本；实际命令输出随完整会话
-   历史保留，不另设文本页面登记或最终引用校验。尚未运行工具协议验证或重跑 T03/T04，
-   因此不能判断深页覆盖和 correct/partial 是否改善。
+   历史保留，不另设文本页面登记或最终引用校验。快速验证 45/45 通过；一次禁用 Skill
+   的 V4 Flash 四轮运行达到 71.8% strict、77.5% weighted、87.3% coverage，但它同时
+   相对历史基线改变了 Agent/Runtime/工具表面，不能单独量化文本读取改造的贡献。
+3. **Skill 可见性消融。** 已在实验 runner 中隐藏 `load_skill`、Skill catalog 和强制
+   加载指令，产品实现未删除。该运行中 Skill 调用为 0，但 62 次工具调用并未低于历史
+   V4 Flash；模型自行采用逐论文并行读取。要判断 Skill 对质量与调用数的净影响，仍需
+   在当前同一提交、同一模型配置上运行启用 Skill 的配对组。
 
-两个实验都必须使用全新隔离会话、同一 Gold revision 2，并分别只改变一个变量。由于
+严格消融必须使用全新隔离会话、同一 Gold revision 2，并分别只改变一个变量。由于
 当前结果是单次工作评分，任何一次改善仍只能作为机制证据，不能宣称统计显著。
 
 ## 13. 后续工程 Slice E1：Conversation-owned Session
@@ -407,8 +412,10 @@ E3 不包含 PTY、任意 shell/workdir、受控 Python、provider Responses 或
 ## 16. 工程 Slice E4–E7 实施与边界记录
 
 以下四个 slice 已按用户授权顺序实施，均以固定 Codex 源码
-`fe01054a28fa4bd04716d9ceadb410f2443a50ce` 为结构真源；尚未运行测试、真实 provider
-smoke 或模型评测。
+`fe01054a28fa4bd04716d9ceadb410f2443a50ce` 为结构真源。2026-07-30 快速测试
+45/45 通过，macOS Debug 构建成功；尚未运行完整测试集、有效的真实 provider 工具轮
+smoke 或当前实现启用 Skill 的成对模型评测。曾对 DeepSeek 直连 endpoint 误启用
+Responses 的请求只得到 404，用于确认 E6 边界，不构成 provider 能力验证。
 
 ### E4 Controlled Python
 

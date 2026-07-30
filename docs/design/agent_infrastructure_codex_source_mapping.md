@@ -1,6 +1,7 @@
 # 已实施 Agent 基础设施 Codex 源码映射
 
-状态：Skill、`inspect_page`、统一 Tool Registry 和公开工具基础设施已实施；待验证
+状态：Skill、`inspect_page`、统一 Tool Registry 和公开工具基础设施已实施；快速测试
+45/45 通过，尚未运行完整测试集或模型评测
 日期：2026-07-30
 Codex source ref：`fe01054a28fa4bd04716d9ceadb410f2443a50ce`
 Codex worktree：`/Users/a123/Documents/agent学习/codex`

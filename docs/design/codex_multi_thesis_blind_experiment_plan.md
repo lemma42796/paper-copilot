@@ -265,6 +265,18 @@ undetermined
 Paper Copilot + DeepSeek V4 Flash 的 57.7% / 66.2% / 76.1% 继续作为历史辅助参照，
 不属于当前三方主对照。
 
+2026-07-30 另完成一次当前实现下禁用 Skill 的 V4 Flash 单次四轮诊断运行。该 runner
+隐藏 `load_skill`、Skill catalog 和强制加载指令，但保留 manifest、短论文别名及其余
+Runtime/System Prompt。结果为 71.8% strict、77.5% weighted、87.3% coverage；
+25 次模型调用、62 次 `library_exec`、1695794 total tokens、0.21706872 元、约
+227 秒。配置值为 reasoning effort `low`，当前适配器的 effective 值为 `high`。
+完整答案、逐项裁决和运行元数据位于私有实验目录
+`runs/paper-copilot-v4-flash-no-skill-low/formal-single-2026-07-30/`。
+
+该运行确认 Skill 未被调用，但没有形成严格的 Skill-only 因果对照：历史 Flash
+基线还使用旧 Agent/Runtime/工具表面。其工具调用数与历史基线同为 62，支持“高调用数
+还来自模型的逐论文检索策略”，不支持“禁用 Skill 自然减少工具调用”的推断。
+
 这些结果只有一次运行，属于描述性工作评分，不能用于统计显著性结论。用户已取消独立
 评分复核，也不再次运行相同四轮。下一任务使用同一 DeepSeek V4 Pro 的两套既有运行，
 只读研究 Codex CLI 与 Paper Copilot Agent 差距的产生位置。

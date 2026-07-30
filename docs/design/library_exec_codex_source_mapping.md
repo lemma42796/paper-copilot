@@ -111,3 +111,26 @@ Paper Copilot 的必要适配：
 - 用户中断或删除 conversation 时终止全部进程组；
 - 不开放 PTY、login shell、shell/workdir/environment 选择、网络或权限升级；
 - 受控 Python 留给 E4，不在本 slice 扩大 PATH。
+
+## 5. Codex 式跨论文批量研究视图
+
+固定 Codex 源码与原生运行证据表明，低工具调用数不只来自 shell 语法：
+
+- `core/src/tools/handlers/shell_spec.rs::create_shell_command_tool` 提供通用命令入口；
+- `core/src/tools/handlers/shell/shell_command.rs::to_exec_params` 把模型命令映射到同一
+  执行环境；
+- 原生论文运行在平坦 cwd 中直接枚举 PDF，并用一次 Python 批处理覆盖多篇论文。
+
+Codex 没有 Paper Copilot 的论文授权、内容寻址 cache 和应用内引用契约，因此不能原样
+开放任意本地 Python 或把原始 PDF 复制到平坦目录。最小产品适配为：
+
+- Runtime 为本次已准备论文生成内容寻址、不可变的 JSONL manifest；
+- conversation workspace 用短 `papers/paper-NNNN-<artifact>.layout.txt` 只读 symlink
+  指向既有内容寻址缓存，不复制文本、不改变授权；
+- `research_cache_index` 暴露 manifest 逻辑路径，并在同一环境中使用短文本路径；
+- `python3` 仅作为既有受控 `python` 的命令别名，不增加解释器、第三方包、网络或写权限；
+- Skill 对多论文任务要求先做一次 manifest 驱动的批量发现，再做页边界聚焦读取。
+
+这保留了 Paper Copilot 的确定性缓存、页码证据和引用边界，同时消除模型拼接长缓存路径
+和逐论文启动命令的主要协调成本。是否实际降低工具调用和 token，仍需在同一冻结问题集
+上做受控评测；本实现本身不把预期收益记为已验证结论。

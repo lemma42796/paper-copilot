@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -130,7 +131,10 @@ from paper_copilot.agents.tool_security import (
     cap_tool_output,
     evaluate_tool_call,
 )
-from paper_copilot.agents.tools.runtimes import LibraryEnvironment
+from paper_copilot.agents.tools.runtimes import (
+    LibraryEnvironment,
+    LibraryResearchPaper,
+)
 from paper_copilot.agents.tools.registry import (
     RegisteredTool,
     ToolExposure,
@@ -234,8 +238,11 @@ _BASE_SYSTEM_PROMPT = (
     "for visual checks of one exact PDF page or region, and library_edit for every "
     "user-visible library mutation. Follow the bundled research-papers Skill to compose "
     "them. Use the application-generated research_cache_index directly; paper-cache "
-    "commands are not available. Read page-bounded text directly with library_exec and "
-    "base claims on the command output actually returned to the model. Cite the exact "
+    "commands are not available. In a conversation workspace, use "
+    "the manifest path supplied by that index and its short papers/*.layout.txt "
+    "aliases for batch discovery, then read page-bounded text directly with "
+    "library_exec and base claims "
+    "on the command output actually returned to the model. Cite the exact "
     "pages supporting concrete research claims so the application can present traceable "
     "paper links. Tool inputs must match their JSON schemas exactly."
     "\n\n"
@@ -271,12 +278,22 @@ class _PreparedPaperCache:
     cache_revision_id: str
     artifact_sha256: str
 
-    def to_payload(self, *, citation_ref: str) -> dict[str, str | int]:
+    def research_alias(self, *, index: int) -> str:
+        return (
+            f"paper-{index:04d}-{self.artifact_sha256[:8]}.layout.txt"
+        )
+
+    def to_payload(
+        self,
+        *,
+        citation_ref: str,
+        text_path: str | None = None,
+    ) -> dict[str, str | int]:
         return {
             "pdf": f"library/{self.source_locator}",
             "paper_id": self.paper_id,
             "pages": self.page_count,
-            "text": self.text_path,
+            "text": text_path or self.text_path,
             "citation_base": f"paper-copilot://open?ref={citation_ref}",
         }
 
@@ -317,11 +334,15 @@ class _PaperCachePreflight:
             "</research_cache_index>"
         )
 
-    def to_payload(self) -> dict[str, Any] | None:
+    def to_payload(
+        self,
+        *,
+        research_manifest: str | None = None,
+    ) -> dict[str, Any] | None:
         if self.total_pdf_count == 0 and not self.failures:
             return None
         citation_refs = self._citation_refs()
-        return {
+        payload: dict[str, Any] = {
             "schema_version": 2,
             "total_pdf_count": self.total_pdf_count,
             "prepared_count": len(self.prepared),
@@ -329,15 +350,55 @@ class _PaperCachePreflight:
                 self.total_pdf_count > len(self.prepared) + len(self.failures)
             ),
             "papers": [
-                entry.to_payload(citation_ref=citation_ref)
-                for entry, citation_ref in zip(
-                    self.prepared,
-                    citation_refs,
-                    strict=True,
+                entry.to_payload(
+                    citation_ref=citation_ref,
+                    text_path=(
+                        f"papers/{entry.research_alias(index=index)}"
+                        if research_manifest is not None
+                        else None
+                    ),
+                )
+                for index, (entry, citation_ref) in enumerate(
+                    zip(
+                        self.prepared,
+                        citation_refs,
+                        strict=True,
+                    ),
+                    start=1,
                 )
             ],
             "failures": list(self.failures),
         }
+        if research_manifest is not None:
+            payload["manifest"] = research_manifest
+        return payload
+
+    def research_view(
+        self,
+        *,
+        cache_root: Path,
+    ) -> tuple[LibraryResearchPaper, ...]:
+        citation_refs = self._citation_refs()
+        return tuple(
+            LibraryResearchPaper(
+                alias=entry.research_alias(index=index),
+                source_locator=entry.source_locator,
+                text_source=(
+                    cache_root
+                    / Path(entry.text_path).relative_to("cache")
+                ),
+                page_count=entry.page_count,
+                citation_base=f"paper-copilot://open?ref={citation_ref}",
+            )
+            for index, (entry, citation_ref) in enumerate(
+                zip(
+                    self.prepared,
+                    citation_refs,
+                    strict=True,
+                ),
+                start=1,
+            )
+        )
 
     def _citation_refs(self) -> tuple[str, ...]:
         counts: dict[str, int] = {}
@@ -1021,6 +1082,16 @@ async def run_paper_copilot(
                     "failures": list(cache_preflight.failures),
                 },
             )
+    research_manifest: str | None = None
+    if context.library_environment is not None and cache_preflight.prepared:
+        cache_root = pdf_cache_dir(context.root).expanduser().resolve()
+        research_manifest = await asyncio.to_thread(
+            context.library_environment.configure_research_view,
+            cache_preflight.research_view(cache_root=cache_root),
+        )
+    cache_inventory = cache_preflight.to_payload(
+        research_manifest=research_manifest,
+    )
     active_papers = tuple(
         entry.active_snapshot() for entry in cache_preflight.prepared
     )
@@ -1044,7 +1115,7 @@ async def run_paper_copilot(
             context,
             max_budget_cny=max_budget_cny,
             research_skill=research_skill,
-            cache_inventory=cache_preflight.to_payload(),
+            cache_inventory=cache_inventory,
             tool_names=tuple(tool["name"] for tool in tools),
             conversation_context=conversation_context,
         )

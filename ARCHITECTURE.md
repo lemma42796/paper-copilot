@@ -102,7 +102,7 @@ rollout deadline。
 | 工具 | 当前职责与边界 |
 |---|---|
 | `load_skill` | 从可信 Skill catalog 按需加载固定版本研究指令；同一 conversation 同版本只首次返回正文 |
-| `library_exec` | 在 conversation 级逻辑 workspace 中执行有界命令；`library/`、`cache/` 只读，持久 `scratch/` 可写；长命令可 yield |
+| `library_exec` | 在 conversation 级逻辑 workspace 中执行有界命令；`library/`、`cache/`、`papers/`、`research-manifests/` 只读，持久 `scratch/` 可写；长命令可 yield |
 | `library_write_stdin` | 以不透明 session ID 写入或轮询已 yield 的 `library_exec` 进程；继承原命令 sandbox |
 | `inspect_page` | 按授权 PDF SHA-256、页码和可选 region 渲染单页图像；不做 OCR、批量处理或文本回退 |
 | `library_edit` | 授权论文库内的用户可见写操作；禁止静默覆盖和永久删除，需要时持久审批 |
@@ -123,7 +123,10 @@ Runtime 在模型循环前按论文预算准备内容寻址文本缓存，并注
 - 逻辑 `cache/.../layout.txt` 路径；
 - Runtime 分配的应用内 `citation_base`。
 
-模型通过 `library_exec` 批量搜索并直接读取逻辑 `layout.txt` 路径；
+conversation 环境另外生成内容寻址、只读的 JSONL manifest，并把缓存文本映射为短
+`papers/paper-NNNN-<artifact>.layout.txt` 别名；`research_cache_index` 提供 manifest
+逻辑路径。模型先用 manifest 和短别名做跨论文批量发现，再按明确页边界读取证据；
+无 conversation 环境的内部调用仍使用原始 `cache/.../layout.txt` 路径。
 `paper-cache status/ensure/page` 不再暴露。缓存文本以换页符保留 PDF 页边界，模型用
 有界命令一次读取一个或多个明确页面；实际返回的命令输出随完整会话历史进入后续上下文。
 
@@ -231,11 +234,12 @@ Embedding 当前固定为 DashScope `text-embedding-v4`、1024 维；模型或�
 - Compaction 删除旧窗口中的 World State fragment，并在 replacement history 与 session
   中重新建立 full baseline。
 - 一个 conversation 拥有一个持久 `LibraryEnvironment`：固定 logical cwd、只读
-  `library/`/`cache/`、跨命令 `scratch/` 和进程表。`library_exec` 在 yield 窗口后返回
+  `library/`/`cache/`/`papers/`/`research-manifests/`、跨命令 `scratch/` 和进程表。
+  `library_exec` 在 yield 窗口后返回
   session/chunk ID；`library_write_stdin` 写入或轮询同一进程。用户中断和 conversation
   删除会终止环境内全部进程组；无 PTY、任意 workdir、shell 选择、网络或权限升级。
-  受控 `python` 只开放标准库读取和 `scratch/` 写入，关闭网络、user site、第三方
-  site-packages 和 bytecode 写入。
+  受控 `python` 与 `python3` 指向同一解释器，只开放标准库读取和 `scratch/` 写入，
+  关闭网络、user site、第三方 site-packages 和 bytecode 写入。
 - 阿里云百炼 OpenAI 兼容 Chat 的地域端点、业务空间专属域名和迁移说明见
   [aliyun_bailian_openai_chat.md](docs/design/aliyun_bailian_openai_chat.md)。
 - 一次任务使用客户端选择的同一模型，不做模型分层。
