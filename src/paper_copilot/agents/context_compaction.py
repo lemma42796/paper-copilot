@@ -35,8 +35,8 @@ COMPACTION_SYSTEM_PROMPT = (
     "attempts, unresolved questions, and remaining work. Distinguish verified work from "
     "proposals and unverified assumptions. When updating a previous summary, retain its "
     "still-active details unless later history explicitly supersedes them. Record such "
-    "replacements in superseded_information. The authoritative_runtime_context is the "
-    "current application state and supersedes runtime context blocks inside the older "
+    "replacements in superseded_information. The authoritative_world_state is the "
+    "current application state and supersedes world-state blocks inside the older "
     "history. Return only the required structured tool input; do not add prose outside it."
 )
 
@@ -68,7 +68,7 @@ def build_compaction_user_prompt(
 ) -> str:
     payload = {
         "original_request": original_request,
-        "authoritative_runtime_context": latest_runtime_context,
+        "authoritative_world_state": latest_runtime_context,
         "required_identifiers": sorted(required_identifiers),
         "previous_summary": (
             previous_summary.model_dump(mode="json")
@@ -362,8 +362,16 @@ def _is_runtime_context_block(block: dict[str, Any]) -> bool:
     return (
         block.get("type") == "text"
         and isinstance(text, str)
-        and text.startswith("<runtime_context>\n")
-        and text.rstrip().endswith("</runtime_context>")
+        and (
+            (
+                text.startswith("<runtime_context>\n")
+                and text.rstrip().endswith("</runtime_context>")
+            )
+            or (
+                text.startswith('<world_state mode="')
+                and text.rstrip().endswith("</world_state>")
+            )
+        )
     )
 
 

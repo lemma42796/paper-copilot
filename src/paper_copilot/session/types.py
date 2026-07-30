@@ -17,7 +17,10 @@ EntryType = Literal[
     "runtime_state",
     "application_event",
     "recovery_base",
+    "turn_started",
+    "turn_completed",
     "turn_aborted",
+    "world_state",
     "branch_summary",
 ]
 
@@ -171,6 +174,28 @@ class RecoveryBase(BaseModel):
     compaction_summary: dict[str, Any] | None = None
 
 
+class TurnStarted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    ts: str
+    type: Literal["turn_started"] = "turn_started"
+    parent_id: str | None
+    turn_id: str
+    job_id: str
+    attempt: int = Field(ge=1)
+
+
+class TurnCompleted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    ts: str
+    type: Literal["turn_completed"] = "turn_completed"
+    parent_id: str | None
+    turn_id: str
+    job_id: str
+    attempt: int = Field(ge=1)
+
+
 class TurnAborted(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str
@@ -178,6 +203,21 @@ class TurnAborted(BaseModel):
     type: Literal["turn_aborted"] = "turn_aborted"
     parent_id: str | None
     reason: str
+    turn_id: str | None = None
+    job_id: str | None = None
+    attempt: int | None = Field(default=None, ge=1)
+
+
+class WorldState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    ts: str
+    type: Literal["world_state"] = "world_state"
+    parent_id: str | None
+    mode: Literal["full", "patch"]
+    state: dict[str, Any]
+    rendered: str
+    model_visible: bool = True
 
 
 SessionEntry = Annotated[
@@ -194,6 +234,9 @@ SessionEntry = Annotated[
     | RuntimeState
     | ApplicationEvent
     | RecoveryBase
-    | TurnAborted,
+    | TurnStarted
+    | TurnCompleted
+    | TurnAborted
+    | WorldState,
     Field(discriminator="type"),
 ]

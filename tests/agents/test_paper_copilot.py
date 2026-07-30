@@ -216,13 +216,27 @@ def _runtime_payload(messages: list[dict[str, Any]]) -> dict[str, Any]:
     assert isinstance(content, list)
     runtime_text = content[0]["text"]
     assert isinstance(runtime_text, str)
-    prefix = "<runtime_context>\n"
-    suffix = "\n</runtime_context>"
+    prefix = '<world_state mode="full">\n'
+    suffix = "\n</world_state>"
     assert runtime_text.startswith(prefix)
     assert runtime_text.endswith(suffix)
     payload = json.loads(runtime_text.removeprefix(prefix).removesuffix(suffix))
     assert isinstance(payload, dict)
-    return payload
+    paper_budget = payload["paper_library"]["paper_budget"]
+    return {
+        "pdf_library_available": payload["authorization"][
+            "pdf_library_available"
+        ],
+        "paper_budget": {
+            key: paper_budget[key]
+            for key in (
+                "max_papers",
+                "touched_count",
+                "remaining_count",
+                "touched_paper_ids",
+            )
+        },
+    }
 
 
 def test_dispatch_paper_copilot_tools_browse_search_and_query(tmp_path: Path) -> None:
@@ -302,16 +316,17 @@ def test_paper_tool_schemas_expose_v2_contract() -> None:
     tools = {tool["name"]: tool for tool in paper_copilot_tools()}
 
     assert set(tools) == {
+        "load_skill",
         "library_exec",
-        "read_page",
+        "library_write_stdin",
         "inspect_page",
         "library_edit",
     }
+    assert tools["load_skill"]["input_schema"]["required"] == ["name"]
     assert tools["library_exec"]["input_schema"]["required"] == ["cmd"]
-    assert tools["read_page"]["input_schema"]["required"] == ["pdf_sha256", "page"]
-    read_page_properties = tools["read_page"]["input_schema"]["properties"]
-    assert read_page_properties["pdf_sha256"]["pattern"] == "^[0-9a-f]{64}$"
-    assert read_page_properties["page"]["minimum"] == 1
+    assert tools["library_write_stdin"]["input_schema"]["required"] == [
+        "session_id"
+    ]
     assert tools["inspect_page"]["input_schema"]["required"] == [
         "paper_id",
         "page",
@@ -1016,7 +1031,8 @@ def test_run_paper_copilot_separates_stable_system_and_runtime_context(
     assert _system_text(first_call.system) == _system_text(second_call.system)
     assert isinstance(first_call.system, list)
     assert first_call.system[-1]["cache_control"] == {"type": "ephemeral"}
-    assert first_call.tools[-1]["cache_control"] == {"type": "ephemeral"}
+    assert first_call.tools == []
+    assert second_call.tools[-1]["cache_control"] == {"type": "ephemeral"}
 
     first_runtime = _runtime_payload(first_call.messages)
     second_runtime = _runtime_payload(second_call.messages)
@@ -1082,7 +1098,7 @@ base1 is reproducible [base1:methods[0]].
     assert len(repair_call.messages) == 1
     repair_blocks = repair_call.messages[0]["content"]
     assert isinstance(repair_blocks, list)
-    assert repair_blocks[0]["text"].startswith("<runtime_context>\n")
+    assert repair_blocks[0]["text"].startswith('<world_state mode="full">\n')
     repair_content = repair_blocks[1]["text"]
     assert "<composer_repair_context>" in repair_content
     assert "english_section_headings" in repair_content

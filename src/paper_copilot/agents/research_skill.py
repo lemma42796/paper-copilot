@@ -23,6 +23,7 @@ _SKILL_VERSION_PATTERN = re.compile(
 @dataclass(frozen=True, slots=True)
 class ResearchSkill:
     name: str
+    description: str
     version: str
     sha256: str
     resource_uri: str
@@ -65,6 +66,10 @@ def load_research_skill() -> ResearchSkill:
         raise AgentError("bundled research Skill must declare exactly one version")
     return ResearchSkill(
         name=_SKILL_NAME,
+        description=(
+            "Investigate authorized local PDF papers with bounded command search "
+            "and page-grounded evidence."
+        ),
         version=version_matches[0],
         sha256=hashlib.sha256(contents.encode("utf-8")).hexdigest(),
         resource_uri=_SKILL_RESOURCE_URI,

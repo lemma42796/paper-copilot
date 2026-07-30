@@ -5,12 +5,10 @@ import hashlib
 import json
 import os
 import re
-import signal
 import subprocess
 import sys
+import sysconfig
 import tempfile
-import time
-from collections import deque
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -18,30 +16,34 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
+from paper_copilot.agents.tools.runtimes import (
+    LibraryEnvironment,
+    LibraryProcessOutput,
+)
+from paper_copilot.session.paths import pdf_cache_dir
 from paper_copilot.shared.errors import KnowledgeError
 from paper_copilot.shared.logging import get_logger
-from paper_copilot.session.paths import pdf_cache_dir
 from paper_copilot.shared.poppler import find_poppler_executable
 
 _SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
 _SHELL = Path("/bin/zsh")
 _COMMAND_MAX_CHARS = 8_000
-_RAW_OUTPUT_MAX_BYTES = 64_000
 _DEFAULT_OUTPUT_MAX_TOKENS = 10_000
 _MAX_OUTPUT_MAX_TOKENS = 10_000
 _PAPER_CACHE_COMMAND_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_.-])paper-cache(?![A-Za-z0-9_.-])"
 )
 _APPROX_BYTES_PER_TOKEN = 4
-_READ_CHUNK_BYTES = 8_192
-_DEFAULT_TIMEOUT_MS = 15_000
-_MAX_TIMEOUT_MS = 30_000
+_DEFAULT_YIELD_TIME_MS = 10_000
+_DEFAULT_STDIN_YIELD_TIME_MS = 5_000
+_MIN_YIELD_TIME_MS = 250
+_MAX_YIELD_TIME_MS = 30_000
 _CPU_LIMIT_SECONDS = 35
 _FILE_SIZE_LIMIT = "64m"
 _SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 _OTOOL = Path("/usr/bin/otool")
-_SCHEMA_VERSION = 2
-_SANDBOX_POLICY_ID = "library_workspace_v2"
+_SCHEMA_VERSION = 3
+_SANDBOX_POLICY_ID = "library_workspace_v3"
 _RESOURCE_WRAPPER = (
     "setopt errexit; "
     f"limit -h cputime {_CPU_LIMIT_SECONDS}; "
@@ -66,11 +68,14 @@ class LibraryExecInput(BaseModel):
             "authorized roots are blocked."
         ),
     )
-    timeout_ms: StrictInt = Field(
-        default=_DEFAULT_TIMEOUT_MS,
-        ge=1_000,
-        le=_MAX_TIMEOUT_MS,
-        description="Hard execution deadline in milliseconds.",
+    yield_time_ms: StrictInt = Field(
+        default=_DEFAULT_YIELD_TIME_MS,
+        ge=_MIN_YIELD_TIME_MS,
+        le=_MAX_YIELD_TIME_MS,
+        description=(
+            "Wait before yielding a still-running command. If it remains active, "
+            "the result returns a session_id for library_write_stdin."
+        ),
     )
     max_output_tokens: StrictInt = Field(
         default=_DEFAULT_OUTPUT_MAX_TOKENS,
@@ -98,6 +103,36 @@ class LibraryExecRun:
     trace_attributes: dict[str, Any]
 
 
+class LibraryWriteStdinInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(
+        min_length=16,
+        max_length=64,
+        description="Opaque session_id returned by library_exec.",
+    )
+    chars: str = Field(
+        default="",
+        max_length=8_000,
+        description=(
+            "Characters to write to the running command. Use an empty string to "
+            "poll for more output."
+        ),
+    )
+    yield_time_ms: StrictInt = Field(
+        default=_DEFAULT_STDIN_YIELD_TIME_MS,
+        ge=_MIN_YIELD_TIME_MS,
+        le=_MAX_YIELD_TIME_MS,
+        description="Wait before yielding another output chunk.",
+    )
+    max_output_tokens: StrictInt = Field(
+        default=_DEFAULT_OUTPUT_MAX_TOKENS,
+        ge=256,
+        le=_MAX_OUTPUT_MAX_TOKENS,
+        description="Output token budget for this interaction.",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _ResolvedCommand:
     argv: tuple[str, ...]
@@ -110,6 +145,7 @@ class _FileSystemSandboxPolicy:
     writable_roots: tuple[Path, ...]
     external_executable_files: tuple[Path, ...]
     external_dependency_directories: tuple[Path, ...]
+    denied_directories: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,62 +159,8 @@ class _ExternalCommandSet:
     commands: tuple[tuple[str, Path], ...]
     sandbox_files: tuple[Path, ...]
     sandbox_directories: tuple[Path, ...]
-
-
-class _HeadTailBuffer:
-    def __init__(self, max_bytes: int) -> None:
-        self._max_bytes = max_bytes
-        self._head_budget = max_bytes // 2
-        self._tail_budget = max_bytes - self._head_budget
-        self._head = bytearray()
-        self._tail: deque[int] = deque()
-        self._omitted_bytes = 0
-
-    @property
-    def omitted_bytes(self) -> int:
-        return self._omitted_bytes
-
-    @property
-    def total_bytes(self) -> int:
-        return len(self._head) + len(self._tail) + self._omitted_bytes
-
-    def push(self, chunk: bytes) -> None:
-        if not chunk:
-            return
-        remaining_head = self._head_budget - len(self._head)
-        head_length = min(remaining_head, len(chunk))
-        if head_length:
-            self._head.extend(chunk[:head_length])
-        self._push_tail(chunk[head_length:])
-
-    def text(self) -> str:
-        if self._omitted_bytes == 0:
-            raw_output = bytes(self._head) + bytes(self._tail)
-        else:
-            marker = (
-                f"\n[... omitted {self._omitted_bytes} bytes from command output ...]\n"
-            ).encode()
-            raw_output = bytes(self._head) + marker + bytes(self._tail)
-        return raw_output.decode("utf-8", errors="replace")
-
-    def _push_tail(self, chunk: bytes) -> None:
-        if not chunk:
-            return
-        if self._tail_budget == 0:
-            self._omitted_bytes += len(chunk)
-            return
-        if len(chunk) >= self._tail_budget:
-            kept = chunk[-self._tail_budget :]
-            self._omitted_bytes += len(self._tail) + len(chunk) - len(kept)
-            self._tail.clear()
-            self._tail.extend(kept)
-            return
-        self._tail.extend(chunk)
-        excess = len(self._tail) - self._tail_budget
-        if excess > 0:
-            for _ in range(excess):
-                self._tail.popleft()
-            self._omitted_bytes += excess
+    readable_directories: tuple[Path, ...]
+    denied_directories: tuple[Path, ...]
 
 
 def library_exec_tool_description() -> str:
@@ -186,12 +168,22 @@ def library_exec_tool_description() -> str:
         "Run a bounded command in a Codex-style macOS sandbox. The fixed logical "
         "workspace exposes the configured paper library as read-only library/, "
         "derived text cache as read-only cache/, and only scratch/ as writable "
-        "temporary storage. Runtime provides prepared cache paths in "
-        "research_cache_index; use read_page for citation-grade page text. "
+        "persistent storage for this conversation. Runtime provides prepared cache paths in "
+        "research_cache_index. Read and search those page-delimited text files "
+        "directly; the returned command output becomes model-visible evidence. "
         "paper-cache commands are not supported. The environment contains no user "
         "credentials; sandboxing "
         "blocks network access, library/cache writes, and reads outside authorized "
-        "roots. The tool has no permission-escalation path."
+        "roots. A command still running after yield_time_ms returns a session_id; "
+        "continue it with library_write_stdin. The tool has no permission-escalation path."
+    )
+
+
+def library_write_stdin_tool_description() -> str:
+    return (
+        "Write characters to, or poll, a running library_exec command. Pass the "
+        "opaque session_id returned by library_exec. An empty chars value polls for "
+        "new output. The original command keeps the same sandbox and authorization."
     )
 
 
@@ -200,6 +192,7 @@ async def run_library_exec(
     library_root: Path | None,
     *,
     cache_root: Path | None = None,
+    environment: LibraryEnvironment | None = None,
 ) -> LibraryExecRun:
     root = _resolve_library_root(library_root)
     resolved_cache_root = (
@@ -211,130 +204,81 @@ async def run_library_exec(
     if _PAPER_CACHE_COMMAND_PATTERN.search(resolved_command.source_cmd):
         raise KnowledgeError(
             "paper-cache is not exposed through library_exec; use the Runtime "
-            "research_cache_index for search and read_page for one exact page"
+            "research_cache_index and read its prepared text paths directly"
         )
 
     _require_macos_sandbox()
-    started = time.monotonic()
     _LOGGER.debug(
         "library_command_started",
         command_preview=args.cmd[:200],
         command_length=len(args.cmd),
-        timeout_ms=args.timeout_ms,
+        yield_time_ms=args.yield_time_ms,
     )
-    with tempfile.TemporaryDirectory(prefix="paper-copilot-command-") as raw_runtime:
-        runtime_root = Path(raw_runtime).resolve()
-        workspace = runtime_root / "workspace"
-        scratch = runtime_root / "scratch"
-        empty_cache = runtime_root / "empty-cache"
-        tool_bin = runtime_root / "bin"
-        workspace.mkdir()
-        scratch.mkdir()
-        empty_cache.mkdir()
-        tool_bin.mkdir()
-        external_commands = await asyncio.to_thread(_resolve_external_commands)
-        for command_name, executable in external_commands.commands:
-            (tool_bin / command_name).symlink_to(executable)
-        (workspace / "library").symlink_to(root, target_is_directory=True)
-        visible_cache_root = (
-            resolved_cache_root if resolved_cache_root.is_dir() else empty_cache
+    temporary_directory: tempfile.TemporaryDirectory[str] | None = None
+    if environment is None:
+        temporary_directory = tempfile.TemporaryDirectory(
+            prefix="paper-copilot-command-"
         )
-        (workspace / "cache").symlink_to(
-            visible_cache_root,
-            target_is_directory=True,
-        )
-        (workspace / "scratch").symlink_to(scratch, target_is_directory=True)
-
-        sandbox_policy = _SandboxPolicy(
-            file_system=_FileSystemSandboxPolicy(
-                readable_roots=(root, visible_cache_root, runtime_root),
-                writable_roots=(scratch,),
-                external_executable_files=external_commands.sandbox_files,
-                external_dependency_directories=(
-                    external_commands.sandbox_directories
-                ),
+        environment = LibraryEnvironment(Path(temporary_directory.name))
+    external_commands = await asyncio.to_thread(_resolve_external_commands)
+    visible_cache_root = environment.configure(
+        library_root=root,
+        cache_root=resolved_cache_root,
+        external_commands=external_commands.commands,
+    )
+    sandbox_policy = _SandboxPolicy(
+        file_system=_FileSystemSandboxPolicy(
+            readable_roots=(
+                root,
+                visible_cache_root,
+                environment.root,
+                *external_commands.readable_directories,
             ),
-            network_access=False,
-        )
-        profile = _render_macos_seatbelt(sandbox_policy)
-        profile_sha256 = hashlib.sha256(profile.encode("utf-8")).hexdigest()
-        command_ref = _command_ref(resolved_command, _SANDBOX_POLICY_ID)
-        process = await asyncio.create_subprocess_exec(
-            str(_SANDBOX_EXEC),
-            "-p",
-            profile,
-            *resolved_command.argv,
-            cwd=workspace,
-            env=_command_environment(scratch, tool_bin),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
-        )
-        if process.stdout is None or process.stderr is None:
-            raise KnowledgeError("library command did not create output pipes")
-        output_buffer = _HeadTailBuffer(_RAW_OUTPUT_MAX_BYTES)
-        stdout_task = asyncio.create_task(
-            _capture_stream(process.stdout, output_buffer)
-        )
-        stderr_task = asyncio.create_task(
-            _capture_stream(process.stderr, output_buffer)
-        )
-        wait_task = asyncio.create_task(process.wait())
-        try:
-            done, _pending = await asyncio.wait(
-                {wait_task},
-                timeout=args.timeout_ms / 1_000,
-            )
-            timed_out = wait_task not in done
-            if timed_out:
-                os.killpg(process.pid, signal.SIGKILL)
-            exit_code = await wait_task
-            await asyncio.gather(stdout_task, stderr_task)
-        finally:
-            if process.returncode is None:
-                os.killpg(process.pid, signal.SIGKILL)
-                await process.wait()
-            for task in (stdout_task, stderr_task):
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(
-                stdout_task,
-                stderr_task,
-                return_exceptions=True,
-            )
-
-    wall_time_seconds = time.monotonic() - started
-    raw_text = output_buffer.text()
-    if timed_out:
-        timeout_notice = (
-            f"Command timed out after {args.timeout_ms} milliseconds."
-        )
-        raw_text = f"{raw_text}\n{timeout_notice}".lstrip()
-    output_text, token_count = _truncate_for_token_budget(
-        raw_text,
-        args.max_output_tokens,
+            writable_roots=(environment.scratch,),
+            external_executable_files=external_commands.sandbox_files,
+            external_dependency_directories=external_commands.sandbox_directories,
+            denied_directories=external_commands.denied_directories,
+        ),
+        network_access=False,
     )
-    original_token_count = _original_token_count(
-        token_count,
-        total_bytes=output_buffer.total_bytes,
-        omitted_bytes=output_buffer.omitted_bytes,
+    profile = _render_macos_seatbelt(sandbox_policy)
+    profile_sha256 = hashlib.sha256(profile.encode("utf-8")).hexdigest()
+    command_ref = _command_ref(resolved_command, _SANDBOX_POLICY_ID)
+    process_output = await environment.exec(
+        argv=resolved_command.argv,
+        command=args.cmd,
+        profile=profile,
+        env=_command_environment(environment.scratch, environment.tool_bin),
+        yield_time_ms=args.yield_time_ms,
+    )
+    if temporary_directory is not None:
+        if process_output.session_id is not None:
+            environment.terminate_all()
+            raise KnowledgeError(
+                "yielded library commands require a persistent LibraryEnvironment"
+            )
+        temporary_directory.cleanup()
+    output_text, original_token_count = _bounded_process_output(
+        process_output,
+        args.max_output_tokens,
     )
     _LOGGER.debug(
         "library_command_finished",
-        exit_code=exit_code,
-        timed_out=timed_out,
-        wall_time_seconds=wall_time_seconds,
-        output_bytes=output_buffer.total_bytes,
-        output_omitted_bytes=output_buffer.omitted_bytes,
+        exit_code=process_output.exit_code,
+        yielded=process_output.session_id is not None,
+        wall_time_seconds=process_output.wall_time_seconds,
+        output_bytes=process_output.total_output_bytes,
+        output_omitted_bytes=process_output.output_omitted_bytes,
     )
     return LibraryExecRun(
         output=_model_output(
             output=output_text,
-            exit_code=exit_code,
-            wall_time_seconds=wall_time_seconds,
-            timed_out=timed_out,
+            exit_code=process_output.exit_code,
+            wall_time_seconds=process_output.wall_time_seconds,
+            session_id=process_output.session_id,
+            chunk_id=process_output.chunk_id,
             original_token_count=original_token_count,
-            output_omitted_bytes=output_buffer.omitted_bytes,
+            output_omitted_bytes=process_output.output_omitted_bytes,
         ),
         trace_attributes={
             "library_exec_schema_version": _SCHEMA_VERSION,
@@ -345,14 +289,54 @@ async def run_library_exec(
             "sandbox_policy": _SANDBOX_POLICY_ID,
             "sandbox_profile_sha256": profile_sha256,
             "network_access": False,
-            "timeout_ms": args.timeout_ms,
-            "timed_out": timed_out,
-            "exit_code": exit_code,
-            "output_bytes": output_buffer.total_bytes,
-            "output_omitted_bytes": output_buffer.omitted_bytes,
+            "yield_time_ms": args.yield_time_ms,
+            "yielded": process_output.session_id is not None,
+            "session_id": process_output.session_id,
+            "chunk_id": process_output.chunk_id,
+            "exit_code": process_output.exit_code,
+            "output_bytes": process_output.total_output_bytes,
+            "output_omitted_bytes": process_output.output_omitted_bytes,
             "available_external_commands": [
                 command_name for command_name, _executable in external_commands.commands
             ],
+        },
+    )
+
+
+async def run_library_write_stdin(
+    args: LibraryWriteStdinInput,
+    *,
+    environment: LibraryEnvironment,
+) -> LibraryExecRun:
+    process_output = await environment.write_stdin(
+        session_id=args.session_id,
+        chars=args.chars,
+        yield_time_ms=args.yield_time_ms,
+    )
+    output_text, original_token_count = _bounded_process_output(
+        process_output,
+        args.max_output_tokens,
+    )
+    return LibraryExecRun(
+        output=_model_output(
+            output=output_text,
+            exit_code=process_output.exit_code,
+            wall_time_seconds=process_output.wall_time_seconds,
+            session_id=process_output.session_id,
+            chunk_id=process_output.chunk_id,
+            original_token_count=original_token_count,
+            output_omitted_bytes=process_output.output_omitted_bytes,
+        ),
+        trace_attributes={
+            "library_exec_schema_version": _SCHEMA_VERSION,
+            "interaction": "write_stdin" if args.chars else "poll",
+            "session_id": args.session_id,
+            "chunk_id": process_output.chunk_id,
+            "yield_time_ms": args.yield_time_ms,
+            "yielded": process_output.session_id is not None,
+            "exit_code": process_output.exit_code,
+            "output_bytes": process_output.total_output_bytes,
+            "output_omitted_bytes": process_output.output_omitted_bytes,
         },
     )
 
@@ -402,6 +386,8 @@ def _command_environment(scratch: Path, tool_bin: Path) -> dict[str, str]:
         "GH_PAGER": "cat",
         "PATH": f"{tool_bin}:{_SYSTEM_PATH}",
         "TMPDIR": str(scratch),
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
     }
 
 
@@ -409,11 +395,17 @@ def _resolve_external_commands() -> _ExternalCommandSet:
     commands: list[tuple[str, Path]] = []
     sandbox_files: set[Path] = set()
     sandbox_directories: set[Path] = set()
-    for command_name in ("rg", "pdfinfo", "pdftotext"):
+    readable_directories: set[Path] = set()
+    denied_directories: set[Path] = set()
+    for command_name in ("rg", "pdfinfo", "pdftotext", "python"):
         executable = (
             find_poppler_executable(command_name)
             if command_name in {"pdfinfo", "pdftotext"}
-            else _first_external_command_candidate(command_name)
+            else (
+                Path(sys.executable).expanduser().resolve()
+                if command_name == "python"
+                else _first_external_command_candidate(command_name)
+            )
         )
         if executable is None:
             continue
@@ -429,10 +421,22 @@ def _resolve_external_commands() -> _ExternalCommandSet:
         commands.append((command_name, executable))
         sandbox_files.update(command_files)
         sandbox_directories.update(path.parent for path in command_files)
+        if command_name == "python":
+            readable_directories.add(
+                Path(sysconfig.get_path("stdlib")).expanduser().resolve()
+            )
+            for scheme_name in ("purelib", "platlib"):
+                scheme_path = sysconfig.get_path(scheme_name)
+                if scheme_path:
+                    denied_directories.add(
+                        Path(scheme_path).expanduser().resolve()
+                    )
     return _ExternalCommandSet(
         commands=tuple(commands),
         sandbox_files=tuple(sorted(sandbox_files)),
         sandbox_directories=tuple(sorted(sandbox_directories)),
+        readable_directories=tuple(sorted(readable_directories)),
+        denied_directories=tuple(sorted(denied_directories)),
     )
 
 
@@ -596,7 +600,8 @@ def _model_output(
     output: str,
     exit_code: int | None,
     wall_time_seconds: float,
-    timed_out: bool,
+    session_id: str | None,
+    chunk_id: str,
     original_token_count: int | None,
     output_omitted_bytes: int,
 ) -> dict[str, Any]:
@@ -604,14 +609,33 @@ def _model_output(
         "wall_time_seconds": round(wall_time_seconds, 3),
         "exit_code": exit_code,
         "output": output,
+        "session_id": session_id,
+        "chunk_id": chunk_id,
     }
-    if timed_out:
-        payload["timed_out"] = True
     if original_token_count is not None:
         payload["original_token_count"] = original_token_count
     if output_omitted_bytes:
         payload["output_omitted_bytes"] = output_omitted_bytes
     return payload
+
+
+def _bounded_process_output(
+    process_output: LibraryProcessOutput,
+    max_output_tokens: int,
+) -> tuple[str, int | None]:
+    raw_text = process_output.output.decode("utf-8", errors="replace")
+    output_text, token_count = _truncate_for_token_budget(
+        raw_text,
+        max_output_tokens,
+    )
+    return (
+        output_text,
+        _original_token_count(
+            token_count,
+            total_bytes=process_output.total_output_bytes,
+            omitted_bytes=process_output.output_omitted_bytes,
+        ),
+    )
 
 
 def _truncate_for_token_budget(
@@ -672,14 +696,6 @@ def _command_ref(
     return hashlib.sha256(payload).hexdigest()
 
 
-async def _capture_stream(
-    stream: asyncio.StreamReader,
-    output_buffer: _HeadTailBuffer,
-) -> None:
-    while chunk := await stream.read(_READ_CHUNK_BYTES):
-        output_buffer.push(chunk)
-
-
 def _render_macos_seatbelt(policy: _SandboxPolicy) -> str:
     readable_roots = "\n".join(
         f"  (subpath {_sandbox_string(path)})"
@@ -713,9 +729,15 @@ def _render_macos_seatbelt(policy: _SandboxPolicy) -> str:
         )
     )
     network_policy = "(allow network*)" if policy.network_access else ""
+    denied_directories = "\n".join(
+        f"(deny file-read* file-test-existence (subpath {_sandbox_string(path)}))"
+        for path in policy.file_system.denied_directories
+    )
     return f"""\
 (version 1)
 (deny default)
+
+{denied_directories}
 
 (allow process-exec)
 (allow process-fork)

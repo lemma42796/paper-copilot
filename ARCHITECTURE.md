@@ -97,19 +97,22 @@ Agent loop 根据请求调用工具、聚合证据并生成自然语言或 groun
 模型 `end_turn`、预算、deadline、用户中断或失败；Runtime 处理重复签名、工具超时和
 rollout deadline。
 
-当前模型只看到四个工具：
+当前模型按能力条件看到最多五个工具：
 
 | 工具 | 当前职责与边界 |
 |---|---|
-| `library_exec` | 在逻辑 workspace 中执行有界只读命令；`library/`、`cache/` 只读，调用级 `scratch/` 可写；无网络、无权限升级 |
-| `read_page` | 从 Runtime preflight 冻结的 cache revision 读取一页文本，并产生页证据事实 |
+| `load_skill` | 从可信 Skill catalog 按需加载固定版本研究指令；同一 conversation 同版本只首次返回正文 |
+| `library_exec` | 在 conversation 级逻辑 workspace 中执行有界命令；`library/`、`cache/` 只读，持久 `scratch/` 可写；长命令可 yield |
+| `library_write_stdin` | 以不透明 session ID 写入或轮询已 yield 的 `library_exec` 进程；继承原命令 sandbox |
 | `inspect_page` | 按授权 PDF SHA-256、页码和可选 region 渲染单页图像；不做 OCR、批量处理或文本回退 |
 | `library_edit` | 授权论文库内的用户可见写操作；禁止静默覆盖和永久删除，需要时持久审批 |
 
 ### 5.1 研究上下文与缓存
 
-内建只读 `research-papers` Skill 在首次运行、恢复和 compaction 后注入；名称、版本和
-正文 SHA-256 进入 trace。Skill 只指导缓存搜索、页定位和证据工作流，不授予权限。
+World State 只注入内建只读 `research-papers` Skill 的 catalog metadata。模型在论文
+研究需要时调用 `load_skill`；session 记录首次加载的名称、版本和正文 SHA-256，后续
+turn 不重复返回正文，compaction replacement history 保留已加载版本。Skill 只指导
+缓存搜索、页定位和证据工作流，不授予权限。
 
 Runtime 在模型循环前按论文预算准备内容寻址文本缓存，并注入只读
 `research_cache_index`：
@@ -120,17 +123,19 @@ Runtime 在模型循环前按论文预算准备内容寻址文本缓存，并注
 - 逻辑 `cache/.../layout.txt` 路径；
 - Runtime 分配的应用内 `citation_base`。
 
-模型通过 `library_exec` 批量搜索逻辑路径；`paper-cache status/ensure/page` 不再暴露。
-页文本只能通过 `read_page` 按完整 PDF SHA-256 和正整数页码读取。
+模型通过 `library_exec` 批量搜索并直接读取逻辑 `layout.txt` 路径；
+`paper-cache status/ensure/page` 不再暴露。缓存文本以换页符保留 PDF 页边界，模型用
+有界命令一次读取一个或多个明确页面；实际返回的命令输出随完整会话历史进入后续上下文。
 
 ### 5.2 页面证据与引用展示
 
 `inspect_page` 只在模型支持图像输入时渲染 PNG。结果绑定 PDF SHA-256、页码、region
 和 render SHA-256；图像只进入当前模型上下文，不写入 session、日志或 trace。
 
-成功 `read_page` 或 `inspect_page` 后，Runtime 追加不含正文的
-`research_evidence.page_observed` event，供审计、恢复和论文范围变更使用。它不作为
-最终回答的默认发布门槛。Agent loop 与 Codex 一样只提供默认关闭的通用 Stop hook；
+成功 `inspect_page` 后，Runtime 追加不含图像正文的
+`research_evidence.page_observed` event，供视觉证据审计和恢复使用。文本读取与 Codex
+一样只保留权威命令、模型可见输出和完整会话历史，不另设页面登记工具。Agent loop 与
+Codex 一样只提供默认关闭的通用 Stop hook；
 Paper Copilot 默认不配置 handler，因此模型 `end_turn` 后直接结束，不因论文覆盖率或
 引用格式自动重答。
 
@@ -176,9 +181,18 @@ model request
 | job | 调度、attempt、审批、客户端事件和最终结果 |
 | trace | rollout 诊断；不决定 job 或 session 状态 |
 
-一个 job 可有多个 attempt。客户端断线不终止任务；服务重启后遗留的 queued/running job
-转为 interrupted。Resume 在同一 job 下创建新 attempt，并从最近可恢复历史构造上下文；
-只有 completed conversation 轮次进入后续对话。
+一个 conversation 拥有一个长生命周期 session；job 只记录一个用户 turn 的调度和结果，
+attempt 只记录该 turn 的一次执行。客户端断线不终止任务；服务重启后遗留的
+queued/running job 转为 interrupted。Resume 在同一 job/turn 下创建新 attempt，继续
+同一 session，不复制 conversation history。每个 attempt 在 session 中追加
+`turn_started`，并以 `turn_completed` 或带 turn/job/attempt 标识的 `turn_aborted`
+结束。后续新 turn 只使用已完成 turn；当前 job 的重试可使用该 turn 已持久化的部分历史。
+同一 conversation 同时只运行一个 turn。
+
+旧版每 attempt 一个 session 的数据保持只读不变。旧 conversation 首次进入新路径时，
+Runtime 从最近可恢复的旧 session 追加一次 conversation 级 `recovery_base`，之后所有
+新 turn 直接追加到 `papers/<conversation_id>/session.jsonl`，不再建立跨 job
+`recovery_base` 链。
 
 每个 attempt 有独立 observability bundle。Reducer 只消费完整事件前缀，忽略 torn
 tail，并校验事件顺序、父子关系和 payload 引用。
@@ -187,15 +201,16 @@ tail，并校验事件顺序、父子关系和 payload 引用。
 `~/.paper-copilot/`：
 
 ```text
-papers/<paper_id>/session.jsonl
+papers/<conversation_id>/session.jsonl
+papers/<standalone_session_id>/session.jsonl
 jobs/<job_id>/{job.json,events.jsonl,attempts/<n>/{manifest.json,trace.jsonl,state.json,payloads/}}
 fields.db / embeddings.db / embeddings_meta.json / embedding_cache.sqlite
 graph/cross-paper-links.jsonl / eval/
 ```
 
-`paper_id = SHA1(PDF bytes)[:12]`，移动或重命名不改变 ID。模型凭据由 macOS 客户端保存
-在权限受限的 Application Support 中，经 Runtime 环境变量传入，不进入论文库、
-session 或 trace。
+PDF 的 `paper_id = SHA1(PDF bytes)[:12]`，移动或重命名不改变 ID；它与 chat
+conversation session ID 是不同命名空间。模型凭据由 macOS 客户端保存在权限受限的
+Application Support 中，经 Runtime 环境变量传入，不进入论文库、session 或 trace。
 
 客户端优先通过 SSE 接收 job 事件，断线后按同一游标增量轮询。App 重启只恢复显示，
 不自动重跑任务。
@@ -207,6 +222,20 @@ Embedding 当前固定为 DashScope `text-embedding-v4`、1024 维；模型或�
 ## 8. 模型与上下文
 
 - 所有 LLM 调用经过 `agents/llm_client.py`。
+- `agents/context/` 按稳定 section 构建模型可见 World State。一个 context window 首次
+  注入 `full`，后续 turn 和工具 batch 只在状态变化时追加 RFC 7386 merge patch；
+  session 同步持久化 full/patch，恢复时从最后 full 顺序应用 patch 重建 baseline。
+- 当前 section 包含论文授权摘要、paper/cache inventory、模型、静态预算、模型可见
+  工具、research Skill 和可选 Composer 状态。费用、deadline、授权与工具策略仍由
+  Runtime 强制；World State 不是授权边界。
+- Compaction 删除旧窗口中的 World State fragment，并在 replacement history 与 session
+  中重新建立 full baseline。
+- 一个 conversation 拥有一个持久 `LibraryEnvironment`：固定 logical cwd、只读
+  `library/`/`cache/`、跨命令 `scratch/` 和进程表。`library_exec` 在 yield 窗口后返回
+  session/chunk ID；`library_write_stdin` 写入或轮询同一进程。用户中断和 conversation
+  删除会终止环境内全部进程组；无 PTY、任意 workdir、shell 选择、网络或权限升级。
+  受控 `python` 只开放标准库读取和 `scratch/` 写入，关闭网络、user site、第三方
+  site-packages 和 bytecode 写入。
 - 阿里云百炼 OpenAI 兼容 Chat 的地域端点、业务空间专属域名和迁移说明见
   [aliyun_bailian_openai_chat.md](docs/design/aliyun_bailian_openai_chat.md)。
 - 一次任务使用客户端选择的同一模型，不做模型分层。

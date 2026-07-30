@@ -224,7 +224,7 @@ def test_failed_job_waits_for_explicit_resume_and_creates_new_attempt(
         "failed",
         "completed",
     ]
-    assert completed["attempts"][0]["session_id"] != completed["attempts"][1][
+    assert completed["attempts"][0]["session_id"] == completed["attempts"][1][
         "session_id"
     ]
 
@@ -331,18 +331,29 @@ def test_follow_up_job_appends_completed_rollout_history(
     )
 
     assert second_completed.spec.conversation_id == conversation_id
+    assert (
+        first_completed.attempts[0].session_path
+        == second_completed.attempts[0].session_path
+    )
     second_messages = _ConversationLLM.calls[1]
-    assert second_messages[0] == {
-        "role": "user",
-        "content": "第一轮: 比较方法 A 和 B",
+    assert second_messages[0]["role"] == "user"
+    first_content = second_messages[0]["content"]
+    assert isinstance(first_content, list)
+    assert first_content[0] == {
+        "type": "text",
+        "text": "第一轮: 比较方法 A 和 B",
     }
+    assert first_content[1]["text"].startswith('<world_state mode="full">\n')
     assert second_messages[1]["role"] == "assistant"
     assert second_messages[1]["content"] == [
         {"type": "text", "text": "第 1 轮回答"}
     ]
     second_content = second_messages[-1]["content"]
     assert isinstance(second_content, list)
-    assert second_content[0]["text"].startswith("<runtime_context>\n")
+    assert not any(
+        block["text"].startswith("<world_state ")
+        for block in second_content
+    )
     assert not any(
         block["text"].startswith("<conversation_context>\n")
         for block in second_content

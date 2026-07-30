@@ -14,6 +14,10 @@ from .types import (
     SessionEntry,
     ToolResult,
     ToolUse,
+    TurnAborted,
+    TurnCompleted,
+    TurnStarted,
+    WorldState,
 )
 
 
@@ -24,13 +28,19 @@ class RecoveredRollout:
     compaction_summary: dict[str, Any] | None
 
 
+@dataclass(frozen=True, slots=True)
+class _TurnSegment:
+    turn_id: str
+    entries: tuple[SessionEntry, ...]
+    completed: bool
+
+
 def reconstruct_rollout(
     entries: list[SessionEntry],
     *,
     fallback_history: list[dict[str, Any]],
 ) -> RecoveredRollout:
-    history = deepcopy(fallback_history)
-    start_index = _first_llm_call_index(entries)
+    history, start_index = _initial_history(entries, fallback_history)
     compaction_summary: dict[str, Any] | None = None
     for index, entry in enumerate(entries):
         replacement = _replacement_history(entry)
@@ -99,6 +109,9 @@ def reconstruct_rollout(
         elif isinstance(entry, Message) and entry.role == "user":
             flush_assistant()
             user_blocks.append({"type": "text", "text": entry.text})
+        elif isinstance(entry, WorldState) and entry.model_visible:
+            flush_assistant()
+            user_blocks.append({"type": "text", "text": entry.rendered})
 
     flush_assistant()
     flush_user()
@@ -116,6 +129,113 @@ def reconstruct_rollout(
         runtime_state=runtime_state,
         compaction_summary=compaction_summary,
     )
+
+
+def conversation_entries_for_resume(
+    entries: list[SessionEntry],
+    *,
+    current_turn_id: str,
+) -> list[SessionEntry]:
+    prefix, segments = _turn_segments(entries)
+    if not segments:
+        return entries
+    completed_turn_ids = {
+        segment.turn_id for segment in segments if segment.completed
+    }
+    selected = list(prefix)
+    for segment in segments:
+        if (
+            segment.turn_id == current_turn_id
+            or segment.turn_id in completed_turn_ids
+        ):
+            selected.extend(segment.entries)
+    return selected
+
+
+def entries_for_turn(
+    entries: list[SessionEntry],
+    *,
+    turn_id: str,
+) -> list[SessionEntry]:
+    prefix, segments = _turn_segments(entries)
+    if not segments:
+        return entries
+    header = prefix[:1]
+    selected = [
+        entry
+        for segment in segments
+        if segment.turn_id == turn_id
+        for entry in segment.entries
+    ]
+    return [*header, *selected]
+
+
+def _initial_history(
+    entries: list[SessionEntry],
+    fallback_history: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    replacement_index: int | None = None
+    replacement_history: list[dict[str, Any]] | None = None
+    for index, entry in enumerate(entries):
+        replacement = _replacement_history(entry)
+        if replacement is not None:
+            replacement_index = index
+            replacement_history = replacement
+    if replacement_index is not None and replacement_history is not None:
+        return deepcopy(replacement_history), replacement_index + 1
+
+    first_llm_call_index = _first_llm_call_index(entries)
+    if any(
+        isinstance(entry, Message) and entry.role == "user"
+        for entry in entries[:first_llm_call_index]
+    ):
+        return [], 0
+    return deepcopy(fallback_history), first_llm_call_index
+
+
+def _turn_segments(
+    entries: list[SessionEntry],
+) -> tuple[list[SessionEntry], list[_TurnSegment]]:
+    prefix: list[SessionEntry] = []
+    segments: list[_TurnSegment] = []
+    active: list[SessionEntry] | None = None
+    active_turn_id: str | None = None
+    for entry in entries:
+        if isinstance(entry, TurnStarted):
+            if active is not None and active_turn_id is not None:
+                segments.append(
+                    _TurnSegment(
+                        turn_id=active_turn_id,
+                        entries=tuple(active),
+                        completed=False,
+                    )
+                )
+            active = [entry]
+            active_turn_id = entry.turn_id
+            continue
+        if active is None or active_turn_id is None:
+            prefix.append(entry)
+            continue
+        active.append(entry)
+        if isinstance(entry, TurnCompleted | TurnAborted):
+            segments.append(
+                _TurnSegment(
+                    turn_id=active_turn_id,
+                    entries=tuple(active),
+                    completed=isinstance(entry, TurnCompleted),
+                )
+            )
+            active = None
+            active_turn_id = None
+    if active is not None and active_turn_id is not None:
+        segments.append(
+            _TurnSegment(
+                turn_id=active_turn_id,
+                entries=tuple(active),
+                completed=False,
+            )
+        )
+    return prefix, segments
 
 
 def _first_llm_call_index(entries: list[SessionEntry]) -> int:

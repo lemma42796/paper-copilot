@@ -1,8 +1,8 @@
 # 已实施 Agent 基础设施 Codex 源码映射
 
-状态：Skill、`inspect_page` 和公开工具基础设施已实施；公开表面已切换，待验证
-日期：2026-07-28
-Codex source ref：`61a44880a85d2fd0d8770908dea5733495e571c8`
+状态：Skill、`inspect_page`、统一 Tool Registry 和公开工具基础设施已实施；待验证
+日期：2026-07-30
+Codex source ref：`fe01054a28fa4bd04716d9ceadb410f2443a50ce`
 Codex worktree：`/Users/a123/Documents/agent学习/codex`
 
 ## 1. 职责
@@ -22,7 +22,7 @@ Codex worktree：`/Users/a123/Documents/agent学习/codex`
 | 需求 | Codex source | 采用方式 | Paper Copilot 边界 |
 |---|---|---|---|
 | Skill 格式与加载 | `core-skills/src/loader.rs`、`skills/src/model.rs` | 直接采用标准 `SKILL.md` 和完整正文加载 | 当前只有一个只读内建研究 Skill，不扫描或执行用户 Skill |
-| Skill 注入 | `core-skills/src/injection.rs`、`skill_instructions.rs` | 沿用 contextual fragment 结构 | 首次运行、恢复和 compaction 后重新注入 |
+| Skill 注入 | `core-skills/src/injection.rs`、`skill_instructions.rs` | catalog + 按需 contextual fragment | world state 只放 metadata；`load_skill` 首次返回正文，compaction 保留已加载版本 |
 | Skill 身份与审计 | `EnvironmentSkillMetadata`、`PathUri`、Skill analytics | 必要适配 | 使用固定 resource URI；trace 保存名称、正文版本和 SHA-256，不暴露宿主路径 |
 | Skill 权限 | Codex Skill injection 不修改 registry 或 sandbox | 直接采用 | Skill 只指导工作流，不能授权命令、路径、网络、安装或写入 |
 | 图像能力 | `protocol/src/openai_models.rs::InputModality` | 直接采用 | 调用前检查 `image`；纯文本模型不做文本回退 |
@@ -54,10 +54,12 @@ Codex worktree：`/Users/a123/Documents/agent学习/codex`
 
 ### 工具表面
 
-- 当前已实施公开表面是 `library_exec`、`read_page`、`inspect_page`、`library_edit`。
+- 当前按能力暴露的公开表面是 `load_skill`、`library_exec`、
+  `library_write_stdin`、`inspect_page`、`library_edit`。
 - 历史工具仍可作为不可调用回滚代码存在；不提供 alias、静默迁移或自动回退。
 - 固定 `max_turns` 已删除；历史 job 中同名字段仅读取后丢弃。
-- `read_page` 已实施，模型可见 `paper_set` 已移除；旧实现只服务历史 session 兼容。
+- 模型可见的页面文本专用读取工具已删除，文本由 `library_exec` 直接读取并保留其命令
+  输出历史；模型可见 `paper_set` 已移除，其他旧实现只服务历史 session 兼容。
 
 ## 4. 未引入
 

@@ -14,10 +14,14 @@ belong in `docs/design/`.
    do not guess how a module works.
 3. **Do not add dependencies without approval.** Present the dependency and a
    reasonable dependency-free alternative when one exists.
-4. **Preserve architecture boundaries.** If a change requires crossing one,
+4. **Preserve architecture boundaries.** If a change requires crossing one
+   that is not already covered by an explicitly approved design or milestone,
    stop and ask rather than hiding the dependency.
-5. **Advance one milestone or bounded slice at a time.** Do not begin the next
-   slice after the current definition of done is met.
+5. **Keep milestone boundaries explicit.** Normally advance one bounded slice
+   at a time. When the user explicitly authorizes an ordered set of named
+   slices, they may be implemented sequentially in one work cycle, but each
+   slice must retain its own scope, source mapping, definition of done, and
+   handoff status. Do not mix their changes into an untraceable rewrite.
 6. **Use Codex-first design for Agent infrastructure.** For Agent tools,
    command execution, sandboxing, approvals, process lifecycle, Skills, and
    trace behavior, inspect the relevant Codex source before designing. When
@@ -52,7 +56,10 @@ instead of choosing silently.
 3. Check the worktree and preserve unrelated user changes.
 4. For a non-trivial milestone or a choice that changes public interfaces,
    dependencies, storage, or architecture, propose a short plan and wait for
-   confirmation. Small, bounded changes may proceed directly.
+   confirmation. Explicit approval of an ordered set of named milestones
+   satisfies this confirmation requirement for their already documented
+   interfaces and boundaries. New dependencies, permissions, or an
+   undocumented architecture choice still require separate confirmation.
 
 Review, diagnosis, and status requests are read-only unless the user also asks
 for implementation.

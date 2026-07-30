@@ -4,7 +4,7 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import TypeAdapter, ValidationError
@@ -30,6 +30,9 @@ from .types import (
     ToolResult,
     ToolUse,
     TurnAborted,
+    TurnCompleted,
+    TurnStarted,
+    WorldState,
 )
 
 _log = get_logger(__name__)
@@ -292,12 +295,78 @@ class SessionStore:
         self._write(entry)
         return entry.id
 
-    def append_turn_aborted(self, reason: str) -> str:
+    def append_turn_started(
+        self,
+        *,
+        turn_id: str,
+        job_id: str,
+        attempt: int,
+    ) -> str:
+        entry = TurnStarted(
+            id=_new_id(),
+            ts=_now_ts(),
+            parent_id=self._last_id,
+            turn_id=turn_id,
+            job_id=job_id,
+            attempt=attempt,
+        )
+        self._write(entry)
+        return entry.id
+
+    def append_turn_completed(
+        self,
+        *,
+        turn_id: str,
+        job_id: str,
+        attempt: int,
+    ) -> str:
+        entry = TurnCompleted(
+            id=_new_id(),
+            ts=_now_ts(),
+            parent_id=self._last_id,
+            turn_id=turn_id,
+            job_id=job_id,
+            attempt=attempt,
+        )
+        self._write(entry)
+        return entry.id
+
+    def append_turn_aborted(
+        self,
+        reason: str,
+        *,
+        turn_id: str | None = None,
+        job_id: str | None = None,
+        attempt: int | None = None,
+    ) -> str:
         entry = TurnAborted(
             id=_new_id(),
             ts=_now_ts(),
             parent_id=self._last_id,
             reason=reason,
+            turn_id=turn_id,
+            job_id=job_id,
+            attempt=attempt,
+        )
+        self._write(entry)
+        return entry.id
+
+    def append_world_state(
+        self,
+        *,
+        mode: Literal["full", "patch"],
+        state: dict[str, Any],
+        rendered: str,
+        model_visible: bool = True,
+    ) -> str:
+        entry = WorldState(
+            id=_new_id(),
+            ts=_now_ts(),
+            parent_id=self._last_id,
+            mode=mode,
+            state=state,
+            rendered=rendered,
+            model_visible=model_visible,
         )
         self._write(entry)
         return entry.id

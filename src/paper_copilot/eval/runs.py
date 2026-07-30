@@ -29,6 +29,7 @@ from paper_copilot.session import (
     LLMCall,
     SessionHeader,
     SessionStore,
+    entries_for_turn,
 )
 from paper_copilot.shared.errors import EvalError
 from paper_copilot.shared.prompt_fingerprint import compute_prompt_bundle_sha256
@@ -274,6 +275,7 @@ def write_research_quality_run(
     run_id: str | None = None,
     git_sha: str | None = None,
     suite_name: str = "research",
+    turn_id: str | None = None,
 ) -> Path:
     rid = run_id if run_id is not None else make_run_id()
     sha = git_sha if git_sha is not None else _git_sha()
@@ -283,7 +285,10 @@ def write_research_quality_run(
     if path.exists():
         raise EvalError(f"run file already exists: {path}")
 
-    header, final, prompt_bundle_sha256 = _read_research_final(session_path)
+    header, final, prompt_bundle_sha256 = _read_research_final(
+        session_path,
+        turn_id=turn_id,
+    )
     quality = _optional_quality_payload(final)
     cost = _cost_payload(final)
     unsupported_count = (
@@ -311,7 +316,7 @@ def write_research_quality_run(
         budget_passed=True,
         model=header.model,
         prompt_bundle_sha256=prompt_bundle_sha256,
-        page_evidence_count=_page_evidence_count(session_path),
+        page_evidence_count=_page_evidence_count(session_path, turn_id=turn_id),
         evidence_ref_count=(
             _int_quality(quality, "evidence_ref_count")
             if quality is not None
@@ -410,10 +415,14 @@ def write_retrieval_run(
 
 def _read_research_final(
     session_path: Path,
+    *,
+    turn_id: str | None = None,
 ) -> tuple[SessionHeader, FinalOutput, str | None]:
     if not session_path.exists():
         raise EvalError(f"session file not found: {session_path}")
     entries = SessionStore(session_path, last_id="").read_all()
+    if turn_id is not None:
+        entries = entries_for_turn(entries, turn_id=turn_id)
     header = next((e for e in entries if isinstance(e, SessionHeader)), None)
     if header is None:
         raise EvalError(f"session header not found: {session_path}")
@@ -433,12 +442,19 @@ def _optional_quality_payload(final: FinalOutput) -> dict[str, Any] | None:
     return quality if isinstance(quality, dict) else None
 
 
-def _page_evidence_count(session_path: Path) -> int:
+def _page_evidence_count(
+    session_path: Path,
+    *,
+    turn_id: str | None = None,
+) -> int:
+    entries = SessionStore(session_path, last_id="").read_all()
+    if turn_id is not None:
+        entries = entries_for_turn(entries, turn_id=turn_id)
     return sum(
         isinstance(entry, ApplicationEvent)
         and entry.namespace == "research_evidence"
         and entry.name == "page_observed"
-        for entry in SessionStore(session_path, last_id="").read_all()
+        for entry in entries
     )
 
 

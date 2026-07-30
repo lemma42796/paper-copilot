@@ -1,7 +1,8 @@
 # Codex 与 Paper Copilot 多论文盲测协议
 
-状态：Codex CLI 四轮已完成；Paper Copilot Query 1 已通过，Query 2 待运行
-日期：2026-07-29
+状态：原生 Codex、Paper Copilot + DeepSeek V4 Pro 与 Codex CLI + DeepSeek V4 Pro
+单次四轮均已完成并形成 Gold revision 2 工作评分；独立复核已取消，结果仅作诊断输入
+日期：2026-07-30
 文档职责：只定义可复现的实验输入、隔离、运行、评分和验收规则。产品状态、工具设计和
 单次运行明细分别保存在 `TASKS.md`、工具设计文档和私有实验产物中。
 
@@ -54,7 +55,8 @@
 │   └── turns.yaml
 ├── runs/
 │   ├── codex-cli-jsonl-v2/
-│   └── paper-copilot/
+│   ├── paper-copilot/
+│   └── ablation-a-codex-cli-deepseek-v4-pro/
 └── reports/
 ```
 
@@ -251,10 +253,21 @@ undetermined
 
 ## 9. 当前执行状态
 
-Codex CLI 四轮 trace 已完成，基线仍需按同一 Gold 形成正式报告。Paper Copilot 在
-Query 1–2 期间撤下了 Codex 默认不存在的论文专用结束拦截，并改为默认不阻断的通用
-Stop hook 与可点击论文页链接。为避免新旧实现混入同一组正式结果，下一步应在当前
-实现上从 Query 1 重新运行四轮；全部完成后再按同一 Gold 形成并列报告。
+以下三套目标系统均已在全新连续会话中单次完成 T01–T04，并按 Gold revision 2 形成
+工作评分：
+
+| 系统 | Strict | Weighted | Coverage |
+|---|---:|---:|---:|
+| Codex CLI + `gpt-5.6-sol` | 76.1% | 83.1% | 90.1% |
+| Codex CLI + DeepSeek V4 Pro | 74.6% | 81.0% | 90.1% |
+| Paper Copilot + DeepSeek V4 Pro | 57.7% | 72.5% | 90.1% |
+
+Paper Copilot + DeepSeek V4 Flash 的 57.7% / 66.2% / 76.1% 继续作为历史辅助参照，
+不属于当前三方主对照。
+
+这些结果只有一次运行，属于描述性工作评分，不能用于统计显著性结论。用户已取消独立
+评分复核，也不再次运行相同四轮。下一任务使用同一 DeepSeek V4 Pro 的两套既有运行，
+只读研究 Codex CLI 与 Paper Copilot Agent 差距的产生位置。
 
 本轮具体指标和产物路径见：
 

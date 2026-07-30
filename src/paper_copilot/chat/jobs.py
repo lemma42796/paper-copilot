@@ -14,6 +14,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from paper_copilot.agents.context import reconstruct_world_state
+from paper_copilot.agents.tools.runtimes import discard_library_environment
 from paper_copilot.agents.loop import (
     AssistantMessage,
     Event,
@@ -22,7 +24,7 @@ from paper_copilot.agents.loop import (
     ToolResult,
     ToolUse,
 )
-from paper_copilot.agents.llm_client import WORKING_CONTEXT_LIMIT_TOKENS
+from paper_copilot.agents.llm_client import DEFAULT_MODEL, WORKING_CONTEXT_LIMIT_TOKENS
 from paper_copilot.agents.tool_security import (
     ApprovalMode,
     ToolApprovalRequest,
@@ -36,7 +38,13 @@ from paper_copilot.observability import (
     reduce_trace_bundle,
 )
 from paper_copilot.schemas.compaction import CompactionSummary
-from paper_copilot.session import LLMCall, SessionStore, reconstruct_rollout
+from paper_copilot.session import (
+    LLMCall,
+    SessionStore,
+    conversation_entries_for_resume,
+    entries_for_turn,
+    reconstruct_rollout,
+)
 from paper_copilot.session.paths import default_root, session_file
 from paper_copilot.shared.errors import JobError, RolloutTimeoutError
 
@@ -227,6 +235,15 @@ class ChatJobRegistry:
             spec=spec,
         )
         with self._lock:
+            active = self._active_conversation_job_ids(
+                spec.conversation_id,
+                exclude_job_id=None,
+            )
+            if active:
+                raise JobError(
+                    "conversation already has an active turn: "
+                    + ", ".join(active)
+                )
             self._write_record(record)
             self._append_event(
                 job_id,
@@ -285,24 +302,28 @@ class ChatJobRegistry:
                     + ", ".join(active)
                 )
 
-            session_dirs: list[Path] = []
+            session_dirs: set[Path] = set()
             for record in conversation_records:
                 job_dir = self._job_dir(record.id)
                 if job_dir.is_symlink():
                     raise JobError(f"refusing to delete symlinked job dir: {job_dir}")
                 for attempt in record.attempts:
-                    expected_session_id = (
+                    legacy_session_id = (
                         f"paper-copilot-{record.id}-attempt-{attempt.number}"
                     )
-                    expected_path = session_file(
-                        expected_session_id,
-                        self._root,
-                    ).absolute()
-                    session_dir = expected_path.parent
+                    allowed_session_ids = {
+                        conversation_id,
+                        legacy_session_id,
+                    }
+                    expected_paths = {
+                        session_file(allowed_session_id, self._root).absolute()
+                        for allowed_session_id in allowed_session_ids
+                    }
+                    attempt_path = Path(attempt.session_path).expanduser().absolute()
+                    session_dir = attempt_path.parent
                     if (
-                        attempt.session_id != expected_session_id
-                        or Path(attempt.session_path).expanduser().absolute()
-                        != expected_path
+                        attempt.session_id not in allowed_session_ids
+                        or attempt_path not in expected_paths
                     ):
                         raise JobError(
                             f"invalid session path for job {record.id} "
@@ -312,13 +333,16 @@ class ChatJobRegistry:
                         raise JobError(
                             f"refusing to delete symlinked session dir: {session_dir}"
                         )
-                    session_dirs.append(session_dir)
+                    session_dirs.add(session_dir)
 
             for record in conversation_records:
                 shutil.rmtree(self._job_dir(record.id))
                 self._event_sequences.pop(record.id, None)
             for session_dir in session_dirs:
                 if session_dir.exists():
+                    discard_library_environment(
+                        session_dir / "library-environment"
+                    )
                     shutil.rmtree(session_dir)
             self._events_changed.notify_all()
             return len(conversation_records)
@@ -402,6 +426,21 @@ class ChatJobRegistry:
             existing = self._threads.get(job_id)
             if existing is not None and existing.is_alive():
                 raise JobError(f"job {job_id} is still stopping")
+            conversation_id = record.spec.conversation_id
+            if conversation_id is None:
+                conversation_id = _new_conversation_id()
+                record.spec = record.spec.model_copy(
+                    update={"conversation_id": conversation_id}
+                )
+            active = self._active_conversation_job_ids(
+                conversation_id,
+                exclude_job_id=job_id,
+            )
+            if active:
+                raise JobError(
+                    "conversation already has an active turn: "
+                    + ", ".join(active)
+                )
             now = _now_ts()
             record.status = "queued"
             record.updated_at = now
@@ -505,7 +544,10 @@ class ChatJobRegistry:
             record = self._read_record(job_id)
             attempt_number = len(record.attempts) + 1
             source_attempt = record.attempts[-1] if record.attempts else None
-            session_id = f"paper-copilot-{job_id}-attempt-{attempt_number}"
+            conversation_id = record.spec.conversation_id
+            assert conversation_id is not None
+            session_id = conversation_id
+            shared_session_path = session_file(session_id, self._root)
             now = _now_ts()
             record.status = "running"
             record.updated_at = now
@@ -515,7 +557,7 @@ class ChatJobRegistry:
                     number=attempt_number,
                     status="running",
                     session_id=session_id,
-                    session_path=str(session_file(session_id, self._root)),
+                    session_path=str(shared_session_path),
                     started_at=now,
                     resumed_from_attempt=(
                         source_attempt.number if source_attempt is not None else None
@@ -530,22 +572,51 @@ class ChatJobRegistry:
                 attempt=attempt_number,
                 message="本地 Agent 已开始执行。",
             )
-            (
-                conversation_context,
-                previous_compaction_summary,
-                previous_conversation_record,
-            ) = self._build_conversation_context(record)
+            previous_conversation_record = (
+                self._previous_completed_conversation_record(record)
+            )
 
         rollout_started_at = time.perf_counter()
         recorder: RolloutRecorder | None = None
         active_activities: dict[str, tuple[ActivityKind, str]] = {}
         try:
+            session_preexisting = shared_session_path.is_file()
+            source_uses_shared_session = (
+                source_attempt is not None
+                and Path(source_attempt.session_path).absolute()
+                == shared_session_path.absolute()
+            )
+            previous_uses_shared_session = (
+                previous_conversation_record is not None
+                and previous_conversation_record.result is not None
+                and Path(
+                    previous_conversation_record.result.session_path
+                ).absolute()
+                == shared_session_path.absolute()
+            )
+            if (
+                not session_preexisting
+                and (source_uses_shared_session or previous_uses_shared_session)
+            ):
+                raise JobError(
+                    "conversation session is unavailable and cannot be "
+                    "reconstructed from a separate legacy session"
+                )
+            if session_preexisting:
+                session_store = SessionStore.load(session_id, root=self._root)
+            else:
+                session_store = SessionStore.create(
+                    session_id,
+                    model=DEFAULT_MODEL,
+                    agent=_MAIN_CONTEXT_AGENT,
+                    root=self._root,
+                )
             recorder = RolloutRecorder.create(
                 self._job_dir(job_id) / "attempts" / str(attempt_number),
                 job_id=job_id,
                 attempt=attempt_number,
                 session_id=session_id,
-                turn_id=f"turn:{job_id}:{attempt_number}",
+                turn_id=f"turn:{job_id}",
             )
             recorder.record(
                 entity_type="rollout",
@@ -561,26 +632,62 @@ class ChatJobRegistry:
                 payloads={"request": {"text": record.spec.request}},
             )
             resume_history: list[dict[str, Any]] | None = None
+            resume_world_state_baseline: dict[str, Any] | None = None
             resume_runtime_state: dict[str, Any] | None = None
             recovery_source_session: str | None = None
             continuation_prompt: str | None = None
+            previous_compaction_summary: CompactionSummary | None = None
             if (
                 source_attempt is not None
                 and Path(source_attempt.session_path).is_file()
             ):
-                source_store = SessionStore.load(
-                    source_attempt.session_id,
-                    root=self._root,
-                )
+                source_path = Path(source_attempt.session_path)
+                source_entries = SessionStore(
+                    source_path,
+                    last_id="",
+                ).read_all()
+                if source_path.absolute() == shared_session_path.absolute():
+                    current_turn_entries = entries_for_turn(
+                        source_entries,
+                        turn_id=job_id,
+                    )
+                    source_entries = conversation_entries_for_resume(
+                        source_entries,
+                        current_turn_id=job_id,
+                    )
+                else:
+                    current_turn_entries = source_entries
+                    recovery_source_session = source_attempt.session_path
                 recovered = reconstruct_rollout(
-                    source_store.read_all(),
+                    source_entries,
                     fallback_history=[
                         {"role": "user", "content": record.spec.request}
                     ],
                 )
                 resume_history = recovered.history
-                resume_runtime_state = recovered.runtime_state
-                recovery_source_session = source_attempt.session_path
+                resume_world_state_baseline = reconstruct_world_state(source_entries)
+                resume_runtime_state = reconstruct_rollout(
+                    current_turn_entries,
+                    fallback_history=[],
+                ).runtime_state
+                if recovered.compaction_summary is not None:
+                    previous_compaction_summary = CompactionSummary.model_validate(
+                        recovered.compaction_summary
+                    )
+            elif session_preexisting:
+                resumable_entries = conversation_entries_for_resume(
+                    session_store.read_all(),
+                    current_turn_id=job_id,
+                )
+                recovered = reconstruct_rollout(
+                    resumable_entries,
+                    fallback_history=[],
+                )
+                resume_history = recovered.history
+                resume_world_state_baseline = reconstruct_world_state(
+                    resumable_entries
+                )
+                continuation_prompt = record.spec.request
                 if recovered.compaction_summary is not None:
                     previous_compaction_summary = CompactionSummary.model_validate(
                         recovered.compaction_summary
@@ -594,8 +701,12 @@ class ChatJobRegistry:
                         "completed conversation session is unavailable: "
                         f"{previous_session_path}"
                     )
+                previous_entries = SessionStore(
+                    previous_session_path,
+                    last_id="",
+                ).read_all()
                 recovered = reconstruct_rollout(
-                    SessionStore(previous_session_path, last_id="").read_all(),
+                    previous_entries,
                     fallback_history=[
                         {
                             "role": "user",
@@ -604,12 +715,45 @@ class ChatJobRegistry:
                     ],
                 )
                 resume_history = recovered.history
+                resume_world_state_baseline = reconstruct_world_state(
+                    previous_entries
+                )
                 recovery_source_session = str(previous_session_path)
                 continuation_prompt = record.spec.request
                 if recovered.compaction_summary is not None:
                     previous_compaction_summary = CompactionSummary.model_validate(
                         recovered.compaction_summary
                     )
+
+            if recovery_source_session is not None:
+                session_store.append_recovery_base(
+                    source_session_path=recovery_source_session,
+                    history=resume_history or [],
+                    runtime_state=resume_runtime_state,
+                    compaction_summary=(
+                        previous_compaction_summary.model_dump(mode="json")
+                        if previous_compaction_summary is not None
+                        else None
+                    ),
+                )
+                recovery_source_session = None
+            session_store.append_turn_started(
+                turn_id=job_id,
+                job_id=job_id,
+                attempt=attempt_number,
+            )
+            session_store.append_message(
+                role="user",
+                text=(
+                    continuation_prompt
+                    if continuation_prompt is not None
+                    else (
+                        record.spec.request
+                        if resume_history is None
+                        else "继续刚才中断的任务。"
+                    )
+                ),
+            )
 
             tool_names: dict[str, str] = {}
             stream_events_seen = False
@@ -755,11 +899,14 @@ class ChatJobRegistry:
                         record_quality=record.spec.record_quality,
                         update_report=record.spec.update_report,
                         session_id=session_id,
+                        session_store=session_store,
+                        turn_input_persisted=True,
+                        turn_id=job_id,
                         event_callback=record_event,
                         stream_event_callback=record_stream_event,
-                        conversation_context=conversation_context,
                         previous_compaction_summary=previous_compaction_summary,
                         resume_history=resume_history,
+                        resume_world_state_baseline=resume_world_state_baseline,
                         resume_runtime_state=resume_runtime_state,
                         recovery_source_session=recovery_source_session,
                         continuation_prompt=continuation_prompt,
@@ -913,6 +1060,15 @@ class ChatJobRegistry:
             record = self._read_record(job_id)
             attempt = _attempt(record, attempt_number)
             now = _now_ts()
+            if Path(attempt.session_path).is_file():
+                SessionStore.load(
+                    attempt.session_id,
+                    root=self._root,
+                ).append_turn_completed(
+                    turn_id=job_id,
+                    job_id=job_id,
+                    attempt=attempt_number,
+                )
             attempt.status = "completed"
             attempt.finished_at = now
             record.status = "completed"
@@ -939,8 +1095,14 @@ class ChatJobRegistry:
             attempt.finished_at = now
             attempt.error = error
             if Path(attempt.session_path).is_file():
-                SessionStore.load(attempt.session_id, root=self._root).append_turn_aborted(
-                    error
+                SessionStore.load(
+                    attempt.session_id,
+                    root=self._root,
+                ).append_turn_aborted(
+                    error,
+                    turn_id=job_id,
+                    job_id=job_id,
+                    attempt=attempt_number,
                 )
             record.status = "failed"
             record.updated_at = now
@@ -973,7 +1135,12 @@ class ChatJobRegistry:
                 SessionStore.load(
                     attempt.session_id,
                     root=self._root,
-                ).append_turn_aborted(reason)
+                ).append_turn_aborted(
+                    reason,
+                    turn_id=job_id,
+                    job_id=job_id,
+                    attempt=attempt_number,
+                )
             record.status = "interrupted"
             record.updated_at = now
             record.error = reason
@@ -1086,7 +1253,12 @@ class ChatJobRegistry:
                         SessionStore.load(
                             attempt.session_id,
                             root=self._root,
-                        ).append_turn_aborted("本地服务在任务完成前停止。")
+                        ).append_turn_aborted(
+                            "本地服务在任务完成前停止。",
+                            turn_id=record.id,
+                            job_id=record.id,
+                            attempt=attempt.number,
+                        )
                 record.status = "interrupted"
                 record.updated_at = now
                 record.error = "本地服务在任务完成前停止, 可从持久化 rollout 恢复。"
@@ -1103,17 +1275,13 @@ class ChatJobRegistry:
     def _job_files(self) -> list[Path]:
         return list(self._jobs_dir.glob("*/job.json"))
 
-    def _build_conversation_context(
+    def _previous_completed_conversation_record(
         self,
         current: ChatJobRecord,
-    ) -> tuple[
-        str | None,
-        CompactionSummary | None,
-        ChatJobRecord | None,
-    ]:
+    ) -> ChatJobRecord | None:
         conversation_id = current.spec.conversation_id
         if conversation_id is None:
-            return None, None, None
+            return None
         previous = [
             self._read_record(path.parent.name)
             for path in self._job_files()
@@ -1128,55 +1296,21 @@ class ChatJobRegistry:
             and record.created_at <= current.created_at
         ]
         completed.sort(key=lambda record: record.created_at)
+        return completed[-1] if completed else None
 
-        checkpoint_index: int | None = None
-        checkpoint_summary: CompactionSummary | None = None
-        for index in range(len(completed) - 1, -1, -1):
-            result = completed[index].result
-            assert result is not None
-            if result.conversation_compaction is not None:
-                checkpoint_index = index
-                checkpoint_summary = result.conversation_compaction
-                break
-
-        active_records = (
-            completed if checkpoint_index is None else completed[checkpoint_index:]
-        )
-        active_turns: list[dict[str, str]] = []
-        for record in active_records:
-            assert record.result is not None
-            active_turns.append(
-                {
-                    "job_id": record.id,
-                    "user": record.spec.request,
-                    "assistant": record.result.report_markdown,
-                }
-            )
-        if not active_turns:
-            return (
-                None,
-                checkpoint_summary,
-                completed[-1] if completed else None,
-            )
-        payload = {
-            "conversation_id": conversation_id,
-            "compaction_summary": (
-                checkpoint_summary.model_dump(mode="json")
-                if checkpoint_summary is not None
-                else None
-            ),
-            "completed_turns": active_turns,
-        }
-        context = (
-            "<conversation_context>\n"
-            f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n"
-            "</conversation_context>"
-        )
-        return (
-            context,
-            checkpoint_summary,
-            completed[-1],
-        )
+    def _active_conversation_job_ids(
+        self,
+        conversation_id: str,
+        *,
+        exclude_job_id: str | None,
+    ) -> list[str]:
+        return [
+            record.id
+            for path in self._job_files()
+            if (record := self._read_record(path.parent.name)).id != exclude_job_id
+            and record.spec.conversation_id == conversation_id
+            and record.status in {"queued", "running", "waiting_for_approval"}
+        ]
 
     def _job_dir(self, job_id: str) -> Path:
         _validate_job_id(job_id)
@@ -1193,7 +1327,9 @@ class ChatJobRegistry:
             session_path = Path(attempt.session_path)
             if not session_path.is_file():
                 continue
-            for entry in reversed(SessionStore(session_path, last_id="").read_all()):
+            entries = SessionStore(session_path, last_id="").read_all()
+            entries = entries_for_turn(entries, turn_id=record.id)
+            for entry in reversed(entries):
                 if isinstance(entry, LLMCall) and entry.agent == _MAIN_CONTEXT_AGENT:
                     total_context_tokens = (
                         entry.input_tokens

@@ -1,5 +1,10 @@
 from .paths import compute_paper_id, paper_dir, session_file
-from .recovery import RecoveredRollout, reconstruct_rollout
+from .recovery import (
+    RecoveredRollout,
+    conversation_entries_for_resume,
+    entries_for_turn,
+    reconstruct_rollout,
+)
 from .store import SessionStore
 from .types import (
     ApplicationEvent,
@@ -16,6 +21,9 @@ from .types import (
     ToolResult,
     ToolUse,
     TurnAborted,
+    TurnCompleted,
+    TurnStarted,
+    WorldState,
 )
 
 __all__ = [
@@ -35,7 +43,12 @@ __all__ = [
     "ToolResult",
     "ToolUse",
     "TurnAborted",
+    "TurnCompleted",
+    "TurnStarted",
+    "WorldState",
     "compute_paper_id",
+    "conversation_entries_for_resume",
+    "entries_for_turn",
     "paper_dir",
     "reconstruct_rollout",
     "session_file",

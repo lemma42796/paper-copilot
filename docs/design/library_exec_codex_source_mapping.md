@@ -71,10 +71,12 @@ Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地�
 ### 3.3 用户已确认的必要适配
 
 - 不开放 Codex 的 `workdir`、模型可选 shell、login shell、PTY 和远程 environment；
-- 不实现 `yield_time_ms`、持续 session 和 `write_stdin`；
+- Slice 2 不实现 `yield_time_ms`、持续 session 和 `write_stdin`；该历史限制已由 E3
+  conversation 级环境取代；
 - 不开放 sandbox/additional permissions，也不在 sandbox 失败后升级；
 - 保留 Paper Copilot 专用 `paper-cache` broker；
-- 保留一次性命令的硬 `timeout_ms`；
+- Slice 2 保留一次性命令的硬 `timeout_ms`；E3 改为 bounded `yield_time_ms`，整体
+  deadline 继续由 Agent/job Runtime 强制；
 - 当前额外 CPU/file-size `limit` wrapper 是 Codex unified exec 中没有的设计，作为
   明确的 Paper Copilot 专用资源边界保留。
 - `rg` 作为受控 Runtime 依赖随 `.app` 分发，供应方式直接采用 Codex package builder
@@ -84,3 +86,28 @@ Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地�
 
 上述差异已于 2026-07-27 获得用户确认。Runtime 手工验收与 `.app` 打包验收均已通过；
 Slice 2 完成，不自动开始其他 v2 slice。
+
+## 4. E3：conversation 级 Unified Library Environment
+
+固定 Codex 源码 `fe01054a28fa4bd04716d9ceadb410f2443a50ce` 的后续映射：
+
+- `core/src/tools/handlers/unified_exec/exec_command.rs`：exec 分配 process ID，解析
+  yield/output budget，并把仍存活进程交给 session 级 manager；
+- `core/src/unified_exec/process_manager.rs::exec_command`：进程在初始 yield 前进入
+  store，返回增量输出、chunk ID、可选 process/session ID 和 exit code；
+- `process_manager.rs::write_stdin`：同一 process 的交互串行化，非空输入写入、空输入
+  轮询，退出后从 store 移除；
+- `core/src/tools/handlers/unified_exec/write_stdin.rs`：模型使用 `session_id` 继续原命令，
+  不重新执行权限或 pre-tool 流程。
+
+Paper Copilot 的必要适配：
+
+- `LibraryEnvironment` 位于 conversation session 目录，固定 `workspace/`、只读
+  `library/`/`cache/`、持久 `scratch/` 和受控 `bin/`；
+- process manager 使用不透明 UUID session ID，stdout/stderr 合并为按 interaction
+  drain 的 bounded chunk；每次返回独立 chunk ID；
+- `library_exec` 公开 `cmd/yield_time_ms/max_output_tokens`；
+  `library_write_stdin` 公开 `session_id/chars/yield_time_ms/max_output_tokens`；
+- 用户中断或删除 conversation 时终止全部进程组；
+- 不开放 PTY、login shell、shell/workdir/environment 选择、网络或权限升级；
+- 受控 Python 留给 E4，不在本 slice 扩大 PATH。

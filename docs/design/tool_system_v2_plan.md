@@ -1,7 +1,7 @@
 # Paper Copilot 工具系统 v2 计划
 
-状态：冻结 Query 1 已通过；最小持续排除已实施并完成定向验证；待运行 Query 2
-日期：2026-07-29
+状态：三套目标系统单次四轮均已完成并形成 Gold revision 2 工作评分；下一步转入同模型 Agent 差距根因研究
+日期：2026-07-30
 文档职责：只记录方向、阶段、决策门和 Definition of Done。工具契约、源码映射、实验
 明细和历史过程保存在第 9 节链接的专项文档中，不在本计划重复。
 
@@ -35,13 +35,13 @@
 
 | 工具 | 当前职责 | 状态 |
 |---|---|---|
-| `library_exec` | 在授权论文库和只读缓存上执行受限命令 | 已实施 |
-| `read_page` | 按完整论文标识读取一页缓存文本并登记页证据 | 已实施 |
+| `library_exec` | 在授权论文库和只读缓存上批量搜索、读取带页边界文本 | 已实施 |
 | `inspect_page` | 检查一张明确 PDF 页面或区域 | 已实施 |
 | `library_edit` | 执行授权论文库中的用户可见写操作 | 已实施 |
 
 Runtime preflight 负责批量 cache ensure；`library_exec` 不再接受 `paper-cache`
-broker 命令。模型通过 `read_page` 读取页文本。
+broker 命令。模型直接读取 `research_cache_index` 给出的逻辑缓存路径，实际命令输出
+随完整会话历史保留，不再使用模型可见的文本页面专用工具。
 
 旧 `read_paper`、`paper_search`、query/compare/related、Composer 专用工具、
 `library_files` 和 `notes_patch` 已从模型工具表面移除，但回滚代码尚未删除。
@@ -59,8 +59,8 @@ broker 命令。模型通过 `read_page` 读取页文本。
 | 3 论文研究 Skill | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
 | 4 `inspect_page` | 已完成 | `agent_infrastructure_codex_source_mapping.md` |
 | 5 `paper_set` | 历史兼容，不再模型可见 | `paper_set_codex_source_mapping.md` |
-| 6 公开工具切换 | 已切换为四工具表面，Query 1 已验证 | `agent_infrastructure_codex_source_mapping.md` |
-| 7 冻结评测 | Query 1 已完成，Query 2 待运行 | `codex_multi_thesis_blind_experiment_plan.md` |
+| 6 公开工具切换 | 已切换为按能力暴露的统一 registry；当前最多五工具，新增部分未验证 | `agent_infrastructure_codex_source_mapping.md` |
+| 7 冻结评测 | 三套目标系统单次四轮均完成并形成工作评分；独立复核已取消，结果仅作诊断输入 | `codex_multi_thesis_blind_experiment_plan.md` |
 | 8 删除旧实现 | 未开始 | 仅在 Slice 7 通过并获确认后执行 |
 
 已完成的底层能力包括：
@@ -68,7 +68,7 @@ broker 命令。模型通过 `read_page` 读取页文本。
 - 以 PDF SHA-256、提取器版本和参数标识跨会话缓存；
 - 固定逻辑 workspace、过滤环境、无网络 sandbox、deadline 和输出预算；
 - 缓存 preflight、原子发布、revision 和并发去重；
-- Skill 在首次运行、恢复和 context compaction 后注入；
+- Skill catalog 常驻，正文由 `load_skill` 首次按需注入，compaction 保留已加载版本；
 - `inspect_page` 的模型能力检查和页级渲染；
 - `paper_set` 的 append-only 事件、集合快照、stale 检查和恢复；
 - session tool call 与 lifecycle trace 的 call ID 对齐。
@@ -143,24 +143,24 @@ lifecycle 调用的结论已纠正，trace 修复不属于下一 slice。
 |---|---|
 | `paper_set` 模型工具 | 删除 |
 | `paper-cache status/ensure` | 已由 Runtime preflight 接管，不再暴露给模型 |
-| `paper-cache page` | 从 `library_exec` broker 移除，改为独立 `read_page` 工具 |
+| `paper-cache page` | 从 `library_exec` broker 移除；直接读取预生成 `layout.txt` |
 | `inspect_page` | 保留，负责视觉页面读取 |
 | active paper set | 本 slice 固定为 Query 1 的 Runtime preflight 论文预算 |
-| 页级证据 | `read_page`/`inspect_page` 成功后由 Runtime 自动登记 |
+| 页级证据 | 文本使用权威命令与模型可见输出；`inspect_page` 继续登记视觉页事实 |
 | 完成性与引用 | 默认不拦截；可解析引用转成可点击论文页链接 |
 
 这会删除工具入口，不会删除底层能力：
 
 - 删除 `paper_set` 不等于删除集合、stale、coverage 和恢复；
 - 删除 `paper-cache` broker 不等于删除内容寻址缓存或页文本读取；
-- `read_page` 只暴露完整 SHA-256 和正整数页码，不接受任意路径；
+- `library_exec` 只读取授权的逻辑 library/cache 根，不开放宿主任意路径；
 - evidence ledger 不保存完整正文、图片、PDF 或宿主绝对路径。
 
 ### 6.2 已确认决策
 
-`runtime_research_evidence_codex_source_mapping.md` 已按 `read_page` 方向修订并冻结：
+`runtime_research_evidence_codex_source_mapping.md` 已按严格 Codex 方向修订：
 
-1. `read_page` schema、输出、失败和 trace attributes；
+1. 文本命令、模型可见输出和完整会话历史；
 2. Query 1 active set 等于 Runtime preflight 成功准备的论文集合；
 3. 旧 `paper_set` 事件可重放但不再产生 citation-grade evidence；
 4. `library_exec` 明确拒绝全部 `paper-cache` broker 命令；
@@ -200,8 +200,8 @@ block-and-continue 结构，但没有 PDF 页证据、论文集合或 Markdown �
 
 - 模型工具表面不再包含 `paper_set`；
 - `library_exec` 不再接受 `paper-cache status/ensure/page`；
-- `read_page` 只能读取授权缓存中与完整 PDF SHA-256 匹配的一页；
-- 只有成功返回给模型的 `read_page` 或 `inspect_page` 能产生页证据事实；
+- 文本读取只通过 `library_exec`，命令与实际返回输出进入权威 trace 和会话历史；
+- 只有成功返回给模型的 `inspect_page` 产生结构化视觉页证据事实；
 - session/recovery 可确定性重建 active set 和 evidence ledger；
 - 没有 Stop handler 时，任何模型 `end_turn` 都直接结束；
 - 合法完整引用 `[<64-lowercase-hex>:page[<positive-int>]]` 转成可点击页码链接；
@@ -215,7 +215,8 @@ block-and-continue 结构，但没有 PDF 页证据、论文集合或 Markdown �
 
 ## 8. Slice 7 冻结评测
 
-Query 1 通过后恢复正式评测：
+三套目标系统已分别在全新连续会话中完成单次四轮运行，并按 Gold revision 2 形成
+工作评分。正式冻结仍遵循以下要求：
 
 1. 使用冻结的 14 篇论文、四轮 query 和私有 Gold；
 2. 先按同一 Gold 生成新的 Codex CLI JSONL v2 基线报告；
@@ -225,8 +226,10 @@ Query 1 通过后恢复正式评测：
 6. 执行经确认的工具消融；
 7. 不使用模型自报替代权威 trace。
 
-冻结门槛须在 Codex 基线重新评分后由用户确认。当前不沿用已删除的旧桌面端分数，也不
-根据 v2 输出修改 Gold。
+Codex 基线已经按 Gold revision 2 重新评分。当前结果只有一次运行，尚未满足第 3–4
+项的重复实验要求。用户已取消独立评分复核，因此这些分数不冻结为统计意义上的正式
+结果，只作为下一阶段 Agent 根因诊断的描述性输入。当前不沿用已删除的旧桌面端分数，
+也不根据 v2 输出修改 Gold。
 
 Slice 7 通过后，另行确认 Slice 8，才可删除旧工具和只服务旧流程的实现。
 
@@ -244,5 +247,6 @@ Slice 7 通过后，另行确认 Slice 8，才可删除旧工具和只服务旧�
 
 ## 10. 下一步
 
-从全新 conversation 重新运行冻结 Query 1–4；四轮完成后再按冻结 Gold 计算并列
-指标。本步骤不运行完整消融、不重复 Codex 基线、不删除其他旧实现。
+对照同一 DeepSeek V4 Pro 在 Codex CLI 与 Paper Copilot 中的既有模型请求、上下文、
+工具反馈和权威 trace，定位 T02 UDA 误判、T03 复核遗漏和 T04 单元格不可追溯的首个
+分叉点。先形成源码支持的根因表和最小消融建议，不重跑模型、不修改实现、不删除旧代码。

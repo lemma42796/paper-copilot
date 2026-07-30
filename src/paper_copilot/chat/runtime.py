@@ -17,6 +17,7 @@ from paper_copilot.agents.paper_copilot import (
     PaperCopilotRun,
     run_paper_copilot,
 )
+from paper_copilot.agents.tools.runtimes import get_library_environment
 from paper_copilot.agents.tool_security import (
     ApprovalMode,
     ToolApprovalRequest,
@@ -29,6 +30,7 @@ from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.knowledge.meta import IndexMeta, require_match, write_meta
 from paper_copilot.schemas.compaction import CompactionSummary
+from paper_copilot.session import SessionStore
 from paper_copilot.session.paths import default_pdf_dir, default_root, embedding_cache_file
 from paper_copilot.shared.embedder import EMBEDDING_DIM, MODEL_NAME, Embedder
 from paper_copilot.shared.embedding_cache import CachedEmbedder, EmbeddingCache, EmbeddingEncoder
@@ -67,11 +69,15 @@ async def handle_chat_request(
     llm: LLMClientProtocol | None = None,
     read_llm: LLMClient | None = None,
     session_id: str | None = None,
+    session_store: SessionStore | None = None,
+    turn_input_persisted: bool = False,
+    turn_id: str | None = None,
     event_callback: Callable[[Event], None] | None = None,
     stream_event_callback: LLMStreamEventCallback | None = None,
     conversation_context: str | None = None,
     previous_compaction_summary: CompactionSummary | None = None,
     resume_history: list[dict[str, Any]] | None = None,
+    resume_world_state_baseline: dict[str, Any] | None = None,
     resume_runtime_state: dict[str, Any] | None = None,
     recovery_source_session: str | None = None,
     continuation_prompt: str | None = None,
@@ -135,6 +141,13 @@ async def handle_chat_request(
             pdf_dir=library_dir,
             root=home,
             max_papers=max_papers,
+            library_environment=(
+                get_library_environment(
+                    session_store.path.parent / "library-environment"
+                )
+                if session_store is not None
+                else None
+            ),
         )
         run = await run_paper_copilot(
             prompt=request,
@@ -144,11 +157,14 @@ async def handle_chat_request(
             root=home,
             max_budget_cny=budget_cny,
             session_id=session_id,
+            session_store=session_store,
+            turn_input_persisted=turn_input_persisted,
             event_callback=event_callback,
             stream_event_callback=stream_event_callback,
             conversation_context=conversation_context,
             previous_compaction_summary=previous_compaction_summary,
             resume_history=resume_history,
+            resume_world_state_baseline=resume_world_state_baseline,
             resume_runtime_state=resume_runtime_state,
             recovery_source_session=recovery_source_session,
             continuation_prompt=continuation_prompt,
@@ -164,6 +180,7 @@ async def handle_chat_request(
         update_report=update_report,
         runs_dir=runs_dir,
         report_out_path=eval_report_path,
+        turn_id=turn_id,
     )
 
 
@@ -175,6 +192,7 @@ def _persist_chat_result(
     update_report: bool,
     runs_dir: Path | None,
     report_out_path: Path | None,
+    turn_id: str | None,
 ) -> ChatRunResult:
     report_path = run.session_path.parent / "research-report.md"
     report_path.write_text(run.report_markdown, encoding="utf-8")
@@ -182,7 +200,11 @@ def _persist_chat_result(
     quality_run_path: Path | None = None
     eval_report_path: Path | None = None
     if record_quality and run.tool_names:
-        quality_run_path = write_research_quality_run(run.session_path, runs_dir=runs_dir)
+        quality_run_path = write_research_quality_run(
+            run.session_path,
+            runs_dir=runs_dir,
+            turn_id=turn_id,
+        )
         if update_report:
             eval_report_path = write_report(
                 load_history(runs_dir=runs_dir, suite_name="research"),

@@ -1,7 +1,7 @@
 # Runtime 页面证据与最终输出合同 Codex 源码映射
 
-状态：按 Codex 默认行为修订；论文专用结束拦截已删除
-日期：2026-07-29
+状态：按 Codex 默认行为修订；论文专用结束拦截和模型可见文本页面专用工具已删除
+日期：2026-07-30
 Codex source ref：`fe01054a28fa4bd04716d9ceadb410f2443a50ce`
 Codex worktree：`/Users/a123/Documents/agent学习/codex`
 
@@ -11,9 +11,9 @@ Codex worktree：`/Users/a123/Documents/agent学习/codex`
 Codex 默认并不校验论文覆盖率或论文页码引用；它提供的是可选 Stop hook 和前端链接
 渲染。因此当前实现调整为：
 
-1. 用独立 `read_page` 取代模型通过 `library_exec` 调用 `paper-cache` broker；
-2. `read_page` 和 `inspect_page` 成功后由 Runtime 自动登记页证据；
-3. 保留 append-only 页面证据，供审计、恢复和范围变更使用；
+1. 模型通过 `library_exec` 直接批量搜索和读取 Runtime 准备的带页边界缓存文本；
+2. 文本命令与实际返回输出进入权威 trace 和完整会话历史，不另设页面登记工具；
+3. `inspect_page` 继续登记 append-only 视觉页面证据；
 4. 删除论文专用 `end_turn` 校验、自动重答和 Incomplete 替换；
 5. 由模型直接输出安全的应用内 Markdown 链接，Runtime 引用层不改写最终答案；
 6. 删除模型可见 `paper_set`。
@@ -32,34 +32,27 @@ ID，其中 99 completed、14 failed。
 | 工具尝试审计 | `core/src/tools/registry.rs::dispatch_any_with_terminal_outcome`、`tool_dispatch_trace.rs` | dispatch 前启动 trace，early failure 记录 failed | 当前已对齐，不修改 |
 | 原始请求持久化 | `core/src/stream_events_utils.rs::handle_output_item_done`、`session/mod.rs::record_conversation_items` | 执行前保存 call，结果继续追加历史 | 当前已对齐 |
 | 参数失败反馈 | `tools/handlers/mod.rs::parse_arguments`、`tools/parallel.rs::failure_response` | 失败 output 保留 call ID，模型可修正重试 | 当前已对齐 |
-| 工具成功后处理 | `tools/registry.rs` PostToolUse 路径 | 受信任生命周期处理后再把结果交回模型 | 必要适配：持久化结果后登记页证据 |
+| 工具成功后处理 | `tools/registry.rs` PostToolUse 路径 | 受信任生命周期处理后再把结果交回模型 | 文本命令输出直接进入历史；视觉检查后登记页证据 |
 | 完成前阻断 | `session/turn.rs::run_turn`、`hook_runtime.rs::run_turn_stop_hooks`、`hooks/src/events/stop.rs` | Stop hook 可选；没有 handler 就不阻断 | 通用 loop 保留默认关闭的 Stop hook，产品默认不配置 |
-| 页级论文证据 | 固定 Codex ref 无 PDF cache/page artifact 对象 | 无对应机制 | 增加最小 append-only evidence fact |
+| 页级论文证据 | 固定 Codex ref 无 PDF cache/page artifact 对象 | 无对应机制 | 文本不增加专用机制；视觉检查保留最小 evidence fact |
 | 论文集合 coverage | 固定 Codex ref 无论文集合语义 | 无对应机制 | 不增加结束拦截 |
 | 跨轮次论文排除 | 固定 Codex ref 依赖同一 session 历史，没有论文范围工具 | 无基线失败 | 不增加产品特定工具，使用 conversation history |
 | Markdown 引用展示 | `tui/src/markdown_render.rs` | 标准 Markdown 链接由目标地址解析和展示 | 使用安全应用链接，显示论文标题和页码 |
 
 Paper Copilot 不再把 JSON schema 或页面证据当成默认的最终回答校验器。
 
-## 3. `read_page`
+## 3. 文本页面读取
 
-新增模型工具：
+不新增模型工具。模型使用：
 
 ```yaml
-name: read_page
+name: library_exec
 input:
-  pdf_sha256: <64 lowercase hex>
-  page: <positive integer>
+  cmd: <bounded command over cache layout.txt>
 output:
-  status: ok
-  pdf_sha256: <64 lowercase hex>
-  page: <positive integer>
-  text: <bounded page text>
-  evidence:
-    source_kind: cached_text_page
-    artifact_sha256: <64 lowercase hex>
-    extractor_fingerprint: <string>
-    cache_revision_id: <string>
+  exit_code: <integer>
+  output: <bounded model-visible text>
+  truncation: <explicit metadata>
 ```
 
 固定边界：
@@ -91,13 +84,9 @@ Runtime preflight 继续负责预算内 PDF 的 cache ensure 和 index 注入，
 
 事件不保存页文本、图片 data URL、PDF 内容或宿主绝对路径。
 
-只有两个成功路径可以产生事实：
-
-1. `read_page` 成功把页文本返回给模型；
-2. `inspect_page` 成功把页面或 region 图像交给模型。
-
-`rg`、`awk`、`sed`、preflight TXT、模型文本、历史 `record_evidence` 和工具内部存在性
-检查都不能产生事实。
+只有 `inspect_page` 成功把页面或 region 图像交给模型时产生结构化视觉页事实。文本
+证据沿用 Codex 语义：`rg`、`awk`、`sed` 等命令及其实际返回输出保存在权威 trace 和
+完整模型历史中，不另行提升为 Runtime 页面事实。
 
 `run_agent_loop` 增加可选 `on_tool_result_persisted` 回调，顺序固定为：
 
@@ -173,8 +162,8 @@ lifecycle。
 完成条件：
 
 - 模型工具表面不含 `paper_set`，`library_exec` 不接受 `paper-cache`；
-- `read_page` 只读取 active index 中完整 SHA-256 对应的一页；
-- 只有成功 `read_page`/`inspect_page` 产生 observed-page fact；
+- 文本只通过 `library_exec` 读取授权缓存，模型可见输出进入完整历史；
+- 只有成功的 `inspect_page` 产生结构化 observed-page fact；
 - recovery 可重建相同 ledger 和 active set；
 - 没有 Stop handler 时，模型 `end_turn` 直接结束；
 - 可选 Stop handler 的 block 原因会作为 continuation 继续同一任务；
@@ -185,4 +174,6 @@ lifecycle。
   耗时和所有 failure/partial/unverifiable 字段。
 
 此前 Query 1 和 Query 2 是在论文专用拦截存在时运行，不能与修订后的实现混作同一组
-正式评测。若继续四轮对比，应从 Query 1 重新开始记录。
+正式评测，因此没有纳入当前结果。三套目标系统随后均已用全新连续会话完成 Query 1–4，
+并形成 Gold revision 2 工作评分。独立评分复核已取消；当前下一步是只读研究同一
+DeepSeek V4 Pro 在 Codex CLI 与 Paper Copilot Agent 中产生质量差距的位置。

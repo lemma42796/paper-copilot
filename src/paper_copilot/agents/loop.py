@@ -246,7 +246,7 @@ async def run_agent_loop(
     agent_name: str = "AgentLoop",
     model: str | None = None,
     system: str | list[dict[str, Any]] | None = None,
-    build_runtime_context: Callable[[], str] | None = None,
+    build_runtime_context: Callable[[], str | None] | None = None,
     build_recovery_state: Callable[[], dict[str, Any]] | None = None,
     context_token_estimator: Callable[[list[dict[str, Any]]], int] | None = None,
     compact_history_callback: Callable[
@@ -277,9 +277,8 @@ async def run_agent_loop(
     recording; `Terminated.cost` is then `None`. This lets tests and
     sketch scripts drive the loop without constructing a `CostTracker`.
 
-    When `build_runtime_context` is provided, its latest snapshot is appended
-    after the complete tool-result batch so the next model turn does not need
-    to reconstruct mutable application constraints from earlier messages.
+    When `build_runtime_context` is provided, a changed context fragment is
+    appended after the complete tool-result batch.
     """
     history: list[dict[str, Any]] = list(messages)
     turns = 0
@@ -589,9 +588,8 @@ async def run_agent_loop(
                 )
             if build_runtime_context is not None:
                 runtime_context = build_runtime_context()
-                tool_results.append({"type": "text", "text": runtime_context})
-                if store is not None:
-                    store.append_message(role="user", text=runtime_context)
+                if runtime_context is not None:
+                    tool_results.append({"type": "text", "text": runtime_context})
             history.append({"role": "user", "content": tool_results})
     except asyncio.CancelledError:
         yield Terminated(reason="cancelled", cost=_cost_snapshot(cost))
