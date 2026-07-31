@@ -1,6 +1,6 @@
 # `library_exec` Codex 源码映射
 
-状态：现有 Runtime 已实施；Codex 执行反馈对齐为下一待实施 bounded slice
+状态：Codex 执行反馈、按需 manifest 发现与上下文职责去重已写入工作区，尚未验证或重跑
 日期：2026-07-31
 Codex source ref：`61a44880a85d2fd0d8770908dea5733495e571c8`  
 Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地修改
@@ -127,9 +127,10 @@ Codex 没有 Paper Copilot 的论文授权、内容寻址 cache 和应用内引�
 - Runtime 为本次已准备论文生成内容寻址、不可变的 JSONL manifest；
 - conversation workspace 用短 `papers/paper-NNNN-<artifact>.layout.txt` 只读 symlink
   指向既有内容寻址缓存，不复制文本、不改变授权；
-- `research_cache_index` 暴露 manifest 逻辑路径，并在同一环境中使用短文本路径；
+- 模型通过 `research-manifests/current.jsonl` 按需发现当前 manifest，并在同一环境中
+  使用短文本路径；
 - `python3` 仅作为既有受控 `python` 的命令别名，不增加解释器、第三方包、网络或写权限；
-- Skill 对多论文任务要求先做一次 manifest 驱动的批量发现，再做页边界聚焦读取。
+- Skill 对多论文任务优先建议有明确标签的批量发现，但不强制固定搜索顺序。
 
 这保留了 Paper Copilot 的确定性缓存、页码证据和引用边界，同时消除模型拼接长缓存路径
 和逐论文启动命令的主要协调成本。是否实际降低工具调用和 token，仍需在同一冻结问题集
@@ -150,7 +151,7 @@ Codex 没有 Paper Copilot 的论文授权、内容寻址 cache 和应用内引�
 - Codex 的较少调用同时伴随 UDA 误判和 T03 漏项，不能把最低调用数直接等同于更强
   Agent。
 
-当前 PC 存在两个具体容量差异：
+改动前 PC 存在两个具体容量差异：
 
 1. `LibraryExecInput.max_output_tokens` 默认和硬上限均为 10000；
 2. `LibraryEnvironment` 在模型侧 token 截断之前，先以 64000 bytes 的 head-tail
@@ -174,7 +175,7 @@ schema 上限都不能验证 Codex 式批量读取；底层收集和模型侧截
 - `core/src/unified_exec/process_manager.rs`：completed 与 yielded 共享 output
   collection metadata，并由 `write_stdin` 返回后续增量。
 
-### 6.3 下一 bounded slice
+### 6.3 当前工作区实现
 
 目标是让同一模型获得与 Codex 等价的执行反馈和批量证据带宽，不追求固定调用次数。
 
@@ -190,14 +191,20 @@ schema 上限都不能验证 Codex 式批量读取；底层收集和模型侧截
    `scratch` 可写、无网络、无权限升级、无 PTY/login shell/任意 workdir；
 5. 用简洁环境事实声明现有 `pdftotext` 和受控 Python 可用于批处理，不增加论文专用
    搜索、待办或 Query 模板。
+6. 停止向 World State 预注入逐论文 `research_cache_index`；把准备完整性、PDF
+   SHA-256、短文本别名和 `citation_base` 保存在内容寻址 manifest 中，并通过模型只读
+   的 `research-manifests/current.jsonl` 稳定入口按需发现。
+7. 去重基础 prompt、工具 description、参数 description 和 research Skill；各层分别
+   负责结果约束、工具能力、参数语义和可选研究方法。
 
 非目标：
 
 - 不设置工具调用硬预算或强制一次读取多少篇论文；
 - 不针对冻结四轮 Query、Gold claim 或论文名称编码工作流；
-- 不修改模型、reasoning effort、Skill、provider wire、cache 格式或引用合同；
+- 不修改模型、reasoning effort、Skill 加载生命周期、provider wire、底层 cache 格式
+  或引用合同；Skill 正文只做职责去重和 manifest 入口迁移；
 - 不以取消 sandbox 换取调用数；
-- 不在同一 slice 调整 system prompt 的研究策略。
+- 不为冻结 Query 编码 system prompt 研究策略。
 
 Definition of Done：
 
@@ -205,7 +212,8 @@ Definition of Done：
 - 大批量命令不会在模型侧 token policy 之前被未说明的 64 KB 上限静默截断；
 - collection omission 与模型侧 token truncation 可在 trace 和模型反馈中区分；
 - 现有授权、网络和写入边界不扩大；
-- 实施状态保持“未完成”，直到代码、经用户要求的验证和隔离评测分别完成。
+- 代码状态记录为“已写入、未验证”；经用户要求的验证和隔离评测仍分别记录，不把未运行
+  项标为完成。
 
 评测主门槛为二选一：质量超过 Codex CLI，或在质量不下降时 total tokens 低于 Codex
 CLI。工具调用数和平均输出/调用只作为机制诊断；单次运行不作显著性结论。

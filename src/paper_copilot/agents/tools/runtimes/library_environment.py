@@ -18,7 +18,7 @@ from paper_copilot.shared.errors import KnowledgeError
 
 _MAX_ACTIVE_PROCESSES = 16
 _READ_CHUNK_BYTES = 8_192
-_RAW_OUTPUT_MAX_BYTES = 64_000
+_RAW_OUTPUT_MAX_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +36,7 @@ class LibraryProcessOutput:
 class LibraryResearchPaper:
     alias: str
     source_locator: str
+    paper_id: str
     text_source: Path
     page_count: int
     citation_base: str
@@ -44,6 +45,7 @@ class LibraryResearchPaper:
         return {
             "pdf": f"library/{self.source_locator}",
             "text": f"papers/{self.alias}",
+            "paper_id": self.paper_id,
             "pages": self.page_count,
             "citation_base": self.citation_base,
         }
@@ -165,6 +167,10 @@ class LibraryEnvironment:
     def configure_research_view(
         self,
         papers: tuple[LibraryResearchPaper, ...],
+        *,
+        total_pdf_count: int,
+        failures: tuple[dict[str, str], ...],
+        truncated_by_paper_budget: bool,
     ) -> str:
         with self._configuration_lock:
             self._ensure_directory(self.root)
@@ -178,14 +184,33 @@ class LibraryEnvironment:
                     papers_directory / paper.alias,
                     paper.text_source,
                 )
-            manifest = "".join(
+            manifest_header = {
+                "record_type": "research_manifest",
+                "schema_version": 1,
+                "total_pdf_count": total_pdf_count,
+                "prepared_count": len(papers),
+                "truncated_by_paper_budget": truncated_by_paper_budget,
+                "failures": list(failures),
+            }
+            manifest = (
                 json.dumps(
-                    paper.manifest_payload(),
+                    manifest_header,
                     ensure_ascii=False,
                     separators=(",", ":"),
                 )
                 + "\n"
-                for paper in papers
+                + "".join(
+                    json.dumps(
+                        {
+                            "record_type": "paper",
+                            **paper.manifest_payload(),
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                    for paper in papers
+                )
             ).encode()
             manifest_digest = hashlib.sha256(manifest).hexdigest()[:16]
             manifest_path = (
@@ -193,7 +218,9 @@ class LibraryEnvironment:
                 / f"manifest-{manifest_digest}.jsonl"
             )
             self._ensure_immutable_file(manifest_path, manifest)
-        return manifest_path.relative_to(self.workspace).as_posix()
+            current_manifest_path = manifests_directory / "current.jsonl"
+            self._ensure_current_symlink(current_manifest_path, manifest_path)
+        return current_manifest_path.relative_to(self.workspace).as_posix()
 
     def configure(
         self,
@@ -375,6 +402,18 @@ class LibraryEnvironment:
                 f"library environment path is not a symlink: {link.name}"
             )
         link.symlink_to(target, target_is_directory=target.is_dir())
+
+    @staticmethod
+    def _ensure_current_symlink(link: Path, target: Path) -> None:
+        if link.is_symlink():
+            if link.resolve() == target.resolve():
+                return
+            link.unlink()
+        elif link.exists():
+            raise KnowledgeError(
+                f"library environment current manifest is not a symlink: {link.name}"
+            )
+        link.symlink_to(target)
 
     @staticmethod
     def _ensure_immutable_file(path: Path, content: bytes) -> None:

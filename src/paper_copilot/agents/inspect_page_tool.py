@@ -60,8 +60,9 @@ class InspectPageInput(BaseModel):
         max_length=64,
         pattern=r"^(?:[0-9a-f]{12}|[0-9a-f]{64})$",
         description=(
-            "Full PDF SHA-256 from research_cache_index. Legacy 12-character "
-            "Paper Copilot IDs remain accepted for historical sessions."
+            "Full PDF SHA-256 from the Runtime-prepared research manifest. "
+            "Legacy 12-character Paper Copilot IDs remain accepted for historical "
+            "sessions."
         ),
     )
     page: int = Field(

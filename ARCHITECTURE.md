@@ -114,19 +114,13 @@ World State 只注入内建只读 `research-papers` Skill 的 catalog metadata�
 turn 不重复返回正文，compaction replacement history 保留已加载版本。Skill 只指导
 缓存搜索、页定位和证据工作流，不授予权限。
 
-Runtime 在模型循环前按论文预算准备内容寻址文本缓存，并注入只读
-`research_cache_index`：
-
-- 授权 PDF locator；
-- 完整 PDF SHA-256；
-- 页数；
-- 逻辑 `cache/.../layout.txt` 路径；
-- Runtime 分配的应用内 `citation_base`。
-
-conversation 环境另外生成内容寻址、只读的 JSONL manifest，并把缓存文本映射为短
-`papers/paper-NNNN-<artifact>.layout.txt` 别名；`research_cache_index` 提供 manifest
-逻辑路径。模型先用 manifest 和短别名做跨论文批量发现，再按明确页边界读取证据；
-无 conversation 环境的内部调用仍使用原始 `cache/.../layout.txt` 路径。
+Runtime 在模型循环前按论文预算准备内容寻址文本缓存。conversation 环境生成
+内容寻址、只读的 JSONL manifest，并把缓存文本映射为短
+`papers/paper-NNNN-<artifact>.layout.txt` 别名。manifest header 记录总数、准备数、
+失败项和 paper-budget 截断；paper records 记录授权 PDF locator、完整 PDF SHA-256、
+页数、短文本别名和 Runtime 分配的应用内 `citation_base`。模型不再预先接收完整论文
+索引，而是通过 Runtime 管理、模型只读的 `research-manifests/current.jsonl` 稳定入口
+和 `papers/` 按需发现并批量读取；内容寻址 manifest 本身保持不可变。
 `paper-cache status/ensure/page` 不再暴露。缓存文本以换页符保留 PDF 页边界，模型用
 有界命令一次读取一个或多个明确页面；实际返回的命令输出随完整会话历史进入后续上下文。
 
@@ -142,7 +136,7 @@ Codex 一样只提供默认关闭的通用 Stop hook；
 Paper Copilot 默认不配置 handler，因此模型 `end_turn` 后直接结束，不因论文覆盖率或
 引用格式自动重答。
 
-模型直接用 `research_cache_index` 中的 `citation_base` 生成最终 Markdown 链接；
+模型直接用 manifest paper record 中的 `citation_base` 生成最终 Markdown 链接；
 引用处理层不解析、验证、替换或清理模型答案。Chat result 另行携带本次运行生成的
 `citation ref -> 授权逻辑 locator` 映射。用户点击链接后，macOS 客户端先从该可信
 映射解析 locator，再校验目标位于授权目录内、扩展名为 PDF 且文件存在，随后打开指定
@@ -228,9 +222,9 @@ Embedding 当前固定为 DashScope `text-embedding-v4`、1024 维；模型或�
 - `agents/context/` 按稳定 section 构建模型可见 World State。一个 context window 首次
   注入 `full`，后续 turn 和工具 batch 只在状态变化时追加 RFC 7386 merge patch；
   session 同步持久化 full/patch，恢复时从最后 full 顺序应用 patch 重建 baseline。
-- 当前 section 包含论文授权摘要、paper/cache inventory、模型、静态预算、模型可见
-  工具、research Skill 和可选 Composer 状态。费用、deadline、授权与工具策略仍由
-  Runtime 强制；World State 不是授权边界。
+- 当前 section 包含论文授权摘要、模型、静态预算、模型可见工具、research Skill 和
+  可选 Composer 状态；逐论文 inventory 不再进入 World State。费用、deadline、授权与
+  工具策略仍由 Runtime 强制；World State 不是授权边界。
 - Compaction 删除旧窗口中的 World State fragment，并在 replacement history 与 session
   中重新建立 full baseline。
 - 一个 conversation 拥有一个持久 `LibraryEnvironment`：固定 logical cwd、只读

@@ -28,12 +28,15 @@ from paper_copilot.shared.poppler import find_poppler_executable
 _SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
 _SHELL = Path("/bin/zsh")
 _COMMAND_MAX_CHARS = 8_000
+_APPROX_BYTES_PER_TOKEN = 4
 _DEFAULT_OUTPUT_MAX_TOKENS = 10_000
-_MAX_OUTPUT_MAX_TOKENS = 10_000
+_OUTPUT_COLLECTION_MAX_BYTES = 1024 * 1024
+_OUTPUT_COLLECTION_MAX_TOKENS = (
+    _OUTPUT_COLLECTION_MAX_BYTES // _APPROX_BYTES_PER_TOKEN
+)
 _PAPER_CACHE_COMMAND_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_.-])paper-cache(?![A-Za-z0-9_.-])"
 )
-_APPROX_BYTES_PER_TOKEN = 4
 _DEFAULT_YIELD_TIME_MS = 10_000
 _DEFAULT_STDIN_YIELD_TIME_MS = 5_000
 _MIN_YIELD_TIME_MS = 250
@@ -42,7 +45,7 @@ _CPU_LIMIT_SECONDS = 35
 _FILE_SIZE_LIMIT = "64m"
 _SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 _OTOOL = Path("/usr/bin/otool")
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 _SANDBOX_POLICY_ID = "library_workspace_v3"
 _RESOURCE_WRAPPER = (
     "setopt errexit; "
@@ -62,11 +65,7 @@ class LibraryExecInput(BaseModel):
         min_length=1,
         max_length=_COMMAND_MAX_CHARS,
         description=(
-            "Shell command to run in a bounded Codex-style sandbox. The fixed logical "
-            "working directory contains read-only library/, cache/, and papers/ roots, "
-            "read-only research-manifests/, plus a writable scratch/ directory. "
-            "Network access and reads outside the "
-            "authorized roots are blocked."
+            "Shell command to run in the fixed library workspace described by this tool."
         ),
     )
     yield_time_ms: StrictInt = Field(
@@ -81,7 +80,6 @@ class LibraryExecInput(BaseModel):
     max_output_tokens: StrictInt = Field(
         default=_DEFAULT_OUTPUT_MAX_TOKENS,
         ge=256,
-        le=_MAX_OUTPUT_MAX_TOKENS,
         description=(
             "Output token budget. Defaults to 10000 tokens; larger requests are "
             "capped by policy."
@@ -100,7 +98,7 @@ class LibraryExecInput(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class LibraryExecRun:
-    output: dict[str, Any]
+    output: str
     trace_attributes: dict[str, Any]
 
 
@@ -129,8 +127,10 @@ class LibraryWriteStdinInput(BaseModel):
     max_output_tokens: StrictInt = Field(
         default=_DEFAULT_OUTPUT_MAX_TOKENS,
         ge=256,
-        le=_MAX_OUTPUT_MAX_TOKENS,
-        description="Output token budget for this interaction.",
+        description=(
+            "Output token budget for this interaction. Larger requests may be "
+            "capped by policy."
+        ),
     )
 
 
@@ -171,9 +171,10 @@ def library_exec_tool_description() -> str:
         "derived text cache as read-only cache/, short prepared-text aliases as "
         "read-only papers/, research-manifests/ as their machine-readable indexes, "
         "and only scratch/ as writable "
-        "persistent storage for this conversation. Runtime provides prepared cache paths in "
-        "research_cache_index. Read and search those page-delimited text files "
-        "directly; the returned command output becomes model-visible evidence. "
+        "persistent storage for this conversation. Discover the current prepared paper "
+        "manifest at research-manifests/current.jsonl and its text aliases under "
+        "papers/. Read and search page-delimited text directly; the "
+        "returned command output becomes model-visible evidence. "
         "paper-cache commands are not supported. The environment contains no user "
         "credentials; sandboxing "
         "blocks network access, library/cache writes, and reads outside authorized "
@@ -206,8 +207,8 @@ async def run_library_exec(
     resolved_command = _resolve_command(args.cmd)
     if _PAPER_CACHE_COMMAND_PATTERN.search(resolved_command.source_cmd):
         raise KnowledgeError(
-            "paper-cache is not exposed through library_exec; use the Runtime "
-            "research_cache_index and read its prepared text paths directly"
+            "paper-cache is not exposed through library_exec; discover prepared "
+            "text through research-manifests/current.jsonl or papers/*.layout.txt"
         )
 
     _require_macos_sandbox()
@@ -261,9 +262,13 @@ async def run_library_exec(
                 "yielded library commands require a persistent LibraryEnvironment"
             )
         temporary_directory.cleanup()
+    effective_max_output_tokens = min(
+        args.max_output_tokens,
+        _OUTPUT_COLLECTION_MAX_TOKENS,
+    )
     output_text, original_token_count = _bounded_process_output(
         process_output,
-        args.max_output_tokens,
+        effective_max_output_tokens,
     )
     _LOGGER.debug(
         "library_command_finished",
@@ -281,7 +286,6 @@ async def run_library_exec(
             session_id=process_output.session_id,
             chunk_id=process_output.chunk_id,
             original_token_count=original_token_count,
-            output_omitted_bytes=process_output.output_omitted_bytes,
         ),
         trace_attributes={
             "library_exec_schema_version": _SCHEMA_VERSION,
@@ -299,6 +303,8 @@ async def run_library_exec(
             "exit_code": process_output.exit_code,
             "output_bytes": process_output.total_output_bytes,
             "output_omitted_bytes": process_output.output_omitted_bytes,
+            "requested_max_output_tokens": args.max_output_tokens,
+            "effective_max_output_tokens": effective_max_output_tokens,
             "available_external_commands": [
                 command_name for command_name, _executable in external_commands.commands
             ],
@@ -316,9 +322,13 @@ async def run_library_write_stdin(
         chars=args.chars,
         yield_time_ms=args.yield_time_ms,
     )
+    effective_max_output_tokens = min(
+        args.max_output_tokens,
+        _OUTPUT_COLLECTION_MAX_TOKENS,
+    )
     output_text, original_token_count = _bounded_process_output(
         process_output,
-        args.max_output_tokens,
+        effective_max_output_tokens,
     )
     return LibraryExecRun(
         output=_model_output(
@@ -328,7 +338,6 @@ async def run_library_write_stdin(
             session_id=process_output.session_id,
             chunk_id=process_output.chunk_id,
             original_token_count=original_token_count,
-            output_omitted_bytes=process_output.output_omitted_bytes,
         ),
         trace_attributes={
             "library_exec_schema_version": _SCHEMA_VERSION,
@@ -340,6 +349,8 @@ async def run_library_write_stdin(
             "exit_code": process_output.exit_code,
             "output_bytes": process_output.total_output_bytes,
             "output_omitted_bytes": process_output.output_omitted_bytes,
+            "requested_max_output_tokens": args.max_output_tokens,
+            "effective_max_output_tokens": effective_max_output_tokens,
         },
     )
 
@@ -613,51 +624,52 @@ def _model_output(
     wall_time_seconds: float,
     session_id: str | None,
     chunk_id: str,
-    original_token_count: int | None,
-    output_omitted_bytes: int,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "wall_time_seconds": round(wall_time_seconds, 3),
-        "exit_code": exit_code,
-        "output": output,
-        "session_id": session_id,
-        "chunk_id": chunk_id,
-    }
-    if original_token_count is not None:
-        payload["original_token_count"] = original_token_count
-    if output_omitted_bytes:
-        payload["output_omitted_bytes"] = output_omitted_bytes
-    return payload
+    original_token_count: int,
+) -> str:
+    sections = [
+        f"Chunk ID: {chunk_id}",
+        f"Wall time: {wall_time_seconds:.4f} seconds",
+    ]
+    if exit_code is not None:
+        sections.append(f"Process exited with code {exit_code}")
+    if session_id is not None:
+        sections.append(f"Process running with session ID {session_id}")
+    sections.extend(
+        (
+            f"Original token count: {original_token_count}",
+            "Output:",
+            output,
+        )
+    )
+    return "\n".join(sections)
 
 
 def _bounded_process_output(
     process_output: LibraryProcessOutput,
     max_output_tokens: int,
-) -> tuple[str, int | None]:
+) -> tuple[str, int]:
     raw_text = process_output.output.decode("utf-8", errors="replace")
-    output_text, token_count = _truncate_for_token_budget(
+    original_token_count = _approx_tokens_from_bytes(
+        process_output.total_output_bytes
+    )
+    output_text = _truncate_for_token_budget(
         raw_text,
         max_output_tokens,
+        original_token_count=original_token_count,
     )
-    return (
-        output_text,
-        _original_token_count(
-            token_count,
-            total_bytes=process_output.total_output_bytes,
-            omitted_bytes=process_output.output_omitted_bytes,
-        ),
-    )
+    return output_text, original_token_count
 
 
 def _truncate_for_token_budget(
     text: str,
     max_tokens: int,
-) -> tuple[str, int | None]:
+    *,
+    original_token_count: int,
+) -> str:
     max_bytes = max_tokens * _APPROX_BYTES_PER_TOKEN
     encoded = text.encode("utf-8")
     if len(encoded) <= max_bytes:
-        return text, None
-    original_token_count = _approx_tokens_from_bytes(len(encoded))
+        return text
     head_budget = max_bytes // 2
     tail_budget = max_bytes - head_budget
     head = encoded[:head_budget].decode("utf-8", errors="ignore")
@@ -666,23 +678,7 @@ def _truncate_for_token_budget(
         "Warning: truncated output "
         f"(original token count: {original_token_count})"
     )
-    return (
-        f"{marker}\n\n{head}\n[... truncated middle output ...]\n{tail}",
-        original_token_count,
-    )
-
-
-def _original_token_count(
-    token_truncation_count: int | None,
-    *,
-    total_bytes: int,
-    omitted_bytes: int,
-) -> int | None:
-    if token_truncation_count is not None:
-        return token_truncation_count
-    if omitted_bytes:
-        return _approx_tokens_from_bytes(total_bytes)
-    return None
+    return f"{marker}\n\n{head}\n[... truncated middle output ...]\n{tail}"
 
 
 def _approx_tokens_from_bytes(byte_count: int) -> int:

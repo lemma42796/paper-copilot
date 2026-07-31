@@ -232,19 +232,10 @@ _BASE_SYSTEM_PROMPT = (
     "fields, comparisons, and unresolved claims, and gather enough evidence to answer "
     "each material part of the request when the paper budget allows it. Adapt the "
     "research order to the request and evidence already found rather than following a "
-    "fixed search sequence. The only available tools are library_exec for "
-    "load_skill for on-demand research instructions, library_exec for bounded "
-    "read-only command work over the Runtime-prepared text cache, inspect_page "
-    "for visual checks of one exact PDF page or region, and library_edit for every "
-    "user-visible library mutation. Follow the bundled research-papers Skill to compose "
-    "them. Use the application-generated research_cache_index directly; paper-cache "
-    "commands are not available. In a conversation workspace, use "
-    "the manifest path supplied by that index and its short papers/*.layout.txt "
-    "aliases for batch discovery, then read page-bounded text directly with "
-    "library_exec and base claims "
-    "on the command output actually returned to the model. Cite the exact "
+    "fixed search sequence. Use only the tools actually provided and follow their "
+    "schemas. Base claims on evidence actually returned to the model. Cite the exact "
     "pages supporting concrete research claims so the application can present traceable "
-    "paper links. Tool inputs must match their JSON schemas exactly."
+    "paper links."
     "\n\n"
     "Match the user's requested output shape. For a direct answer or a non-research "
     "library_exec/library_edit task, respond naturally without forced headings or "
@@ -252,11 +243,11 @@ _BASE_SYSTEM_PROMPT = (
     "comparisons, fields, evidence, and remaining gaps are easy to verify; do not force "
     "a generic report template when a table, checklist, direct answer, or user-specified "
     "format fits better. Tie each concrete research claim to the exact supporting page "
-    "with a Markdown link. Build the link from that paper's citation_base in "
-    "research_cache_index by "
+    "with a Markdown link. Build the link from that paper's citation_base in the "
+    "Runtime-prepared research manifest by "
     "appending &page=<page>, for example "
     "[《论文题目》第 4 页](paper-copilot://open?ref=324a2128&page=4). Use only citation "
-    "references supplied by research_cache_index; never expose paper IDs, hashes, or "
+    "references supplied by that manifest; never expose paper IDs, hashes, or "
     "local paths. If evidence is missing, explicitly mark it as a gap. Write in the "
     "user's language. Keep the report concise only after fully satisfying the "
     "user's requested fields and evidence requirements. Never omit necessary "
@@ -282,20 +273,6 @@ class _PreparedPaperCache:
         return (
             f"paper-{index:04d}-{self.artifact_sha256[:8]}.layout.txt"
         )
-
-    def to_payload(
-        self,
-        *,
-        citation_ref: str,
-        text_path: str | None = None,
-    ) -> dict[str, str | int]:
-        return {
-            "pdf": f"library/{self.source_locator}",
-            "paper_id": self.paper_id,
-            "pages": self.page_count,
-            "text": text_path or self.text_path,
-            "citation_base": f"paper-copilot://open?ref={citation_ref}",
-        }
 
     def active_snapshot(self) -> ActivePaperSnapshot:
         return ActivePaperSnapshot(
@@ -324,55 +301,6 @@ class _PaperCachePreflight:
             )
         }
 
-    def context_fragment(self) -> str | None:
-        payload = self.to_payload()
-        if payload is None:
-            return None
-        return (
-            "<research_cache_index>\n"
-            f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n"
-            "</research_cache_index>"
-        )
-
-    def to_payload(
-        self,
-        *,
-        research_manifest: str | None = None,
-    ) -> dict[str, Any] | None:
-        if self.total_pdf_count == 0 and not self.failures:
-            return None
-        citation_refs = self._citation_refs()
-        payload: dict[str, Any] = {
-            "schema_version": 2,
-            "total_pdf_count": self.total_pdf_count,
-            "prepared_count": len(self.prepared),
-            "truncated_by_paper_budget": (
-                self.total_pdf_count > len(self.prepared) + len(self.failures)
-            ),
-            "papers": [
-                entry.to_payload(
-                    citation_ref=citation_ref,
-                    text_path=(
-                        f"papers/{entry.research_alias(index=index)}"
-                        if research_manifest is not None
-                        else None
-                    ),
-                )
-                for index, (entry, citation_ref) in enumerate(
-                    zip(
-                        self.prepared,
-                        citation_refs,
-                        strict=True,
-                    ),
-                    start=1,
-                )
-            ],
-            "failures": list(self.failures),
-        }
-        if research_manifest is not None:
-            payload["manifest"] = research_manifest
-        return payload
-
     def research_view(
         self,
         *,
@@ -383,6 +311,7 @@ class _PaperCachePreflight:
             LibraryResearchPaper(
                 alias=entry.research_alias(index=index),
                 source_locator=entry.source_locator,
+                paper_id=entry.paper_id,
                 text_source=(
                     cache_root
                     / Path(entry.text_path).relative_to("cache")
@@ -1082,16 +1011,21 @@ async def run_paper_copilot(
                     "failures": list(cache_preflight.failures),
                 },
             )
-    research_manifest: str | None = None
-    if context.library_environment is not None and cache_preflight.prepared:
+    if (
+        context.library_environment is not None
+        and (cache_preflight.total_pdf_count or cache_preflight.failures)
+    ):
         cache_root = pdf_cache_dir(context.root).expanduser().resolve()
-        research_manifest = await asyncio.to_thread(
+        await asyncio.to_thread(
             context.library_environment.configure_research_view,
             cache_preflight.research_view(cache_root=cache_root),
+            total_pdf_count=cache_preflight.total_pdf_count,
+            failures=cache_preflight.failures,
+            truncated_by_paper_budget=(
+                cache_preflight.total_pdf_count
+                > len(cache_preflight.prepared) + len(cache_preflight.failures)
+            ),
         )
-    cache_inventory = cache_preflight.to_payload(
-        research_manifest=research_manifest,
-    )
     active_papers = tuple(
         entry.active_snapshot() for entry in cache_preflight.prepared
     )
@@ -1115,7 +1049,6 @@ async def run_paper_copilot(
             context,
             max_budget_cny=max_budget_cny,
             research_skill=research_skill,
-            cache_inventory=cache_inventory,
             tool_names=tuple(tool["name"] for tool in tools),
             conversation_context=conversation_context,
         )
@@ -1790,8 +1723,8 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "query_papers": 60_000,
         "library_files": 16_000,
         "load_skill": 40_000,
-        "library_exec": 64_000,
-        "library_write_stdin": 64_000,
+        "library_exec": 1_100_000,
+        "library_write_stdin": 1_100_000,
         "inspect_page": 16_000,
         "paper_set": 40_000,
         "library_edit": 40_000,
@@ -1960,8 +1893,8 @@ async def _handle_public_library_exec(
         ),
         environment=context.library_environment,
     )
-    return _ok(
-        library_exec_run.output,
+    return ToolResultData(
+        output=library_exec_run.output,
         trace_attributes=library_exec_run.trace_attributes,
     )
 
@@ -1983,8 +1916,8 @@ async def _handle_public_library_write_stdin(
         cast(LibraryWriteStdinInput, parsed_input),
         environment=environment,
     )
-    return _ok(
-        library_exec_run.output,
+    return ToolResultData(
+        output=library_exec_run.output,
         trace_attributes=library_exec_run.trace_attributes,
     )
 
@@ -4160,7 +4093,6 @@ def _build_world_state_snapshot(
     *,
     max_budget_cny: float,
     research_skill: ResearchSkill,
-    cache_inventory: dict[str, Any] | None,
     tool_names: tuple[str, ...],
     conversation_context: str | None,
 ) -> dict[str, Any]:
@@ -4192,8 +4124,6 @@ def _build_world_state_snapshot(
             ]
         },
     }
-    if cache_inventory is not None:
-        snapshot["cache_inventory"] = cache_inventory
     if conversation_context is not None:
         snapshot["conversation_context"] = conversation_context
     if context.composer_plan.library_listed:

@@ -148,8 +148,8 @@ Codex 四轮基线没有出现范围记忆失败，Paper Copilot 实跑又确认
 
 - 通用 Agent loop 只保留可选 Stop hook，默认没有 handler；
 - Paper Copilot 不再拦截模型回答，不再自动重答或替换为 Incomplete；
-- `research_cache_index` 给模型提供 Runtime 分配的应用内 citation base，模型直接输出
-  最终 Markdown 链接；
+- 当时的 `research_cache_index` 给模型提供 Runtime 分配的应用内 citation base，模型
+  直接输出最终 Markdown 链接；当前已迁移为按需读取 manifest；
 - Runtime 引用层不解析、验证、替换或清理模型最终答案；
 - Chat result 携带可信 citation ref 映射，macOS 解析后继续执行授权目录和 PDF 校验；
 - macOS 点击链接后在授权目录内打开对应 PDF 页；
@@ -200,8 +200,8 @@ DeepSeek V4 Pro 烟测：
 - 全新 conversation 输入“你好”，实际模型为 `deepseek-v4-pro`；
 - 0 次工具调用，正常流式 reasoning/answer 和 `end_turn`，无错误或重试；
 - 耗时约 3.56 秒，输入 6977 tokens、输出 104 tokens、费用 0.021555 元；
-- 当前每个请求都注入完整 `research_cache_index`，因此模型可看到论文数量和逻辑文件名；
-  本轮不调整该行为。
+- 该次 smoke 每个请求都注入完整 `research_cache_index`，因此模型可看到论文数量和
+  逻辑文件名；该历史运行未调整该行为。
 
 Paper Copilot + DeepSeek V4 Pro 四轮结果：
 
@@ -241,7 +241,8 @@ Codex CLI + DeepSeek V4 Pro 单次四轮结果：
 
 ### 2.2 当前重点：Codex 式工具调用粒度
 
-状态：诊断与下一 bounded slice 已记录，尚未实施代码改造或重跑。
+状态：Codex 式执行反馈、1 MiB 原始输出收集、按需 manifest 发现和上下文职责去重已
+写入工作区；尚未执行用户未要求的协议验证或模型重跑。
 
 2026-07-30 在提交 `46d048c` 上完成禁用 Skill、DeepSeek V4 Pro、reasoning
 effort `max` 的全新连续四轮运行：
@@ -268,15 +269,22 @@ effort `max` 的全新连续四轮运行：
 检索路径的影响。Codex 的低调用数也包含少读导致的遗漏，不能把调用次数本身作为质量
 目标。
 
-下一 bounded slice 只对齐 `library_exec` / `library_write_stdin` 的 Codex 执行反馈：
+本轮工作区改动同时完成执行反馈与按需研究上下文：
 
 1. 按固定 Codex 源码对齐模型可见 completed/yielded 文本结构与截断提示；
 2. 联动调整 `max_output_tokens` 策略和原始输出收集，避免只提高 schema 上限却仍在
    64 KB buffer 中提前丢失正文；
 3. 保持固定 logical cwd、只读论文根、scratch-only 写入、无网络和无权限升级；
-4. 不同时修改模型、Skill、provider、引用合同或增加论文 Query 专用工具；
+4. 不修改模型、Skill 加载生命周期、provider、引用合同或增加论文 Query 专用工具；
+   Skill 正文只做职责去重与 manifest 入口迁移；
 5. 实施后才做同提交、同模型、同配置的隔离评测。主要目标是质量超过 Codex CLI，或
    在质量不下降的前提下 total tokens 低于 Codex CLI；调用数只作诊断指标。
+6. 停止向 World State 预注入逐论文 `research_cache_index`；授权、缓存和引用映射继续
+   由 Runtime 持有，模型通过只读 `research-manifests/current.jsonl` 按需读取。
+7. manifest header 保存准备完整性，paper records 保存 PDF、短文本别名、完整 SHA-256
+   和 `citation_base`，因此 `inspect_page` 与应用内页码链接不依赖预注入索引。
+8. 基础 prompt 只保留目标、安全和结果约束；工具 description 只描述能力与环境；
+   `research-papers` Skill 保留可选研究方法，不再重复工具手册或强制固定搜索序列。
 
 详细源码映射、非目标和验收门见
 [library_exec_codex_source_mapping.md](docs/design/library_exec_codex_source_mapping.md)。
