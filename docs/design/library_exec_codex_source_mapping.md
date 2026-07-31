@@ -1,7 +1,7 @@
 # `library_exec` Codex 源码映射
 
 状态：Codex 执行反馈、按需 manifest 发现与上下文职责去重已写入工作区，尚未验证或重跑
-日期：2026-07-31
+日期：2026-08-01
 Codex source ref：`61a44880a85d2fd0d8770908dea5733495e571c8`  
 Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地修改
 
@@ -217,3 +217,26 @@ Definition of Done：
 
 评测主门槛为二选一：质量超过 Codex CLI，或在质量不下降时 total tokens 低于 Codex
 CLI。工具调用数和平均输出/调用只作为机制诊断；单次运行不作显著性结论。
+
+### 6.4 2026-08-01 direct CLI 诊断补充
+
+独立的 `codex-deepseek CLI + deepseek-v4-flash/max` 四轮 run 保存在：
+
+```text
+/Users/a123/paper-copilot-eval-private/multi-thesis-v1/runs/codex-deepseek-cli-v4-flash/formal-single-20260731T163926Z/
+```
+
+该 run 的 native trace 只暴露 `exec_command`，共记录 144 次调用，其中绝大多数命令
+使用 `pdftotext`；它不是对 Paper Copilot `library_exec` 的协议验证。相较历史
+`deepseek-v4-pro` adapter run 的 19 个 native function call，当前 V4 Flash 采用了更
+细粒度的 PDF 查询策略。两次运行同时改变了模型和 provider 路径，调用数差异只能作为
+工具粒度诊断，不能作为某个实现切片的因果结论。
+
+该 run 的原始 `run_metadata.json` 还暴露了一个计量问题：每个
+`turn.completed.usage` 已经是会话累计值，汇总器却再次累加四轮。修正后 formal usage
+为 10,617,376 total tokens、¥0.54661056；此前的 22,519,931 / ¥1.31295844 只能标为
+错误汇总，不用于效率比较。当前文档不把这个修正冒充为 runner 代码修复。
+
+metadata 虽保存了 research-papers Skill v16 的 SHA-256，native trace 没有显示
+`load_skill` 或 Paper Copilot 论文工具的加载记录，因此本次 direct run 不能作为 Skill
+v16 已实际加载的证据，也不能替代当前实现的成对消融。

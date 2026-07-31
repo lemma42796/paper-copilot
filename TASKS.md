@@ -4,7 +4,7 @@
 > [AGENTS.md](AGENTS.md)，当前架构见 [ARCHITECTURE.md](ARCHITECTURE.md)，详细设计见
 > [docs/design/](docs/design/)，历史实现过程见 Git。
 
-更新于 2026-07-31。
+更新于 2026-08-01。
 
 ## 1. 当前方向
 
@@ -25,8 +25,10 @@ Environment、E4 Controlled Python、E5 Tool Registry 与 E7 Skill Registry /
 On-demand Loading 均已写入工作区；Codex 式跨论文批量研究视图也已写入工作区。
 2026-07-30 快速验证覆盖 session、recovery、Agent、chat 与当前工具 schema，共
 45/45 通过；macOS Debug 构建成功。随后完成禁用 Skill 的 V4 Flash/high 和
-V4 Pro/max 单次四轮诊断运行。尚未运行完整测试、完整工具协议集，亦未完成当前实现
-启用/禁用 Skill 的严格成对消融。
+V4 Pro/max 单次四轮诊断运行。2026-08-01 又完成了一次独立的 direct
+`codex-deepseek CLI + deepseek-v4-flash/max` 四轮诊断运行；该运行的原始产物已保存，
+但不替代 Paper Copilot 当前实现的启用/禁用 Skill 成对消融。尚未运行完整测试、完整
+工具协议集，亦未完成当前实现启用/禁用 Skill 的严格成对消融。
 
 目标：以固定 Codex 源码 `fe01054a28fa4bd04716d9ceadb410f2443a50ce` 为真源，把
 Agent 的 session、上下文、执行环境、工具 registry、provider wire 与 Skill 生命周期
@@ -218,9 +220,11 @@ Codex CLI + DeepSeek V4 Pro 单次四轮结果：
 
 - Codex CLI 0.146.0，经固定本地 adapter 调用 `deepseek-v4-pro`，reasoning effort
   为 `max`；
-- 4/4 正常完成，17 次原生命令调用全部成功，总耗时约 538 秒；
+- 4/4 正常完成；原始 native rollout 记录 19 个 function call（18 次 `exec_command`、
+  1 次 `write_stdin`），总耗时约 538 秒；此前摘要中的 17 次是论文研究命令的窄口径；
 - input 2947977、cached input 2656768、output 78147、reasoning output 46959
-  tokens；供应商金额无法从权威 rollout 核实；
+  tokens 为该历史 adapter harness 的记录值，不能与后续 direct run 的修正后 token
+  统计直接比较；供应商金额无法从权威 rollout 核实；
 - Gold revision 2 工作评分：严格正确率 74.6%，加权正确率 81.0%，claim coverage
   90.1%；
 - 与原生 Codex 的 76.1% / 83.1% / 90.1% 接近；与 Paper Copilot + 同一 DeepSeek
@@ -230,6 +234,32 @@ Codex CLI + DeepSeek V4 Pro 单次四轮结果：
 
 - 独立评分复核已由用户取消，三方分数继续标为单次运行的工作评分；
 - 单次运行不能估计方差或显著性，本轮只将分差作为根因诊断输入，不作统计推断。
+
+2026-08-01 direct `codex-deepseek CLI + DeepSeek V4 Flash` 四轮诊断：
+
+- run 目录为
+  `/Users/a123/paper-copilot-eval-private/multi-thesis-v1/runs/codex-deepseek-cli-v4-flash/formal-single-20260731T163926Z/`；
+  conversation 为 `019fb90b-ed46-7250-8558-5ab03a9c3212`；
+- 模型为 `deepseek-v4-flash`，trace 中四轮均为 reasoning effort `max`，输入模态为
+  text-only；smoke 成功，费用 ¥0.009908；T01–T04 全部完成；
+- 形式运行共 144 次 `exec_command`、81 次 LLM 调用；T01 有 2 次工具命令失败，未发生
+  timeout、recovery 或输出截断；
+- 原始汇总把每轮 `turn.completed.usage` 的会话累计值再次相加，故原先的
+  22,519,931 total tokens / ¥1.31295844 不正确。按最后一轮累计 usage 或逐次
+  `last_token_usage` 增量重算，formal 实际为 10,617,376 total tokens、¥0.54661056；
+  加 smoke 后约 ¥0.55651856；
+- Gold revision 2 的单次工作评分为 55 correct / 12 partial / 0 incorrect / 4 missing：
+  strict 77.5%、weighted 85.9%、coverage 94.4%；
+- run metadata 记录了 research-papers Skill v16 的 SHA-256，但 native trace 的模型
+  可见函数只有 `exec_command`，没有 `load_skill`、`library_exec` 或 `read_page` 证据，
+  因而 Skill v16 的实际加载状态只能标为未证实；
+- 该 run 与历史 V4 Pro adapter run 同时改变了模型、provider 路径和上下文/工具表面。
+  历史 run 用 Python/`pdfplumber` 批量读取多篇论文，当前 direct run 主要用细粒度
+  `pdftotext` 命令；工具调用量差异不能归因于单一变量。
+
+原始 Markdown、逐轮事件与结果、session、trace、native rollout、run metadata 和 smoke
+产物均保留在上述目录；Gold、代码和原始运行产物未修改。上述 token 修正只更新文档口径，
+尚未修改 runner 汇总实现。
 
 当前不做：
 
@@ -242,7 +272,8 @@ Codex CLI + DeepSeek V4 Pro 单次四轮结果：
 ### 2.2 当前重点：Codex 式工具调用粒度
 
 状态：Codex 式执行反馈、1 MiB 原始输出收集、按需 manifest 发现和上下文职责去重已
-写入工作区；尚未执行用户未要求的协议验证或模型重跑。
+写入工作区；尚未执行针对 Paper Copilot 实现的协议验证或同配置成对模型评测。另有
+2026-08-01 direct CLI 诊断运行，但它不验证 `library_exec` 实现。
 
 2026-07-30 在提交 `46d048c` 上完成禁用 Skill、DeepSeek V4 Pro、reasoning
 effort `max` 的全新连续四轮运行：

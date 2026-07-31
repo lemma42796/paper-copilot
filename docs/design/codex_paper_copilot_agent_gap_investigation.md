@@ -1,8 +1,9 @@
 # Codex CLI 与 Paper Copilot 同模型 Agent 差距根因研究
 
 状态：只读根因分析已完成；固定 900 词上限、固定报告标题和模型可见的页面文本专用读取工具已删除；
-已完成一次禁用 Skill 的 V4 Flash 诊断运行，尚缺当前实现启用 Skill 的严格成对对照
-日期：2026-07-30
+已完成禁用 Skill 的 V4 Flash 诊断运行，并补充一次 direct `codex-deepseek CLI +
+deepseek-v4-flash` 诊断；当前实现启用 Skill 的严格成对对照仍缺失
+日期：2026-08-01
 文档职责：定义根因研究的问题、证据、分层方法、停止条件和 Definition of Done；不在
 本阶段设计或实施修复。
 
@@ -21,7 +22,7 @@
 
 ## 2. 固定输入
 
-不产生新的模型运行。只使用：
+原始根因对照 slice 不产生新的模型运行。只使用：
 
 - Codex CLI + DeepSeek V4 Pro 正式单次四轮原生 JSONL、rollout、配置和 adapter 记录；
 - Paper Copilot conversation `conversation-20260729T141953-65092f325e` 的四个 job、
@@ -29,6 +30,9 @@
 - Gold revision 2、冻结 Query、语料 manifest 和既有逐项工作评分；
 - Codex 源码 `fe01054a28fa4bd04716d9ceadb410f2443a50ce`；
 - Paper Copilot 源码 `e79f64e69d4cd2524c2cd23ebbe4caa92718a8cd`。
+
+2026-08-01 的 direct V4 Flash run 是用户另行授权的补充诊断，不并入原始 V4 Pro
+同模型因果对照；其证据和限制见 §8.2。
 
 模型自报、最终答案中的工具清单和事后概括不能代替 payload、session 或 trace。
 
@@ -164,6 +168,37 @@ Codex 固定提交中，`session/mod.rs::record_conversation_items` 将 conversa
 `reconstruct_rollout` 和 `recovery_base` 达到相同的模型历史保留效果。跨轮工具历史
 丢失因此被排除为本次根因。
 
+### 8.2 补充：direct V4 Flash run 的工具量与计量诊断
+
+补充 run：
+
+```text
+/Users/a123/paper-copilot-eval-private/multi-thesis-v1/runs/codex-deepseek-cli-v4-flash/formal-single-20260731T163926Z/
+```
+
+| 项目 | 历史 Codex CLI + V4 Pro | 本次 direct CLI + V4 Flash |
+|---|---:|---:|
+| provider | 本地 `deepseek_v4_adapter` | 直连 `deepseek` Responses API |
+| 原始 native function call | 19（18 `exec_command` + 1 `write_stdin`） | 144 `exec_command` |
+| 主要读取方式 | Python/`pdfplumber` 批量读取 | 细粒度 `pdftotext` 查询 |
+| 模型 | `deepseek-v4-pro` | `deepseek-v4-flash` |
+| reasoning | `max` | trace 为 `max` |
+
+本次 direct run 的 144 次工具调用是真实的：trace 中有 144 个 function call 与 144 个
+对应 result，T01–T04 分别为 30/49/37/28；只有 T01 的 2 个命令失败，没有 recovery、
+timeout 或输出截断。它与历史 adapter run 同时改变了模型、provider wire、基础指令和
+读取环境，因此只能说明 V4 Flash 在当前 direct 工具面上采用了更细碎的检索策略，不能
+把差异归因于 Paper Copilot 的 `library_exec`。
+
+本次 token/费用异常是独立的汇总错误。`turn.completed.usage` 的四个值分别是会话累计
+值，汇总器再次求和后得到 22,519,931 total tokens 和 ¥1.31295844。以最后一轮累计值
+或逐次 `last_token_usage` 增量为准，formal 实际为 10,617,376 total tokens、¥0.54661056；
+该修正尚未写入 runner 实现。
+
+run metadata 记录了 Skill v16 SHA-256，但 native trace 只有 `exec_command`，没有
+`load_skill`、`library_exec` 或 Paper Copilot 论文工具的使用证据。因此该 run 的 Skill
+v16 实际加载状态为 `unverified`，不能用来宣称已完成 Skill v16 的 direct CLI 复现。
+
 ## 9. 三个错误事件的因果链
 
 ### 9.1 T02 UDA taxonomy
@@ -245,7 +280,7 @@ T03 深页复核
 | H3：工具 schema/结果格式增加协调负担 | `supported` | 单页 `read_page` 与 citation-grade 二阶段合同要求更多规划和调用；运行中 Paper Copilot 用 57 次逐页读取仍获得较少深章节覆盖 |
 | H4：狭义 loop 的反馈/继续语义不足 | `weakened` | 75 次公开工具调用均完成，call/result 正常反馈，四轮正常 `end_turn`；未观察 dispatch 丢失或异常终止 |
 | H5：上下文保留或 compaction 丢关键证据 | `weakened` | `recovery_base` 证明跨 job 保留完整模型历史；两边本次都未触发 compaction |
-| H6：模型请求参数不等价 | `undetermined` | 模型、thinking 和 max effort 对齐；Codex 经 Responses→Chat adapter 且上游非流式，Paper Copilot 直接流式，仍有未控制协议差异 |
+| H6：模型请求参数不等价 | `undetermined` | 补充 direct V4 Flash run 确认 provider、模型和基础指令与历史 adapter run 不同，但没有只改变 provider 或模型的隔离对照 |
 
 ## 11. 按证据强度排序的根因
 
@@ -255,6 +290,10 @@ T03 深页复核
 2. **中强度：输出合同内部竞争。** 冻结运行时的“少于 900 词”与 11 篇、10 个关键
    字段、逐格可追溯同时存在，强迫模型在完整性、紧凑度和引用密度间取舍。该固定上限
    已删除，但尚未重跑模型，不能量化其历史贡献。
+3. **中强度：模型/provider 与工具批处理粒度共同变化。** 历史 Codex V4 Pro adapter
+   用单次 Python/`pdfplumber` 命令批量读取，本次 direct V4 Flash 用大量
+   `pdftotext` 小查询；该证据解释了工具调用数差异，但不能裁决模型、provider 或
+   提示序列各自的贡献。
 
 已排除或显著削弱：
 
@@ -282,6 +321,9 @@ T03 深页复核
    加载指令，产品实现未删除。该运行中 Skill 调用为 0，但 62 次工具调用并未低于历史
    V4 Flash；模型自行采用逐论文并行读取。要判断 Skill 对质量与调用数的净影响，仍需
    在当前同一提交、同一模型配置上运行启用 Skill 的配对组。
+4. **计量口径修复。** 在下一次付费模型运行前，runner 必须使用逐次
+   `last_token_usage` 增量或最终累计 usage，不能把各轮累计 `turn.completed.usage`
+   再次相加；否则 token 和费用比较会被系统性高估。该项是观测修复，不是模型消融。
 
 严格消融必须使用全新隔离会话、同一 Gold revision 2，并分别只改变一个变量。由于
 当前结果是单次工作评分，任何一次改善仍只能作为机制证据，不能宣称统计显著。
