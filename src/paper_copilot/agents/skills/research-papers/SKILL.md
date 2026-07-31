@@ -5,12 +5,27 @@ description: Investigate local PDF papers with bounded command search and page-g
 
 # Research Papers
 
-Skill version: 15
+Skill version: 16
+
+## Understand the prepared paper view
+
+- `research-manifests/current.jsonl` is an index, not paper evidence. Its first record describes the
+  preparation attempt; each following `paper` record maps an authorized PDF (`pdf`) to its prepared
+  text alias (`text`), page count (`pages`), and citation base (`citation_base`). Read it once and keep
+  those mappings for the task.
+- Each `papers/*.layout.txt` file is a read-only `pdftotext -layout` cache of one PDF. Pages are
+  separated by the form-feed character `\f`; splitting on `\f` gives zero-based list entries for
+  PDF pages 1, 2, and so on. The cache exists to avoid repeatedly parsing PDFs and is normally the
+  fastest source for text search and page reads.
+- `library_exec` provides shell utilities and controlled Python with the standard library. For work
+  spanning several papers or pages, prefer one bounded Python or shell command that reads the
+  manifest, splits the selected text files on `\f`, and prints labeled results. Keep each result
+  labeled with its paper and PDF page so evidence remains attributable. Use the manifest's raw `pdf`
+  path with `pdfinfo` or `pdftotext` only when the prepared text is insufficient.
 
 ## Research the request
 
-- Read `research-manifests/current.jsonl` as the authoritative inventory for the attempt. Its records
-  provide the prepared paper aliases, page counts, PDF SHA-256 values, and citation bases.
+- Read `research-manifests/current.jsonl` as the authoritative inventory for the attempt.
 - Use judgment to inspect the sources relevant to the requested outcome. Prefer one labeled batch
   command for independent papers, searches, or page reads when attribution will remain clear and the
   output will fit within the requested budget.
