@@ -1,0 +1,98 @@
+diff --git a/codex-rs/core/src/tools/handlers/mcp.rs b/codex-rs/core/src/tools/handlers/mcp.rs
+index 8de9fce6b..d8f563ba7 100644
+--- a/codex-rs/core/src/tools/handlers/mcp.rs
++++ b/codex-rs/core/src/tools/handlers/mcp.rs
+@@ -25,6 +25,7 @@ use serde_json::Value;
+ 
+ const LEGACY_MCP_TOOL_NAME_PREFIX: &str = "mcp__";
+ const MCP_TOOL_NAME_DELIMITER: &str = "__";
++const LIBRARY_ABLATION_MCP_SERVER: &str = "paper_copilot_library_ablation";
+ const MAX_MCP_NAMESPACE_DESCRIPTION_BYTES: usize = 1_000;
+ 
+ pub struct McpHandler {
+@@ -70,6 +71,9 @@ fn ensure_mcp_prefix(name: &str) -> String {
+ 
+ impl ToolExecutor<ToolInvocation> for McpHandler {
+     fn tool_name(&self) -> ToolName {
++        if library_ablation_enabled(&self.tool_info) {
++            return ToolName::plain(self.tool_info.callable_name.clone());
++        }
+         self.tool_info.canonical_tool_name()
+     }
+ 
+@@ -237,8 +241,20 @@ impl CoreToolRuntime for McpHandler {
+     }
+ }
+ 
++fn library_ablation_enabled(tool_info: &ToolInfo) -> bool {
++    tool_info.server_name == LIBRARY_ABLATION_MCP_SERVER
++        && std::env::var_os("CODEX_DEEPSEEK_LIBRARY_ABLATION").is_some()
++}
++
+ fn create_tool_spec(tool_info: &ToolInfo) -> Result<ToolSpec, serde_json::Error> {
+-    let tool_name = tool_info.canonical_tool_name();
++    let tool_name = if library_ablation_enabled(tool_info) {
++        ToolName::plain(tool_info.callable_name.clone())
++    } else {
++        tool_info.canonical_tool_name()
++    };
+     let tool = mcp_tool_to_responses_api_tool(&tool_name, &tool_info.tool)?;
++    if library_ablation_enabled(tool_info) {
++        return Ok(ToolSpec::Function(tool));
++    }
+     let description = tool_info
+         .namespace_description
+         .as_deref()
+diff --git a/codex-rs/core/src/tools/spec_plan.rs b/codex-rs/core/src/tools/spec_plan.rs
+index 25d45bb93..df65dc590 100644
+--- a/codex-rs/core/src/tools/spec_plan.rs
++++ b/codex-rs/core/src/tools/spec_plan.rs
+@@ -239,6 +239,16 @@ pub(crate) fn finalize_tool_router(
+     tool_search_handler_cache: &ToolSearchHandlerCache,
+ ) -> ToolRouter {
+     apply_direct_model_only_namespace_overrides(turn_context, &mut registry);
++    if std::env::var_os("CODEX_DEEPSEEK_LIBRARY_ABLATION").is_some() {
++        for tool in registry.entries_mut() {
++            if matches!(
++                tool.runtime.tool_name().name.as_str(),
++                "library_exec" | "library_write_stdin"
++            ) {
++                tool.exposure = ToolExposure::Direct;
++            }
++        }
++    }
+     let code_mode_enabled = matches!(
+         effective_tool_mode(turn_context),
+         ToolMode::CodeMode | ToolMode::CodeModeOnly
+@@ -300,20 +300,30 @@ fn build_model_visible_specs(
+     let mut specs = Vec::new();
+     for tool in registry.entries() {
+         let tool_name = tool.runtime.tool_name();
++        if std::env::var_os("CODEX_DEEPSEEK_LIBRARY_ABLATION").is_some()
++            && !matches!(
++                tool_name.name.as_str(),
++                "library_exec" | "library_write_stdin"
++            )
++        {
++            continue;
++        }
+         let exposure = tool.exposure;
+         if exposure.is_direct() && !is_hidden_by_code_mode_only(turn_context, &tool_name, exposure)
+         {
+             let spec = tool.runtime.spec();
+             specs.push(spec_for_model_request(
+                 turn_context,
+                 exposure,
+                 &tool_name,
+                 code_mode_tool_names,
+                 spec,
+             ));
+         }
+     }
+-    specs.extend(hosted_specs);
++    if std::env::var_os("CODEX_DEEPSEEK_LIBRARY_ABLATION").is_none() {
++        specs.extend(hosted_specs);
++    }
+ 
+     merge_into_namespaces(specs)
+         .into_iter()

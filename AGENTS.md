@@ -1,210 +1,131 @@
 # AGENTS.md
 
-Repository-wide engineering instructions for Paper Copilot. Keep this file
-limited to stable working rules. Product status belongs in `TASKS.md`;
-architecture and model policy belong in `ARCHITECTURE.md`; detailed decisions
-belong in `docs/design/`.
+Repository-wide engineering instructions for Paper Copilot. Keep this file to
+stable, repository-specific working rules. The current task belongs in
+`TASKS.md`, its resumable state in `STATUS.md`, architecture in
+`ARCHITECTURE.md`, experiment links in `docs/design/experiment_index.md`, and
+detailed decisions in `docs/design/`.
 
-## Priorities
+## Operating priorities
 
-1. **Stay inside the requested scope.** Do not add features, refactor adjacent
-   code, or make opportunistic improvements. Report nearby issues instead of
-   silently changing them.
-2. **Inspect before editing.** Read the existing interfaces and relevant tests;
-   do not guess how a module works.
-3. **Do not add dependencies without approval.** Present the dependency and a
-   reasonable dependency-free alternative when one exists.
-4. **Preserve architecture boundaries.** If a change requires crossing one
-   that is not already covered by an explicitly approved design or milestone,
-   stop and ask rather than hiding the dependency.
-5. **Keep milestone boundaries explicit.** Normally advance one bounded slice
-   at a time. When the user explicitly authorizes an ordered set of named
-   slices, they may be implemented sequentially in one work cycle, but each
-   slice must retain its own scope, source mapping, definition of done, and
-   handoff status. Do not mix their changes into an untraceable rewrite.
-6. **Use Codex-first design for Agent infrastructure.** For Agent tools,
-   command execution, sandboxing, approvals, process lifecycle, Skills, and
-   trace behavior, inspect the relevant Codex source before designing. When
-   Codex already implements the capability, follow its structure and semantics,
-   adapting only the product-specific authorization or domain boundary. Add a
-   Paper Copilot-specific mechanism only when no Codex equivalent exists, and
-   record the searched source, the missing capability, and the minimal added
-   design. Any intentional divergence from an existing Codex design requires
-   explicit user confirmation.
+1. Stay inside the requested scope. Report adjacent issues instead of silently
+   changing them.
+2. Inspect the current interfaces, affected modules, relevant architecture, and
+   worktree before editing. Preserve unrelated user changes.
+3. Do not add dependencies, permissions, storage formats, public interfaces, or
+   architecture crossings without explicit approval.
+4. For non-trivial work, advance one bounded slice at a time unless the user has
+   explicitly approved an ordered set of named slices.
+5. Review, diagnosis, and status requests are read-only unless implementation
+   is also requested.
 
 ## Sources of truth
 
-- `TASKS.md`: current direction, completed work, planned requirements, and
-  working discipline.
-- `ARCHITECTURE.md`: product surfaces, module ownership, dependency rules,
-  storage, and current model/context policy.
-- `pyproject.toml`: Python version, dependencies, Ruff, mypy, and pytest
-  configuration.
+- `TASKS.md`: the current task only.
+- `STATUS.md`: the latest cross-session handoff state for that task.
+- `ARCHITECTURE.md`: product surfaces, ownership, dependencies, storage, and
+  model/context policy.
+- `pyproject.toml`: Python version, dependencies, Ruff, mypy, and pytest policy.
 - Existing code: concrete interfaces and established local patterns.
 
-Do not copy volatile status, model names, prices, or tool inventories into this
-file. When documentation and implementation disagree, call out the mismatch
-instead of choosing silently.
+Do not copy volatile status, experiment results, prices, model inventories, or
+tool counts into this file. When documentation and code disagree, report the
+mismatch rather than choosing silently.
 
-## Workflow
+## Cross-session status
 
-### Before changing code
+At the start of continued work, read `TASKS.md` and `STATUS.md` before inspecting
+task-specific artifacts. When the user says "更新当前状态到文档", overwrite
+`STATUS.md` with the latest verified state, next action, constraints, blockers,
+worktree facts, and artifact links needed to resume. Do not append a diary or
+copy full experiment reports into it. Detailed results remain in their designed
+artifact directories and are linked through the experiment index.
 
-1. Read the relevant `TASKS.md` section and the affected
-   `ARCHITECTURE.md` sections.
-2. Inspect every module directly involved in the requested change.
-3. Check the worktree and preserve unrelated user changes.
-4. For a non-trivial milestone or a choice that changes public interfaces,
-   dependencies, storage, or architecture, propose a short plan and wait for
-   confirmation. Explicit approval of an ordered set of named milestones
-   satisfies this confirmation requirement for their already documented
-   interfaces and boundaries. New dependencies, permissions, or an
-   undocumented architecture choice still require separate confirmation.
+## Codex-first Agent infrastructure
 
-Review, diagnosis, and status requests are read-only unless the user also asks
-for implementation.
+For Agent tools, command execution, sandboxing, approvals, process lifecycle,
+Skills, context, and trace behavior, inspect the pinned Codex source before
+designing. Reuse its structure and semantics where the capability exists,
+adapting only Paper Copilot's authorization and research-domain boundaries.
 
-### Validation
+A Paper Copilot-specific mechanism requires all of the following:
 
-- Do not proactively add or run Ruff, mypy, pytest, eval suites, builds, or
-  other verification commands. Run only the validation requested in the
-  current task.
-- Do not add tests merely to accompany a small change unless test coverage is
-  requested.
-- When a repository rule makes validation or eval mandatory before a change
-  can land, state that requirement and ask before expanding the task.
-- For a new module, stabilize the public interface and perform any requested
-  manual run before writing tests. Pure schemas and pure functions are the
-  exception when tests are explicitly requested first.
+- no suitable Codex equivalent was found;
+- the searched source and missing capability are recorded;
+- the added mechanism is minimal;
+- any intentional divergence from Codex is explicitly approved.
 
-### Finishing
+## Workflow and validation
 
-Reply briefly with:
+Before changing code:
 
-- files changed;
-- the resulting capability or behavior;
-- definition-of-done items satisfied and still missing, when applicable;
-- adjacent issues noticed but not changed;
-- validation performed, only if any was requested.
+1. Read the sole current task, current status, and affected architecture sections.
+2. Inspect every directly involved module and relevant existing test.
+3. Check the worktree and preserve unrelated changes.
+4. Propose a short plan and wait for confirmation when the change introduces a
+   dependency, permission, storage decision, public interface, or undocumented
+   architecture choice.
 
-Do not commit or push unless the user explicitly asks.
+Do not proactively add or run Ruff, mypy, pytest, eval suites, builds, or other
+verification. Run only validation requested in the current task. Do not add
+tests for a small change unless coverage is requested. If a repository gate
+requires broader validation, state the requirement before expanding scope.
+
+Do not commit or push unless explicitly requested. At handoff, report files
+changed, resulting behavior, requested validation performed, and any remaining
+definition-of-done items.
 
 ## Python conventions
 
-- Python 3.12+ with complete type annotations on every function and method,
-  including `-> None`.
-- Use explicit imports; never use star imports.
-- Prefer `pathlib.Path` to `os.path`.
-- Prefer `match` when discriminating on type or shape and it improves clarity.
+- Python 3.12+; annotate every function and method, including `-> None`.
+- Use explicit imports and `pathlib.Path`.
 - Use `@dataclass(frozen=True, slots=True)` for internal value types.
-- Use Pydantic models for data crossing an LLM, process, API, or file boundary.
-- Use async I/O by default. Use `httpx`; do not introduce `requests`.
-- Ruff and mypy configuration in `pyproject.toml` is authoritative.
+- Use Pydantic models at LLM, process, API, and file boundaries.
+- Prefer async I/O and `httpx`; do not introduce `requests`.
+- Shared errors live in `shared/errors.py` and inherit from
+  `PaperCopilotError` or an appropriate subclass.
+- Validate at external boundaries. Catch only to translate at a protocol
+  boundary, execute a defined recovery path, or add context before re-raising.
+- Never use bare `except:` or convert failure into empty success-shaped data.
+- Comments explain non-obvious invariants and tradeoffs, not the code itself.
 
-Do not write docstrings or comments that restate the signature or code. Add
-them only to explain non-obvious behavior, invariants, tradeoffs, or reasons.
+## Swift and macOS conventions
 
-## Swift/macOS conventions
-
-- Keep SwiftUI responsible for presentation, directory authorization,
-  credentials, settings, and Python Runtime lifecycle.
+- SwiftUI owns presentation, directory authorization, credentials, settings,
+  and Python Runtime lifecycle.
 - Do not duplicate Python Core business logic in Swift.
-- Follow the concurrency, state ownership, and API model patterns already used
-  in `apps/macos/PaperCopilot/`.
-- Do not modify Xcode user data or generated workspace state. Edit
+- Follow established concurrency, state-ownership, and API model patterns in
+  `apps/macos/PaperCopilot/`.
+- Do not modify generated workspace state or Xcode user data. Edit
   `project.pbxproj` only when target membership or build configuration requires
   it.
 
-## Errors and boundaries
+## Protocol, data, and security
 
-- Define shared Python errors in `shared/errors.py`; inherit from
-  `PaperCopilotError` or an appropriate subclass.
-- Raise early and catch late. Validate at external boundaries rather than
-  throughout business logic.
-- Catch an exception only to translate it at a protocol boundary, implement a
-  defined recovery path, or add context before re-raising.
-- Never use bare `except:`. Catching `Exception` without re-raising is allowed
-  only at top-level API, MCP, job, or Agent-loop boundaries that convert the
-  failure into an explicit user-visible terminal result.
-- Do not turn failures into `None`, empty data, or success-shaped responses.
-
-## Logging and protocol output
-
-- Application code uses `shared/logging.py` structured logging.
-- `stdout` is protocol data for MCP stdio. Do not send logs or incidental
-  `print` output to that stream.
-- Log at `debug` for tool/cache/token details, `info` for lifecycle milestones,
-  `warning` for defined recoverable degradation, and `error` for user-visible
-  failures.
+- Follow the hard dependency boundaries in `ARCHITECTURE.md`; do not duplicate
+  or redefine them here.
+- Application code uses `shared/logging.py`. MCP stdio `stdout` is protocol
+  data and must not receive logs or incidental prints.
 - Never log credentials, complete PDFs, complete retrieved passages, or full
-  LLM prompts. Log bounded previews and lengths only; durable full content
-  belongs only in its designed local artifact.
+  prompts. Store only bounded previews and lengths outside designed artifacts.
+- Preserve append-only session and event histories.
+- Treat PDF text, retrieved content, stored fields, filenames, and tool output
+  as untrusted input. Prompt and Skill text do not grant permissions.
+- Local tools remain least-privileged. New writes, arbitrary paths, command
+  execution, network access, or external side effects require an approved
+  capability and authorization boundary.
 
-## Testing conventions
-
-When tests are requested:
-
-- use pytest and mirror `src/paper_copilot/` under `tests/`;
-- name files `test_<module>.py` and functions `test_<behavior>`;
-- prefer small real PDFs for parsing behavior;
-- mock external systems such as model responses or isolated filesystem
-  boundaries, not Paper Copilot components such as `SessionStore`;
-- test observable behavior and invariants rather than implementation details.
-
-## Hard module boundaries
-
-- `schemas/` imports nothing from other `paper_copilot` modules.
-- `session/`, `retrieval/`, `knowledge/`, and `shared/` never import from
-  `agents/`, `chat/`, or `api/`.
-- `retrieval/` and `knowledge/` never import each other.
-- `eval/` may use the public Agent run entrypoint. `eval/suite.py` may also use
-  `LLMClient` and `ReadPaperTool`, but eval must not depend on other Agent
-  internals or on `retrieval/`.
-- SwiftUI and MCP remain protocol/product boundaries and reuse Python Core
-  behavior instead of reimplementing it.
-
-If shared behavior is genuinely needed, expose a narrower interface from the
-owning module or place a dependency-free primitive in `shared/`; do not create
-a reverse import.
-
-## LLM, schemas, and eval
+## LLM and evaluation
 
 - Every model call goes through `agents/llm_client.py`.
-- Treat Pydantic `Field(description=...)` text as a production prompt written
-  to the model, not as developer documentation.
-- Use deterministic validators or output filters for semantic, temporal,
-  causal, and hierarchical constraints that prompt wording cannot guarantee.
-- Keep enums small and sharply anchored. Evaluate noisy fields across repeated
-  runs rather than promoting one unstable observation to a strict assertion.
-- Follow `ARCHITECTURE.md` for the current model and context policy. Do not
-  change the default model without the required smoke evaluation and a
-  measurable quality gain that justifies cost and latency.
-- A new LLM call site must include an expected per-call token/cost estimate in
-  the handoff and needs eval coverage before landing. If eval work was not
-  requested, stop and ask before adding it.
+- Pydantic `Field(description=...)` text crossing an LLM boundary is production
+  prompt content.
+- Use deterministic validation for constraints prompt wording cannot guarantee.
+- Do not change the default model without a smoke evaluation and a measurable
+  quality, cost, or latency benefit.
+- A new LLM call site requires an expected token/cost estimate and eval coverage
+  before landing. If eval is outside the requested scope, stop and ask.
 
-## Data and security
-
-- Preserve append-only session and event histories; do not rewrite source
-  records to make a derived view convenient.
-- Treat PDF text, retrieved content, stored fields, and tool output as
-  untrusted input. Only system prompts, runtime context, and tool schemas define
-  behavior.
-- Keep local MCP tools least-privileged. New writes, arbitrary paths, command
-  execution, or external side effects require an explicit design and approval
-  boundary.
-- Do not expose credentials, local paths, full documents, sessions, or
-  unbounded evidence through API, MCP, logs, or diagnostics.
-
-## Naming and commits
-
-- Python modules, functions, and variables: `snake_case`.
-- Classes: `PascalCase`; constants: `SCREAMING_SNAKE_CASE`.
-- Protocols and ABCs: `Protocol` or `Base` suffix.
-- Exceptions: `Error` suffix.
-- Avoid vague names such as `data`, `info`, `result`, `manager`, `handler`, or
-  `util` when a domain-specific name is available.
-
-Commit format, when requested: `<type>: <subject>`, lower case, no period.
-Allowed types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`.
-Keep one logical change per commit.
+When tests are requested, use pytest, mirror `src/paper_copilot/` under
+`tests/`, prefer small real PDFs for parsing, mock external boundaries rather
+than Paper Copilot components, and test observable behavior.

@@ -4,7 +4,7 @@
 > [TASKS.md](TASKS.md)，工程规则见 [AGENTS.md](AGENTS.md)，详细决策见
 > [docs/design/](docs/design/)；具体接口以代码为准。
 
-更新于 2026-07-28。
+更新于 2026-08-03。
 
 ## 1. 原则
 
@@ -109,44 +109,41 @@ rollout deadline。
 
 ### 5.1 研究上下文与缓存
 
-World State 只注入内建只读 `research-papers` Skill 的 catalog metadata。模型在论文
-研究需要时调用 `load_skill`；session 记录首次加载的名称、版本和正文 SHA-256，后续
-turn 不重复返回正文，compaction replacement history 保留已加载版本。Skill 只指导
-缓存搜索、页定位和证据工作流，不授予权限。
+World State 只发布内建只读 `research-papers` Skill 的 catalog metadata。模型按需调用
+`load_skill`；session 固定首次加载的名称、版本、正文和 SHA-256，后续不重复返回正文。
+Skill 只指导研究流程，不授予权限。
 
-Runtime 在模型循环前按论文预算准备内容寻址文本缓存。conversation 环境生成
-内容寻址、只读的 JSONL manifest，并把缓存文本映射为短
-`papers/paper-NNNN-<artifact>.layout.txt` 别名。manifest header 记录总数、准备数、
-失败项和 paper-budget 截断；paper records 记录授权 PDF locator、完整 PDF SHA-256、
-页数、短文本别名和 Runtime 分配的应用内 `citation_base`。模型不再预先接收完整论文
-索引，而是通过 Runtime 管理、模型只读的 `research-manifests/current.jsonl` 稳定入口
-和 `papers/` 按需发现并批量读取；内容寻址 manifest 本身保持不可变。
-`paper-cache status/ensure/page` 不再暴露。缓存文本以换页符保留 PDF 页边界，模型用
-有界命令一次读取一个或多个明确页面；实际返回的命令输出随完整会话历史进入后续上下文。
+Runtime 在模型循环前按论文预算准备内容寻址文本缓存。conversation 环境通过只读的
+`research-manifests/current.jsonl` 和短 `papers/*.layout.txt` 别名提供按需发现；manifest
+保存授权 PDF locator、哈希、页数、缓存状态和应用内 `citation_base`。缓存文本以换页符
+保留物理页定位，模型通过有界命令批量搜索和读取，模型可见输出进入会话历史。详细契约见
+[library_exec_codex_source_mapping.md](docs/design/library_exec_codex_source_mapping.md)。
+
+`*.layout.txt` 是从 PDF 派生的搜索、普通正文读取和物理页定位层，不是 PDF 原文或
+通用的引用级（citation-grade）内容层。换页边界只保证定位关系，不保证公式字形、数学
+符号、复杂表头、合并单元格、勾叉标记或二维布局的语义保真；这些内容可能变成 Unicode
+替换字符（replacement character）、私用区字形（private-use glyph）或错误的阅读顺序。
+原始 PDF 始终是权威来源。未经视觉或结构化证据复核，模型不得从乱码缓存精确转写公式，
+也不得把符号列不完整的表格作为完整证据。
 
 ### 5.2 页面证据与引用展示
 
 `inspect_page` 只在模型支持图像输入时渲染 PNG。结果绑定 PDF SHA-256、页码、region
 和 render SHA-256；图像只进入当前模型上下文，不写入 session、日志或 trace。
 
-成功 `inspect_page` 后，Runtime 追加不含图像正文的
-`research_evidence.page_observed` event，供视觉证据审计和恢复使用。文本读取与 Codex
-一样只保留权威命令、模型可见输出和完整会话历史，不另设页面登记工具。Agent loop 与
-Codex 一样只提供默认关闭的通用 Stop hook；
-Paper Copilot 默认不配置 handler，因此模型 `end_turn` 后直接结束，不因论文覆盖率或
-引用格式自动重答。
+纯文本（text-only）模型不能使用该视觉回退。当前 Runtime 没有确定性的公式 OCR、
+PDF-to-LaTeX 或复杂表格结构恢复层，因此 text-only 运行遇到公式、符号表格或明显提取
+损坏时只能明确报告证据限制，不能把 `layout.txt` 猜测性修复成看似合法的公式。结构化
+Markdown/LaTeX 缓存、置信度与原页回退属于待设计能力，不是当前已实现架构。
 
-模型直接用 manifest paper record 中的 `citation_base` 生成最终 Markdown 链接；
-引用处理层不解析、验证、替换或清理模型答案。Chat result 另行携带本次运行生成的
-`citation ref -> 授权逻辑 locator` 映射。用户点击链接后，macOS 客户端先从该可信
-映射解析 locator，再校验目标位于授权目录内、扩展名为 PDF 且文件存在，随后打开指定
-页。缺失或无效链接不阻断回答，也不触发重试。引用处理后的正文、session report 和 UI
-使用同一份文本。设计见
+成功 `inspect_page` 后，Runtime 只追加不含图像正文的页面观察事件。文本读取不另设
+登记工具；权威命令、模型可见输出和完整会话历史构成审计依据。默认 Agent loop 不按
+论文覆盖率或引用格式阻断模型 `end_turn`。
+
+模型使用 manifest 的 `citation_base` 生成 Markdown 链接；Runtime 不改写最终答案。
+Chat result 携带可信 citation ref 映射，macOS 在授权目录、扩展名和文件存在校验通过后
+打开指定 PDF 页。完整设计见
 [runtime_research_evidence_codex_source_mapping.md](docs/design/runtime_research_evidence_codex_source_mapping.md)。
-
-旧 `paper_set` 事件和代码仅供历史 session 兼容，不再属于模型工具表面或
-citation-grade coverage。其他旧读取、搜索、查询、比较、文件、笔记和 Composer 实现
-也仅作为不可调用回滚代码存在。
 
 ## 6. 授权与信任
 
@@ -186,13 +183,9 @@ queued/running job 转为 interrupted。Resume 在同一 job/turn 下创建新 a
 结束。后续新 turn 只使用已完成 turn；当前 job 的重试可使用该 turn 已持久化的部分历史。
 同一 conversation 同时只运行一个 turn。
 
-旧版每 attempt 一个 session 的数据保持只读不变。旧 conversation 首次进入新路径时，
-Runtime 从最近可恢复的旧 session 追加一次 conversation 级 `recovery_base`，之后所有
-新 turn 直接追加到 `papers/<conversation_id>/session.jsonl`，不再建立跨 job
-`recovery_base` 链。
-
-每个 attempt 有独立 observability bundle。Reducer 只消费完整事件前缀，忽略 torn
-tail，并校验事件顺序、父子关系和 payload 引用。
+旧 session 通过 append-only 兼容路径迁移，不改写原记录。每个 attempt 有独立
+observability bundle；Reducer 只消费完整事件前缀并校验顺序与引用。恢复和迁移细节见
+[codex_paper_copilot_agent_gap_investigation.md](docs/design/codex_paper_copilot_agent_gap_investigation.md)。
 
 用户授权目录保存原始 PDF 和用户文档。应用数据默认位于
 `~/.paper-copilot/`：
@@ -234,17 +227,13 @@ Embedding 当前固定为 DashScope `text-embedding-v4`、1024 维；模型或�
   删除会终止环境内全部进程组；无 PTY、任意 workdir、shell 选择、网络或权限升级。
   受控 `python` 与 `python3` 指向同一解释器，只开放标准库读取和 `scratch/` 写入，
   关闭网络、user site、第三方 site-packages 和 bytecode 写入。
-- 阿里云百炼 OpenAI 兼容 Chat 的地域端点、业务空间专属域名和迁移说明见
-  [aliyun_bailian_openai_chat.md](docs/design/aliyun_bailian_openai_chat.md)。
 - 一次任务使用客户端选择的同一模型，不做模型分层。
 - 主 Agent 和回答修复不设置客户端 `max_tokens`；有界专用调用可按契约设置。
 - OpenAI-compatible endpoint 必须支持所选 Thinking 与流式协议，不能静默退化。
-- 原始窗口为 272K：258.4K 有效工作窗口；预计下一轮达到 244.8K 时压缩至不超过
-  80K；258.4K 是普通调用硬门槛。
-- UI 工作窗口百分比沿用 Codex 口径，主 Agent 最近调用的输入、缓存和输出 token 均
-  计入；仅百分比计算从分子、分母扣除 12K 固定基础预算。
-- `CompactionSummary` 保留请求、目标、约束、决策、证据、失败尝试、Runtime state
-  和近期完整 tool round；原始 session 不变。
+- 上下文预算、压缩阈值、UI 百分比和 `CompactionSummary` 遵循固定 Codex 语义；具体
+  参数以代码和
+  [context_window_codex_source_mapping.md](docs/design/context_window_codex_source_mapping.md)
+  为准，原始 session 始终保持不变。
 - 默认模型变更前必须运行 smoke eval；零回归只是必要条件，还需有质量、成本或延迟的
   可测量收益。
 

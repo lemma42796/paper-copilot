@@ -13,6 +13,7 @@ wheels/
 data/
 eval/runs/
 eval/report.html
+eval/experiments/**/raw/
 .env
 .env.local
 
@@ -24,6 +25,7 @@ xcuserdata/
 .vscode/settings.json
 .idea/
 .claude/
+.workbuddy/
 
 # Python tool caches
 .pytest_cache/
