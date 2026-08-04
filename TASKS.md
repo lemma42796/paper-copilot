@@ -27,9 +27,10 @@
 - 只有任务确实需要理解或引用某个乱码公式时才调用 `recognize_formula`，不得仅因发现乱码
   就识别；`recognize` 只返回候选，模型检查后调用 `accept` 才把 LaTeX 写入新 revision、
   原子发布为 current，并自动删除同一缓存键下的旧 revision。
-- [ ] 下一步：验证新增、删除、查询、替换 PDF 的缓存一致性，以及按需 TXT 生成、本地
-  Formula OCR 构建、安装门控、两阶段工具协议、真实乱码公式识别、接受回填和跨会话命中。
-- 实现代码与构建清单已经写入仓库；完成定义还包括生成独立 Helper、用本机论文做最小
-  识别与 TXT 回填测试、确认未请求论文不生成缓存、确认主客户端未包含 Paddle、确认未点击
-  下载时无网络行为，以及发布前完成 Developer ID 签名/公证和固定 GitHub Release
-  manifest 校验。
+- [ ] 下一步：完成真实乱码公式 `recognize`/`accept` 回填与跨会话命中，验证工具暴露
+  矩阵、按需缓存一致性（新增/删除/查询/替换 PDF）、未请求论文不生成缓存、主客户端无
+  Paddle 静态检查与未点击下载无网络行为；发布前完成 Developer ID 签名/公证并复核固定
+  GitHub Release manifest 校验。
+- 已完成：Helper 重建（含受限异常因果输出与 pypdfium2 收集）、真实论文公式推理、
+  ad-hoc Release `formula-ocr-v1` 发布、App 内安装与模型复用闭环、工具超时 45 → 120 秒。
+  正式发布仍需 Developer ID 签名与公证。

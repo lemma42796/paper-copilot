@@ -37,6 +37,8 @@ uv run --group dev --group formula-ocr pyinstaller \
     --collect-all paddlex \
     --collect-all cv2 \
     --collect-all tokenizers \
+    --collect-all pypdfium2 \
+    --collect-all pypdfium2_raw \
     --exclude-module pytest \
     --exclude-module scipy \
     --exclude-module torch \
