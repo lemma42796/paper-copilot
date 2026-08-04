@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from datetime import UTC, datetime
@@ -14,6 +16,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from paper_copilot.shared.errors import PdfCacheError
+from paper_copilot.shared.logging import get_logger
 from paper_copilot.shared.poppler import PopplerIdentity, PopplerTextExtractor
 
 __all__ = [
@@ -26,11 +29,15 @@ __all__ = [
     "TextArtifact",
 ]
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _LAYOUT_FILENAME = "layout.txt"
 _MANIFEST_FILENAME = "manifest.json"
 _CURRENT_FILENAME = "current.json"
 _READ_CHUNK_BYTES = 1024 * 1024
+_OCR_START_TEMPLATE = "[[paper-copilot-ocr:start slot={slot} page={page}]]"
+_OCR_END_TEMPLATE = "[[paper-copilot-ocr:end slot={slot}]]"
+_REVISION_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+_log = get_logger(__name__)
 
 
 class PageBoundary(BaseModel):
@@ -50,10 +57,22 @@ class TextArtifact(BaseModel):
     byte_count: int = Field(ge=0)
 
 
+class FormulaOCRRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    slot: str = Field(pattern=r"^page-[0-9]{4}-formula-[0-9]{4}$")
+    page: int = Field(ge=1)
+    region: dict[str, float]
+    model: str = Field(min_length=1)
+    render_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    latex_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    created_at: datetime
+
+
 class PdfCacheManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1] = _SCHEMA_VERSION
+    schema_version: Literal[2] = _SCHEMA_VERSION
     revision_id: str
     pdf_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_locator: str
@@ -68,6 +87,7 @@ class PdfCacheManifest(BaseModel):
     status: Literal["complete", "partial", "failed"]
     unresolved_pages: list[int]
     artifact: TextArtifact
+    formula_ocr_records: list[FormulaOCRRecord] = Field(default_factory=list)
 
     @field_validator("source_locator")
     @classmethod
@@ -212,6 +232,33 @@ class PdfTextCache:
             raise PdfCacheError(f"paper cache is unavailable: {reason}")
         return await self.page(lookup.cache_ref, page=page)
 
+    async def record_formula_ocr(
+        self,
+        pdf_sha256: str,
+        *,
+        page: int,
+        cache_slot: str,
+        latex: str,
+        region: dict[str, float],
+        model: str,
+        render_sha256: str,
+    ) -> PdfCacheLookup:
+        identity = await self._extractor.identity()
+        cache_key = f"{pdf_sha256}:{identity.fingerprint}"
+        lock = await self._lock_for(cache_key)
+        async with lock:
+            return await asyncio.to_thread(
+                self._record_formula_ocr,
+                pdf_sha256,
+                identity,
+                page,
+                cache_slot,
+                latex,
+                region,
+                model,
+                render_sha256,
+            )
+
     async def _build(
         self,
         *,
@@ -232,18 +279,24 @@ class PdfTextCache:
         )
         revision_id = uuid4().hex
         try:
-            layout_path = staging_path / _LAYOUT_FILENAME
-            extraction = await self._extractor.extract(pdf_path, layout_path)
+            raw_path = staging_path / "source-extraction"
+            extraction = await self._extractor.extract(pdf_path, raw_path)
             if extraction.identity != identity:
                 raise PdfCacheError("extractor identity changed during cache generation")
             current_pdf_sha256 = await asyncio.to_thread(_sha256_file, pdf_path)
             if current_pdf_sha256 != pdf_sha256:
                 raise PdfCacheError("PDF content changed during cache generation")
-            layout_bytes = await asyncio.to_thread(layout_path.read_bytes)
-            page_boundaries = _page_boundaries(layout_bytes, extraction.page_count)
+            raw_bytes = await asyncio.to_thread(raw_path.read_bytes)
+            text_bytes, page_boundaries = _formula_aware_text(
+                raw_bytes,
+                extraction.page_count,
+            )
+            await asyncio.to_thread(raw_path.unlink)
+            text_path = staging_path / _LAYOUT_FILENAME
+            await asyncio.to_thread(text_path.write_bytes, text_bytes)
             artifact = TextArtifact(
-                sha256=hashlib.sha256(layout_bytes).hexdigest(),
-                byte_count=len(layout_bytes),
+                sha256=hashlib.sha256(text_bytes).hexdigest(),
+                byte_count=len(text_bytes),
             )
             manifest = PdfCacheManifest(
                 revision_id=revision_id,
@@ -260,15 +313,19 @@ class PdfTextCache:
                 status="complete",
                 unresolved_pages=[],
                 artifact=artifact,
+                formula_ocr_records=[],
             )
             await asyncio.to_thread(
                 _write_json,
                 staging_path / _MANIFEST_FILENAME,
                 manifest.model_dump(mode="json"),
             )
-            revision_dir = revisions_dir / revision_id
-            await asyncio.to_thread(os.replace, staging_path, revision_dir)
-            await asyncio.to_thread(_publish_current, key_dir, revision_id)
+            await asyncio.to_thread(
+                _publish_revision,
+                staging_path,
+                key_dir,
+                revision_id,
+            )
             return PdfCacheLookup(
                 status="hit",
                 cache_ref=_cache_ref(manifest),
@@ -278,6 +335,84 @@ class PdfTextCache:
         finally:
             if staging_path.exists():
                 await asyncio.to_thread(shutil.rmtree, staging_path)
+
+    def _record_formula_ocr(
+        self,
+        pdf_sha256: str,
+        identity: PopplerIdentity,
+        page: int,
+        cache_slot: str,
+        latex: str,
+        region: dict[str, float],
+        model: str,
+        render_sha256: str,
+    ) -> PdfCacheLookup:
+        lookup = self._lookup(pdf_sha256, identity)
+        if lookup.status != "hit" or lookup.cache_ref is None or lookup.manifest is None:
+            raise PdfCacheError("formula-aware text cache is unavailable for formula OCR")
+        manifest = lookup.manifest
+        if page > manifest.page_count:
+            raise PdfCacheError("formula OCR page exceeds the cached page count")
+        revision_dir = self._revision_dir(lookup.cache_ref)
+        source_path = revision_dir / manifest.artifact.filename
+        text = source_path.read_text(encoding="utf-8")
+        start = _OCR_START_TEMPLATE.format(slot=cache_slot, page=page)
+        end = _OCR_END_TEMPLATE.format(slot=cache_slot)
+        pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.DOTALL)
+        if pattern.search(text) is None:
+            raise PdfCacheError(
+                f"formula OCR cache slot is unavailable on page {page}: {cache_slot}"
+            )
+        normalized_latex = latex.strip()
+        replacement = (
+            f"[[paper-copilot-ocr:recognized slot={cache_slot} page={page} "
+            f"model={model} render_sha256={render_sha256} verified=false]]\n"
+            f"$$\n{normalized_latex}\n$$"
+        )
+        updated = pattern.sub(lambda _: replacement, text, count=1)
+        updated_bytes = updated.encode("utf-8")
+        page_boundaries = _page_boundaries(updated_bytes, manifest.page_count)
+        revision_id = uuid4().hex
+        key_dir = self._key_dir(pdf_sha256, identity.fingerprint)
+        staging_path = Path(tempfile.mkdtemp(prefix=".staging-", dir=key_dir))
+        try:
+            artifact = TextArtifact(
+                sha256=hashlib.sha256(updated_bytes).hexdigest(),
+                byte_count=len(updated_bytes),
+            )
+            record = FormulaOCRRecord(
+                slot=cache_slot,
+                page=page,
+                region=region,
+                model=model,
+                render_sha256=render_sha256,
+                latex_sha256=hashlib.sha256(normalized_latex.encode("utf-8")).hexdigest(),
+                created_at=datetime.now(UTC),
+            )
+            derived = manifest.model_copy(
+                update={
+                    "revision_id": revision_id,
+                    "page_boundaries": page_boundaries,
+                    "created_at": datetime.now(UTC),
+                    "artifact": artifact,
+                    "formula_ocr_records": [*manifest.formula_ocr_records, record],
+                }
+            )
+            (staging_path / _LAYOUT_FILENAME).write_bytes(updated_bytes)
+            _write_json(
+                staging_path / _MANIFEST_FILENAME,
+                derived.model_dump(mode="json"),
+            )
+            _publish_revision(staging_path, key_dir, revision_id)
+            return PdfCacheLookup(
+                status="hit",
+                cache_ref=_cache_ref(derived),
+                manifest=derived,
+                reason="formula OCR recorded",
+            )
+        finally:
+            if staging_path.exists():
+                shutil.rmtree(staging_path)
 
     async def _lock_for(self, cache_key: str) -> asyncio.Lock:
         async with self._locks_guard:
@@ -342,7 +477,7 @@ def _page_boundaries(layout_bytes: bytes, page_count: int) -> list[PageBoundary]
         raw_pages.pop()
     if len(raw_pages) != page_count:
         raise PdfCacheError(
-            "pdftotext page separators do not match pdfinfo page count: "
+            "text cache page separators do not match PDF page count: "
             f"{len(raw_pages)} != {page_count}"
         )
     boundaries: list[PageBoundary] = []
@@ -359,6 +494,53 @@ def _page_boundaries(layout_bytes: bytes, page_count: int) -> list[PageBoundary]
         )
         offset = end_offset + len(separator)
     return boundaries
+
+
+def _formula_aware_text(
+    raw_bytes: bytes,
+    page_count: int,
+) -> tuple[bytes, list[PageBoundary]]:
+    raw_pages = raw_bytes.split(b"\f")
+    if raw_pages and raw_pages[-1] == b"":
+        raw_pages.pop()
+    if len(raw_pages) != page_count:
+        raise PdfCacheError(
+            "source extraction page separators do not match PDF page count: "
+            f"{len(raw_pages)} != {page_count}"
+        )
+    rendered_pages: list[str] = []
+    for page, raw_page in enumerate(raw_pages, start=1):
+        text = raw_page.decode("utf-8", errors="replace")
+        rendered_pages.append(_render_text_page(text, page))
+    text_bytes = "\f".join(rendered_pages).encode("utf-8") + b"\f"
+    return text_bytes, _page_boundaries(text_bytes, page_count)
+
+
+def _render_text_page(text: str, page: int) -> str:
+    lines: list[str] = [f"[[paper-copilot-page:{page}]]", ""]
+    slot_index = 0
+    for line in text.splitlines():
+        if _contains_extraction_garble(line):
+            slot_index += 1
+            slot = f"page-{page:04d}-formula-{slot_index:04d}"
+            lines.extend(
+                [
+                    _OCR_START_TEMPLATE.format(slot=slot, page=page),
+                    f"[公式 OCR 待识别；cache_slot={slot}]",
+                    f"原始提取：{line}",
+                    _OCR_END_TEMPLATE.format(slot=slot),
+                ]
+            )
+        else:
+            lines.append(line)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _contains_extraction_garble(text: str) -> bool:
+    return any(
+        character == "\ufffd" or "\ue000" <= character <= "\uf8ff"
+        for character in text
+    )
 
 
 def _sha256_file(path: Path) -> str:
@@ -414,6 +596,26 @@ def _read_text_range(path: Path, start_offset: int, end_offset: int) -> str:
     return raw_text.decode("utf-8", errors="replace")
 
 
+def _publish_revision(
+    staging_path: Path,
+    key_dir: Path,
+    revision_id: str,
+) -> None:
+    lock_path = key_dir / ".publish.lock"
+    with lock_path.open("a+b") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            revision_target = key_dir / "revisions" / revision_id
+            os.replace(staging_path, revision_target)
+            _publish_current(key_dir, revision_id)
+            _delete_superseded_revisions(
+                key_dir,
+                keep_revision_id=revision_id,
+            )
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def _publish_current(key_dir: Path, revision_id: str) -> None:
     current = _CurrentRevision(revision_id=revision_id)
     with tempfile.NamedTemporaryFile(
@@ -431,6 +633,30 @@ def _publish_current(key_dir: Path, revision_id: str) -> None:
         os.replace(temporary_path, key_dir / _CURRENT_FILENAME)
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+def _delete_superseded_revisions(
+    key_dir: Path,
+    *,
+    keep_revision_id: str,
+) -> None:
+    revisions_dir = key_dir / "revisions"
+    try:
+        for candidate in revisions_dir.iterdir():
+            if (
+                candidate.name == keep_revision_id
+                or _REVISION_ID_PATTERN.fullmatch(candidate.name) is None
+                or not candidate.is_dir()
+                or candidate.is_symlink()
+            ):
+                continue
+            shutil.rmtree(candidate)
+    except OSError as error:
+        _log.warning(
+            "pdf_cache.revision_cleanup_failed",
+            current_revision_id=keep_revision_id,
+            error_type=type(error).__name__,
+        )
 
 
 def _write_json(path: Path, payload: object) -> None:

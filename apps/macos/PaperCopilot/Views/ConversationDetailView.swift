@@ -169,6 +169,7 @@ struct ConversationDetailView: View {
                                 Text(model.menuTitle)
                             }
                         }
+                        .help(appModel.formulaOCRHoverHelp(for: model))
                     }
                 } label: {
                     HStack {

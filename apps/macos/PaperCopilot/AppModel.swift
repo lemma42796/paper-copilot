@@ -49,6 +49,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var modelConfigurations: [ModelConfiguration] = []
     @Published private(set) var availableModels: [ModelConfiguration] = []
     @Published private(set) var selectedModel: ModelConfiguration?
+    @Published private(set) var formulaOCRStatus: FormulaOCRInstallStatus
     @Published private(set) var deletingConversationIDs: Set<String> = []
     @Published private(set) var resolvingApprovalIDs: Set<String> = []
     @Published private(set) var approvalMode: ApprovalMode
@@ -58,6 +59,7 @@ final class AppModel: ObservableObject {
     private let credentialStore = CredentialStore()
     private let modelStore = ModelConfigurationStore()
     private let runtimeManager = RuntimeManager()
+    private let formulaOCRManager = FormulaOCRManager()
     private var api: PaperCopilotAPI?
     private var eventCursors: [String: Int] = [:]
     private var observationTasks: [String: Task<Void, Never>] = [:]
@@ -66,11 +68,13 @@ final class AppModel: ObservableObject {
     private static let approvalModeKey = "approvalMode"
 
     init() {
+        formulaOCRStatus = .notInstalled
         approvalMode = ApprovalMode(
             rawValue: UserDefaults.standard.string(
                 forKey: Self.approvalModeKey
             ) ?? ""
         ) ?? .ask
+        formulaOCRStatus = formulaOCRManager.localStatus()
         restoreLibrary()
         initializeModelRuntime()
     }
@@ -195,6 +199,31 @@ final class AppModel: ObservableObject {
         selectedModel = model
         modelStore.saveSelectedID(model.id)
         restartRuntime()
+    }
+
+    func downloadFormulaOCR() {
+        guard
+            formulaOCRStatus != .downloading,
+            !hasActiveJobs,
+            !isSubmitting
+        else {
+            return
+        }
+        Task {
+            await formulaOCRManager.downloadAndInstall { [weak self] status in
+                self?.formulaOCRStatus = status
+            }
+        }
+    }
+
+    func formulaOCRHoverHelp(for model: ModelConfiguration) -> String {
+        if !model.supportsImageInput && !formulaOCRStatus.isInstalled {
+            return "纯文本模型不能直接查看 PDF 公式。可在设置中按需下载本地公式 OCR；指向模型不会触发下载。"
+        }
+        if !model.supportsImageInput {
+            return "纯文本模型将使用已安装的本地公式 OCR 读取公式。"
+        }
+        return model.menuTitle
     }
 
     func selectReasoningEffort(_ effort: ReasoningEffort) {

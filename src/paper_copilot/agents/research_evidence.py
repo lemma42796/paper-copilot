@@ -36,7 +36,11 @@ class PageEvidenceFact(BaseModel):
 
     schema_version: Literal[1] = _SCHEMA_VERSION
     source_tool_call_id: str = Field(min_length=1)
-    source_kind: Literal["cached_text_page", "pdf_page_render"]
+    source_kind: Literal[
+        "cached_text_page",
+        "pdf_page_render",
+        "pdf_formula_ocr",
+    ]
     pdf_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     page: int = Field(ge=1)
     artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")

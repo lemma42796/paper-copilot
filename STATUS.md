@@ -1,60 +1,94 @@
 # STATUS
 
-> 当前任务的跨会话接力快照。每次更新覆盖旧内容，不追加历史流水；详细实验记录和结果只
-> 保存在实验文档与产物目录中。
+> 当前任务的跨会话接力快照。每次更新覆盖旧内容，不追加历史流水；详细设计与实验结果
+> 保存在各自产物中。
 
-更新于 2026-08-03。
+更新于 2026-08-04。
 
-## 当前目标
+## 新会话从这里继续
 
-通过可归因的桥接实验，找出 Paper Copilot + DeepSeek V4 Flash 在 Query 1 上高于原生
-Codex + DeepSeek V4 Flash 的主要原因。
+下一步只验证“按需 TXT 缓存 + 可选本地公式 OCR”闭环，不继续扩展功能。目标行为是：
 
-## 已知结果
+1. 客户端启动和 Agent 预检不批量生成论文正文缓存，只建立授权论文 inventory manifest；
+2. 模型只对当前任务需要的论文调用 `paper-cache ensure <pdf>`，生成该论文的
+   `layout.txt`；
+3. 模型读取 TXT，只有任务确实需要理解或引用某个带 `cache_slot` 的乱码公式时才调用
+   `recognize_formula` 的 `recognize`，不得仅因发现乱码就识别；
+4. `recognize` 只返回 `PP-FormulaNet_plus-S` 候选 LaTeX 和 `candidate_id`，不修改 TXT；
+5. 模型判断候选可接受后调用 `accept`，Runtime 才在新 revision 中替换对应乱码区块，
+   原子发布为 current，并自动删除同一缓存键下的旧 revision。
 
-- B、C 都只运行了一次 Query 1；二者是单轮诊断，不是四轮正式实验或重复实验。
-- B（Codex + `library_exec`，无 Skill）：6 C / 8 P，strict 42.9%，weighted 71.4%。
-- C（B + Skill v16 静态开发者指令）：8 C / 6 P，strict 57.1%，weighted 78.6%。
-- Paper Copilot T01 复跑（原生 Skill v16）：11 C / 3 P，strict 78.6%，weighted
-  89.3%。
-- 旧原生 Codex 四轮运行的 T01 当前人工拆分为 8 C / 4 P / 0 I / 2 M，strict
-  57.1%，weighted 71.4%，coverage 85.7%；该拆分不是当时单独持久化的正式评分。
-- 因而静态注入 Skill 虽改善了 B，但没有复现 Paper Copilot 的 T01 分数；C 的 strict
-  与上述原生 Codex T01 人工拆分相同。当前尚未找到 PC 高分的可归因原因。
-- 已有 PC 内部单次消融显示，静态 Skill 和隐藏 World State 均伴随降分，但这只能产生
-  候选机制，不能单独解释 PC 相对 Codex 的跨运行时差距。
+## 已实现但尚未验证
 
-## 当前状态
+- PDF cache schema 已改为 v2，持久产物恢复为 `layout.txt`，不再使用
+  `structured.md`。`pdftotext` 仍由受控缓存层内部调用；模型命令环境不直接暴露它。
+- TXT 保留换页符物理页边界。含 Unicode 替换字符或私用区字形的行会被包进稳定
+  `page-NNNN-formula-NNNN` OCR slot，同时保留原始提取文本。
+- Runtime 预检现在只计算授权 PDF 的 SHA-256 和页数并生成 inventory manifest，不再
+  `ensure` 全部论文。manifest 的 `text` 可为空，`cached=false`。
+- `library_exec` 恢复窄化的 `paper-cache status/ensure/page` broker；命令必须独占整个
+  `cmd`，禁止管道、循环、命令链、命令替换和越出授权论文库的路径。
+- Formula OCR 工具已改为两阶段协议：`recognize` 将冻结候选保存在当前 Runtime 进程；
+  `accept` 校验候选、论文、页码和 PDF SHA 后才调用 cache writeback。
+- 接受写回替换精确 slot，记录模型、region、render SHA、LaTeX SHA，创建新 revision，
+  原子更新 `current.json` 后自动删除同一缓存键下的旧 revision。`verified=false` 仍保留；
+  current TXT 会累积已经接受的公式修复。
+- 未接受候选不会持久化；Runtime 退出后必须重新识别，TXT 不发生变化。
+- 公式 OCR 页面证据类型已允许 `pdf_formula_ocr`，模型身份以 SHA-256 指纹写入证据字段。
+- macOS 设置页、独立 Helper、下载校验和工具暴露门控代码仍在工作树：主客户端不设计为
+  包含 PaddlePaddle、PaddleOCR、PaddleX、OpenCV 或模型权重；只有用户点击设置中的下载
+  按钮才应发起网络请求。
+- 当前活动目录中没有遗留 `structured.md`。此前删除的 14 个活动 `layout.txt` 和短论文
+  验证产生的 2 个临时 `layout.txt` 尚未重建；以后应由模型按需生成。322 个历史实验副本
+  作为审计证据保留。
 
-- 原“干净重跑 Codex T01–T04”任务已取消。
-- 新的归因实验尚未设计定稿，也未启动新的模型调用或产生费用。
-- 当前证据只支持描述性结论，不支持统计显著性或稳定因果结论。
-- 历史实验已按清晰实验名称统一为 `eval/experiments/<name>/experiment.md`；私有评测区
-  使用同名目录和 `raw/` 入口组织原始产物，旧 `runs/` 路径保持不变。
+关键代码入口：
 
-## 下一步
+- `src/paper_copilot/shared/pdf_cache.py`
+- `src/paper_copilot/agents/paper_copilot.py`
+- `src/paper_copilot/agents/library_exec_tool.py`
+- `src/paper_copilot/agents/tools/runtimes/library_environment.py`
+- `src/paper_copilot/agents/formula_ocr_tool.py`
+- `src/paper_copilot/agents/research_evidence.py`
+- `src/paper_copilot/formula_ocr_helper.py`
+- `apps/macos/PaperCopilot/Runtime/FormulaOCRManager.swift`
+- `src/paper_copilot/agents/skills/research-papers/SKILL.md`
+- `scripts/build_formula_ocr_component.sh`
+- `docs/design/formula_ocr_optional_component.md`
 
-1. 以 PC T01 复跑和 Codex T01 为两端，列出所有未对齐变量及其权威 trace 证据。
-2. 设计最小桥接矩阵，优先测试能同时覆盖原生 Skill 交付、World State、系统提示、工具
-   协议/结果和上下文管理的对照；每组先跑一次 Query 1。
-3. 在执行前明确每一组唯一变化、预计调用量、时间和费用，并获得用户付费执行授权。
-4. 对答案使用同一 Gold revision 2 只读评分，对 trace 单独统计调用、token、费用、耗时和
-   失败/恢复。
-5. 若某组件在单次桥接中解释主要差距，再对该组件做重复运行，验证结果是否稳定。
+## 下一步：按顺序做最小验证
 
-## 固定约束
+1. 记录验证前 cache 状态；启动客户端并新建对话，确认只出现 inventory manifest，没有任何
+   论文生成 `layout.txt`。
+2. 让模型选中一篇论文并调用 `paper-cache ensure`；确认只有这一篇产生 TXT，随后用
+   `paper-cache page` 和返回的 `cache_path` 都能读取。
+3. 做静态依赖检查：默认 Runtime 和主客户端产物不得包含或导入 Paddle；只有
+   `formula-ocr` 依赖组与独立 Helper 可以包含它。
+4. 构建开发版 ARM64 Helper。该步骤会写 `build/formula-ocr-component/`，开始前向用户说明
+   构建耗时、磁盘写入和不调用付费模型，并取得执行确认。
+5. 不走网络下载，用开发环境覆盖变量指向 Helper。选择带真实 `cache_slot` 的乱码公式运行
+   `recognize`，保存原始 JSON、裁剪图、候选 LaTeX、耗时，并确认 cache revision 未变化。
+6. 人工检查候选后运行 `accept`，保存返回值和新 revision；重新读取 TXT，确认只替换目标
+   slot，其他正文和页边界保留，并确认旧 revision 已自动删除。
+7. 验证工具暴露矩阵：纯文本模型 + 已安装 Helper 可见；纯文本 + 未安装不可见；图像模型
+   不可见且继续暴露 `inspect_page`。
+8. 验证 UI 网络门控：启动、选择模型、悬浮均无下载；只有点击设置按钮才请求 manifest。
+   固定 GitHub Release 尚无正式产物，因此正式下载链路留到发布后验证。
 
-- 模型、reasoning effort、Query、论文集合、输入模态和评分口径必须保持一致。
-- 明确区分静态 Skill 文本与 Paper Copilot 原生 `load_skill` 交付机制。
-- 不把 PC 自身消融直接表述为 PC 高于 Codex 的原因。
-- Gold 只读；不打印、记录或复制 API key。
-- 未获得明确执行授权前，不发起付费模型请求。
+## 约束与未决事项
 
-## 证据入口
+- 原 PDF 始终是公式权威证据；“模型接受候选”只授权写入派生 TXT，不代表数学正确性。
+- 当前乱码 slot 只由 Unicode 替换字符和私用区字形触发；未编号且没有 region 的行内公式
+  以及复杂表格恢复不在当前切片。
+- 不自动下载 Paddle 组件，不启动模型/API 调用，不因 OCR 安装重启正在执行的任务。
+- 尚未运行 Swift/Python 测试、构建、客户端启动验证或 TXT/OCR 端到端验证。
+- 固定 Release URL 尚无可下载产物；Developer ID 签名、公证和正式发布必须在功能验证后
+  单独处理，不能把开发用 ad-hoc 签名当作发布验证。
 
-- [当前任务](TASKS.md)
-- [实验索引](docs/design/experiment_index.md)
-- [V4 Flash 跨系统实验](eval/experiments/codex-vs-pc-v4flash/experiment.md)
-- [PC 组件消融结果](eval/experiments/pc-v4flash-component-ablation/experiment.md)
-- 私有语料与 Gold：
-  `/Users/a123/paper-copilot-eval-private/multi-thesis-v1/`
+## 工作树事实
+
+- 当前改动未 commit、未 push。
+- 工作树同时包含用户此前的实验 runner、Skill、配置、评分文档、`AGENTS.md`、依赖锁文件
+  和 `tmp/` 改动；它们不是本验证任务可以清理或覆盖的内容。
+- 新会话开始时先读 `TASKS.md`、本文件、`ARCHITECTURE.md` 的研究缓存章节和
+  `docs/design/formula_ocr_optional_component.md`，然后只处理上述最小验证范围。

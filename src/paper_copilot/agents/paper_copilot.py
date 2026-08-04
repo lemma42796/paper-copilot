@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, cast
 
 import numpy as np
+import pymupdf
 from pydantic import (
     BaseModel,
     BeforeValidator,
@@ -49,6 +50,12 @@ from paper_copilot.agents.context_compaction import (
     estimate_history_tokens,
 )
 from paper_copilot.agents.context import WorldStateEngine, reconstruct_world_state
+from paper_copilot.agents.formula_ocr_tool import (
+    FormulaOCRInput,
+    formula_ocr_available,
+    formula_ocr_tool_description,
+    run_formula_ocr,
+)
 from paper_copilot.agents.inspect_page_tool import (
     InspectPageInput,
     configured_input_modalities,
@@ -159,7 +166,6 @@ from paper_copilot.shared.cache import cached_system, mark_tools_cached
 from paper_copilot.shared.cost import CostSnapshot, CostTracker, UsageLike, pricing_for_model
 from paper_copilot.shared.embedding_cache import EmbeddingEncoder
 from paper_copilot.shared.errors import AgentError, KnowledgeError, PaperCopilotError
-from paper_copilot.shared.pdf_cache import PdfCacheLookup, PdfTextCache
 from paper_copilot.shared.prompt_fingerprint import compute_prompt_sha256
 
 __all__ = [
@@ -261,17 +267,23 @@ class _PreparedPaperCache:
     source_locator: str
     paper_id: str
     page_count: int
-    text_path: str
-    extractor_fingerprint: str
-    cache_revision_id: str
-    artifact_sha256: str
+    text_path: str | None = None
+    extractor_fingerprint: str | None = None
+    cache_revision_id: str | None = None
+    artifact_sha256: str | None = None
 
-    def research_alias(self, *, index: int) -> str:
-        return (
-            f"paper-{index:04d}-{self.artifact_sha256[:8]}.layout.txt"
-        )
+    def research_alias(self, *, index: int) -> str | None:
+        if self.artifact_sha256 is None:
+            return None
+        return f"paper-{index:04d}-{self.artifact_sha256[:8]}.layout.txt"
 
-    def active_snapshot(self) -> ActivePaperSnapshot:
+    def active_snapshot(self) -> ActivePaperSnapshot | None:
+        if (
+            self.extractor_fingerprint is None
+            or self.cache_revision_id is None
+            or self.artifact_sha256 is None
+        ):
+            return None
         return ActivePaperSnapshot(
             source_locator=self.source_locator,
             pdf_sha256=self.paper_id,
@@ -310,8 +322,9 @@ class _PaperCachePreflight:
                 source_locator=entry.source_locator,
                 paper_id=entry.paper_id,
                 text_source=(
-                    cache_root
-                    / Path(entry.text_path).relative_to("cache")
+                    cache_root / Path(entry.text_path).relative_to("cache")
+                    if entry.text_path is not None
+                    else None
                 ),
                 page_count=entry.page_count,
                 citation_base=f"paper-copilot://open?ref={citation_ref}",
@@ -998,11 +1011,12 @@ async def run_paper_copilot(
             preflight_operation.set_result(
                 attributes={
                     "total_pdf_count": cache_preflight.total_pdf_count,
-                    "prepared_count": len(cache_preflight.prepared),
+                    "inventory_count": len(cache_preflight.prepared),
+                    "prepared_count": 0,
                     "failure_count": len(cache_preflight.failures),
                 },
                 output_payload={
-                    "prepared_paper_ids": [
+                    "inventory_paper_ids": [
                         entry.paper_id for entry in cache_preflight.prepared
                     ],
                     "failures": list(cache_preflight.failures),
@@ -1024,7 +1038,9 @@ async def run_paper_copilot(
             ),
         )
     active_papers = tuple(
-        entry.active_snapshot() for entry in cache_preflight.prepared
+        snapshot
+        for entry in cache_preflight.prepared
+        if (snapshot := entry.active_snapshot()) is not None
     )
     active_papers_by_id = {
         paper.pdf_sha256: paper for paper in active_papers
@@ -1652,6 +1668,11 @@ def _tool_schema_templates() -> list[dict[str, Any]]:
             InspectPageInput,
         ),
         _tool_schema(
+            "recognize_formula",
+            formula_ocr_tool_description(),
+            FormulaOCRInput,
+        ),
+        _tool_schema(
             "paper_set",
             paper_set_tool_description(),
             PaperSetInput,
@@ -1687,6 +1708,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "library_exec": LibraryExecInput,
         "library_write_stdin": LibraryWriteStdinInput,
         "inspect_page": InspectPageInput,
+        "recognize_formula": FormulaOCRInput,
         "paper_set": PaperSetInput,
         "library_edit": LibraryEditInput,
         "notes_patch": NotesPatchInput,
@@ -1709,6 +1731,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "library_exec": frozenset({"read_library", "execute_command"}),
         "library_write_stdin": frozenset({"read_library", "execute_command"}),
         "inspect_page": frozenset({"read_library"}),
+        "recognize_formula": frozenset({"read_library"}),
         "paper_set": frozenset({"read_library", "update_job_state"}),
         "library_edit": frozenset({"read_library", "write_library"}),
         "notes_patch": frozenset({"read_library", "write_library"}),
@@ -1723,6 +1746,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "library_exec": 1_100_000,
         "library_write_stdin": 1_100_000,
         "inspect_page": 16_000,
+        "recognize_formula": 16_000,
         "paper_set": 40_000,
         "library_edit": 40_000,
         "notes_patch": 40_000,
@@ -1746,6 +1770,7 @@ def paper_copilot_tools(
         library_available=True,
         persistent_exec_available=True,
         image_input_available=True,
+        formula_ocr_available=False,
     )
     return _public_tool_registry().schemas(
         effective_exposure,
@@ -1764,6 +1789,7 @@ def _tool_exposure_context(
         image_input_available=(
             "image" in configured_input_modalities()
         ),
+        formula_ocr_available=formula_ocr_available(),
     )
 
 
@@ -1812,6 +1838,15 @@ def _public_tool_registry() -> ToolRegistry:
                 lambda exposure: (
                     exposure.library_available
                     and exposure.image_input_available
+                ),
+            ),
+            registered(
+                "recognize_formula",
+                _handle_public_formula_ocr,
+                lambda exposure: (
+                    exposure.library_available
+                    and not exposure.image_input_available
+                    and exposure.formula_ocr_available
                 ),
             ),
             registered(
@@ -1939,6 +1974,31 @@ async def _handle_public_inspect_page(
     )
 
 
+async def _handle_public_formula_ocr(
+    parsed_input: BaseModel,
+    raw_execution_context: Any,
+) -> ToolResultData:
+    execution_context = cast(
+        _PublicToolExecutionContext,
+        raw_execution_context,
+    )
+    formula_ocr_run = await run_formula_ocr(
+        cast(FormulaOCRInput, parsed_input),
+        execution_context.context.pdf_dir,
+        cache_root=pdf_cache_dir(
+            (
+                execution_context.context.root
+                if execution_context.context.root is not None
+                else execution_context.data_root
+            )
+        ),
+    )
+    return _ok(
+        formula_ocr_run.output,
+        trace_attributes=formula_ocr_run.trace_attributes,
+    )
+
+
 async def _handle_public_library_edit(
     parsed_input: BaseModel,
     raw_execution_context: Any,
@@ -2037,6 +2097,8 @@ def _dispatch_parsed_tool(
             return _err(f"{tool_name} requires the asynchronous tool dispatcher")
         case "inspect_page":
             return _err("inspect_page requires the asynchronous tool dispatcher")
+        case "recognize_formula":
+            return _err("recognize_formula requires the asynchronous tool dispatcher")
         case "paper_set":
             return _err("paper_set requires the asynchronous tool dispatcher")
         case "library_edit":
@@ -2336,17 +2398,22 @@ async def _prepare_paper_cache(
         return _PaperCachePreflight(total_pdf_count=0)
     library_root = context.pdf_dir.resolve()
     pdf_paths = _pdfs_under(library_root)
-    cache = PdfTextCache(pdf_cache_dir(context.root).expanduser().resolve())
     prepared: list[_PreparedPaperCache] = []
     failures: list[dict[str, str]] = []
     for pdf_path in pdf_paths[: max(context.max_papers, 0)]:
         source_locator = pdf_path.resolve().relative_to(library_root).as_posix()
         try:
-            lookup = await cache.ensure(
-                pdf_path,
-                source_locator=source_locator,
+            pdf_sha256, page_count = await asyncio.gather(
+                asyncio.to_thread(_sha256_path, pdf_path),
+                asyncio.to_thread(_pdf_page_count, pdf_path),
             )
-            prepared.append(_prepared_paper_cache(source_locator, lookup))
+            prepared.append(
+                _PreparedPaperCache(
+                    source_locator=source_locator,
+                    paper_id=pdf_sha256,
+                    page_count=page_count,
+                )
+            )
         except (PaperCopilotError, OSError, ValueError) as error:
             failures.append(
                 {
@@ -2361,32 +2428,12 @@ async def _prepare_paper_cache(
     )
 
 
-def _prepared_paper_cache(
-    source_locator: str,
-    lookup: PdfCacheLookup,
-) -> _PreparedPaperCache:
-    cache_ref = lookup.cache_ref
-    manifest = lookup.manifest
-    if lookup.status != "hit" or cache_ref is None or manifest is None:
-        reason = lookup.reason or lookup.status
-        raise KnowledgeError(f"Runtime cache preparation failed: {reason}")
-    text_path = (
-        Path("cache")
-        / cache_ref.pdf_sha256
-        / cache_ref.extractor_fingerprint
-        / "revisions"
-        / cache_ref.revision_id
-        / manifest.artifact.filename
-    )
-    return _PreparedPaperCache(
-        source_locator=source_locator,
-        paper_id=cache_ref.pdf_sha256,
-        page_count=manifest.page_count,
-        text_path=text_path.as_posix(),
-        extractor_fingerprint=cache_ref.extractor_fingerprint,
-        cache_revision_id=cache_ref.revision_id,
-        artifact_sha256=manifest.artifact.sha256,
-    )
+def _pdf_page_count(pdf_path: Path) -> int:
+    with pymupdf.open(pdf_path) as document:
+        page_count = document.page_count
+    if page_count < 1:
+        raise KnowledgeError("PDF has no pages")
+    return page_count
 
 
 def _sha256_path(path: Path) -> str:

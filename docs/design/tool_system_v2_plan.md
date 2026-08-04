@@ -39,8 +39,8 @@
 | `inspect_page` | 检查一张明确 PDF 页面或区域 | 已实施 |
 | `library_edit` | 执行授权论文库中的用户可见写操作 | 已实施 |
 
-Runtime preflight 负责批量 cache ensure；`library_exec` 不再接受 `paper-cache`
-broker 命令。模型直接读取 `research_cache_index` 给出的逻辑缓存路径，实际命令输出
+Runtime preflight 只建立授权论文 inventory；`library_exec` 通过窄化 `paper-cache`
+broker 按模型当前任务所需生成和读取 cache。模型直接读取 broker 返回的逻辑缓存路径，实际命令输出
 随完整会话历史保留，不再使用模型可见的文本页面专用工具。
 
 旧 `read_paper`、`paper_search`、query/compare/related、Composer 专用工具、
@@ -142,17 +142,17 @@ lifecycle 调用的结论已纠正，trace 修复不属于下一 slice。
 | 能力 | 候选处理 |
 |---|---|
 | `paper_set` 模型工具 | 删除 |
-| `paper-cache status/ensure` | 已由 Runtime preflight 接管，不再暴露给模型 |
-| `paper-cache page` | 从 `library_exec` broker 移除；直接读取预生成 `layout.txt` |
+| `paper-cache status/ensure` | 仅作为占据整个命令的 `library_exec` broker，按需查询或生成 |
+| `paper-cache page` | 仅作为占据整个命令的 `library_exec` broker，读取已生成缓存页 |
 | `inspect_page` | 保留，负责视觉页面读取 |
-| active paper set | 本 slice 固定为 Query 1 的 Runtime preflight 论文预算 |
+| authorized inventory | 本 slice 固定为 Runtime preflight 论文预算；cache 仍由模型按需生成 |
 | 页级证据 | 文本使用权威命令与模型可见输出；`inspect_page` 继续登记视觉页事实 |
 | 完成性与引用 | 默认不拦截；可解析引用转成可点击论文页链接 |
 
 这会删除工具入口，不会删除底层能力：
 
 - 删除 `paper_set` 不等于删除集合、stale、coverage 和恢复；
-- 删除 `paper-cache` broker 不等于删除内容寻址缓存或页文本读取；
+- `paper-cache` broker 只允许直接命令，不允许管道、循环、命令链或命令替换；
 - `library_exec` 只读取授权的逻辑 library/cache 根，不开放宿主任意路径；
 - evidence ledger 不保存完整正文、图片、PDF 或宿主绝对路径。
 
@@ -161,9 +161,9 @@ lifecycle 调用的结论已纠正，trace 修复不属于下一 slice。
 `runtime_research_evidence_codex_source_mapping.md` 已按严格 Codex 方向修订：
 
 1. 文本命令、模型可见输出和完整会话历史；
-2. Query 1 active set 等于 Runtime preflight 成功准备的论文集合；
+2. Query 1 inventory 等于 Runtime preflight 成功登记的授权论文集合；
 3. 旧 `paper_set` 事件可重放但不再产生 citation-grade evidence；
-4. `library_exec` 明确拒绝全部 `paper-cache` broker 命令；
+4. `library_exec` 仅接受窄化的 `paper-cache status/ensure/page` 直接命令；
 5. 通用 Stop hook 默认关闭，Paper Copilot 不配置论文专用 handler。
 
 Query 2–4 的范围约束继续由冻结用户消息和同一 conversation 的历史表达，不再维护
@@ -199,7 +199,7 @@ block-and-continue 结构，但没有 PDF 页证据、论文集合或 Markdown �
 以下为当前实现条件；此前冻结 Query 1 的通过结果属于已撤下的结束拦截版本：
 
 - 模型工具表面不再包含 `paper_set`；
-- `library_exec` 不再接受 `paper-cache status/ensure/page`；
+- `library_exec` 只接受直接的 `paper-cache status/ensure/page`，拒绝复合使用；
 - 文本读取只通过 `library_exec`，命令与实际返回输出进入权威 trace 和会话历史；
 - 只有成功返回给模型的 `inspect_page` 产生结构化视觉页证据事实；
 - session/recovery 可确定性重建 active set 和 evidence ledger；

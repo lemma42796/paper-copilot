@@ -48,7 +48,8 @@ Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地�
 - macOS Seatbelt、无网络和仅 scratch 可写；
 - deadline 后终止进程组；
 - `paper-cache` 作为窄化内部 broker；
-- Runtime 控制的 `rg`/`pdfinfo`/`pdftotext` 调用级命令目录；
+- Runtime 控制的 `rg`/`pdfinfo` 调用级命令目录；`pdftotext` 只由缓存生成器内部调用，
+  不再暴露给模型命令环境；
 - tool input/result 写入现有 session 和 trace。
 
 ### 3.2 已按 Codex 回改
@@ -125,17 +126,19 @@ Codex 没有 Paper Copilot 的论文授权、内容寻址 cache 和应用内引�
 开放任意本地 Python 或把原始 PDF 复制到平坦目录。最小产品适配为：
 
 - Runtime 为本次已准备论文生成内容寻址、不可变的 JSONL manifest；
-- conversation workspace 用短 `papers/paper-NNNN-<artifact>.layout.txt` 只读 symlink
-  指向既有内容寻址缓存，不复制文本、不改变授权；
+- Runtime 启动阶段只写授权 PDF inventory，不执行 cache ensure；模型确定需要某篇论文后，
+  使用占据整个命令的 `paper-cache ensure <pdf>` 生成内容寻址 `layout.txt`；
 - 模型通过 `research-manifests/current.jsonl` 按需发现当前 manifest，并在同一环境中
   使用短文本路径；
 - `python3` 仅作为既有受控 `python` 的命令别名，不增加解释器、第三方包、网络或写权限；
 - Skill 对多论文任务优先建议有明确标签的批量发现，但不强制固定搜索顺序。
 
 这保留了 Paper Copilot 的确定性普通正文（prose）搜索缓存、物理页定位和引用边界，
-同时消除模型拼接长缓存路径和逐论文启动命令的主要协调成本。`layout.txt` 不保证公式、
-复杂表格或二维布局的语义保真，不能单独承担这些内容的权威页码证据；原始 PDF 和必要的
-视觉或结构化复核边界见 `poppler_packaging_assessment.md`。是否实际降低工具调用和
+同时避免首次对话批量生成所有论文缓存。`layout.txt` 对提取乱码建立公式 OCR slot；只有
+任务确实需要该乱码公式时才调用 OCR，模型接受候选后发布含 LaTeX 的新 revision，并自动
+删除同一缓存键的旧 revision；它仍不能单独保证复杂表格
+或二维布局的语义保真。原始 PDF 和必要的视觉或结构化复核边界见
+`poppler_packaging_assessment.md`。是否实际降低工具调用和
 token，仍需在同一冻结问题集上做受控评测；本实现本身不把预期收益记为已验证结论。
 
 ## 6. 2026-07-31 工具调用粒度诊断
@@ -148,7 +151,7 @@ token，仍需在同一冻结问题集上做受控评测；本实现本身不把
 - Paper Copilot 禁用 Skill 的当前实现共 59 次 `library_exec`；
 - Codex 每次工具输出平均 11142 字符，PC 平均 5035 字符；
 - PC 总工具输出更多，但按“定位—局部读取—修正范围—再次读取”分散在更多轮次；
-- PC 没有权限或协议失败，现有通用 shell、循环、管道、`pdftotext` 和受控 Python
+- PC 没有权限或协议失败，现有通用 shell、循环、管道和受控 Python
   已足以表达跨论文批处理；
 - Codex 的较少调用同时伴随 UDA 误判和 T03 漏项，不能把最低调用数直接等同于更强
   Agent。
@@ -191,7 +194,7 @@ schema 上限都不能验证 Codex 式批量读取；底层收集和模型侧截
    暴露准确的 `original_token_count`、collection omitted bytes 和截断 marker；
 4. 保留 PC 的必要领域边界：固定 logical cwd、只读 `library/cache/papers`、仅
    `scratch` 可写、无网络、无权限升级、无 PTY/login shell/任意 workdir；
-5. 用简洁环境事实声明现有 `pdftotext` 和受控 Python 可用于批处理，不增加论文专用
+5. 用简洁环境事实声明现有受控 Python 可用于批处理，不增加论文专用
    搜索、待办或 Query 模板。
 6. 停止向 World State 预注入逐论文 `research_cache_index`；把准备完整性、PDF
    SHA-256、短文本别名和 `citation_base` 保存在内容寻址 manifest 中，并通过模型只读

@@ -20,6 +20,7 @@ class ToolExposureContext:
     library_available: bool
     persistent_exec_available: bool
     image_input_available: bool
+    formula_ocr_available: bool
 
 
 @dataclass(frozen=True, slots=True)

@@ -49,6 +49,30 @@ struct SettingsView: View {
                 }
             }
 
+            Section("本地公式识别") {
+                formulaOCRStatus
+
+                switch appModel.formulaOCRStatus {
+                case .notInstalled, .failed(_):
+                    Button("下载本地公式 OCR…") {
+                        appModel.downloadFormulaOCR()
+                    }
+                    .disabled(appModel.hasActiveJobs || appModel.isSubmitting)
+                case .downloading:
+                    ProgressView()
+                        .controlSize(.small)
+                case .installed(_):
+                    EmptyView()
+                }
+
+                Text(
+                    "仅在点击下载后获取 PaddlePaddle、PaddleOCR、运行依赖和 PP-FormulaNet_plus-S 权重。选择或指向模型不会联网。"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section("本地与云端数据边界") {
                 Text(
                     "PDF、索引和 session 保存在本机。为了完成分析，本地检索选出的必要文本片段可能发送给你配置的云端模型。Paper Copilot 不提供论文上传接口或云端论文库。"
@@ -84,6 +108,25 @@ struct SettingsView: View {
                 },
                 secondaryButton: .cancel()
             )
+        }
+    }
+
+    @ViewBuilder
+    private var formulaOCRStatus: some View {
+        switch appModel.formulaOCRStatus {
+        case .notInstalled:
+            LabeledContent("状态", value: "未下载")
+        case .downloading:
+            LabeledContent("状态", value: "正在下载并校验…")
+        case .installed(let version):
+            LabeledContent("状态", value: "已安装 · \(version)")
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 4) {
+                LabeledContent("状态", value: "下载失败")
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
         }
     }
 

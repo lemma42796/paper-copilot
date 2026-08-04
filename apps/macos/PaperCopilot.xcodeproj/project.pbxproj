@@ -20,6 +20,7 @@
 		01000000000000000000000B /* ConversationDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000D /* ConversationDetailView.swift */; };
 		01000000000000000000000C /* ModelConfigurationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000E /* ModelConfigurationStore.swift */; };
 		01000000000000000000000D /* MarkdownReportView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000000000000000000000F /* MarkdownReportView.swift */; };
+		01000000000000000000000E /* FormulaOCRManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000010 /* FormulaOCRManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -38,6 +39,7 @@
 		02000000000000000000000D /* ConversationDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationDetailView.swift; sourceTree = "<group>"; };
 		02000000000000000000000E /* ModelConfigurationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelConfigurationStore.swift; sourceTree = "<group>"; };
 		02000000000000000000000F /* MarkdownReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownReportView.swift; sourceTree = "<group>"; };
+		020000000000000000000010 /* FormulaOCRManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormulaOCRManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -77,6 +79,7 @@
 			isa = PBXGroup;
 			children = (
 				020000000000000000000003 /* RuntimeManager.swift */,
+				020000000000000000000010 /* FormulaOCRManager.swift */,
 			);
 			path = Runtime;
 			sourceTree = "<group>";
@@ -204,6 +207,7 @@
 				01000000000000000000000B /* ConversationDetailView.swift in Sources */,
 				01000000000000000000000C /* ModelConfigurationStore.swift in Sources */,
 				01000000000000000000000D /* MarkdownReportView.swift in Sources */,
+				01000000000000000000000E /* FormulaOCRManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

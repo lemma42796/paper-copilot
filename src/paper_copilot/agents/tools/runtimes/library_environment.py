@@ -34,17 +34,18 @@ class LibraryProcessOutput:
 
 @dataclass(frozen=True, slots=True)
 class LibraryResearchPaper:
-    alias: str
+    alias: str | None
     source_locator: str
     paper_id: str
-    text_source: Path
+    text_source: Path | None
     page_count: int
     citation_base: str
 
-    def manifest_payload(self) -> dict[str, str | int]:
+    def manifest_payload(self) -> dict[str, str | int | bool | None]:
         return {
             "pdf": f"library/{self.source_locator}",
-            "text": f"papers/{self.alias}",
+            "text": f"papers/{self.alias}" if self.alias is not None else None,
+            "cached": self.text_source is not None,
             "paper_id": self.paper_id,
             "pages": self.page_count,
             "citation_base": self.citation_base,
@@ -180,15 +181,19 @@ class LibraryEnvironment:
             self._ensure_directory(papers_directory)
             self._ensure_directory(manifests_directory)
             for paper in papers:
-                self._ensure_symlink(
-                    papers_directory / paper.alias,
-                    paper.text_source,
-                )
+                if paper.alias is not None and paper.text_source is not None:
+                    self._ensure_symlink(
+                        papers_directory / paper.alias,
+                        paper.text_source,
+                    )
             manifest_header = {
                 "record_type": "research_manifest",
                 "schema_version": 1,
                 "total_pdf_count": total_pdf_count,
-                "prepared_count": len(papers),
+                "inventory_count": len(papers),
+                "prepared_count": sum(
+                    paper.text_source is not None for paper in papers
+                ),
                 "truncated_by_paper_budget": truncated_by_paper_budget,
                 "failures": list(failures),
             }
@@ -245,7 +250,8 @@ class LibraryEnvironment:
             self._ensure_directory(self.scratch)
             self._ensure_directory(self.tool_bin)
             self._ensure_directory(self.empty_cache)
-            visible_cache = cache_root if cache_root.is_dir() else self.empty_cache
+            self._ensure_directory(cache_root)
+            visible_cache = cache_root
             self._ensure_symlink(self.workspace / "library", library_root)
             self._ensure_symlink(self.workspace / "cache", visible_cache)
             self._ensure_symlink(self.workspace / "scratch", self.scratch)

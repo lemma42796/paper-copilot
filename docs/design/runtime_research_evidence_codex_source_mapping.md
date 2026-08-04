@@ -48,7 +48,7 @@ Paper Copilot 不再把 JSON schema 或页面证据当成默认的最终回答�
 ```yaml
 name: library_exec
 input:
-  cmd: <bounded command over cache layout.txt>
+  cmd: paper-cache ensure <needed-pdf>
 output:
   exit_code: <integer>
   output: <bounded model-visible text>
@@ -57,17 +57,17 @@ output:
 
 固定边界：
 
-- 只解析本 attempt 的受信任 `research_cache_index`；
-- 不接受文件名、相对路径、宿主绝对路径、短 hash 或任意 cache path；
+- 只接受当前授权论文库内的相对 PDF 路径；
+- 不接受宿主绝对路径、`..`、复合命令、管道、循环或命令替换；
 - PDF SHA-256 必须匹配授权论文和 current cache revision；
 - 一次只读取一页，页码越界、缓存 stale/partial 或 artifact 校验失败时明确失败；
 - 页文本按既有工具输出预算截断，并明确返回 truncation metadata；
-- 不执行 cache ensure、全文提取、搜索、OCR、视觉渲染或写操作；
+- `ensure` 只为模型明确选择的一篇论文生成 TXT；`page` 只读 current revision；
 - 成功结果在 trace attributes 携带不含正文的 `page_evidence`；
-- `library_exec` 明确拒绝 `paper-cache status/ensure/page`，不提供 alias 或静默回退。
+- broker 不执行网络、视觉渲染或论文库写操作。
 
-Runtime preflight 继续负责预算内 PDF 的 cache ensure 和 index 注入，因此删除 broker
-不会删除内容寻址缓存能力。
+Runtime preflight 只负责 inventory 和引用映射；内容寻址缓存由模型通过窄化 broker
+按需生成。
 
 ## 4. Runtime evidence ledger
 
@@ -161,7 +161,8 @@ lifecycle。
 
 完成条件：
 
-- 模型工具表面不含 `paper_set`，`library_exec` 不接受 `paper-cache`；
+- 模型工具表面不含 `paper_set`；`library_exec` 仅接受占据整个命令的窄化
+  `paper-cache status/ensure/page` broker，不允许管道、循环、命令链或命令替换；
 - 文本只通过 `library_exec` 读取授权缓存，模型可见输出进入完整历史；
 - 只有成功的 `inspect_page` 产生结构化 observed-page fact；
 - recovery 可重建相同 ledger 和 active set；

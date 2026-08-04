@@ -1,23 +1,31 @@
 # TASKS
 
-> 本文件只保留当前唯一任务。实验记录不得写入这里；历史实验入口统一见
+> 本文件保存所有未完成任务，可以同时存在多个任务；已完成任务删除，未完成任务保留或
+> 更新。实验记录不得写入这里；历史实验入口统一见
 > [实验索引](docs/design/experiment_index.md)。工程规则见 [AGENTS.md](AGENTS.md)，
 > 当前接力状态见 [STATUS.md](STATUS.md)，当前架构见
 > [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-更新于 2026-08-03。
+更新于 2026-08-04。
 
-## 当前唯一任务
+## 未完成任务
 
-- [ ] 找出 Paper Copilot + DeepSeek V4 Flash 在 Query 1 上高于原生 Codex +
-  DeepSeek V4 Flash 的主要原因。
+### 可选本地公式 OCR
 
-先建立可归因的桥接实验：固定模型、reasoning effort、Query、论文集合、输入模态、
-conversation 状态和评分标准，逐项对齐或替换 Codex 与 Paper Copilot 之间的运行时差异。
-至少区分并验证原生 Skill 交付、World State、系统/开发者指令、工具协议与返回内容、论文
-读取路径，以及 Agent 循环和上下文管理；不得把“静态注入 Skill”等同于 Paper Copilot
-原生 Skill 机制，也不得用 Paper Copilot 自身消融直接代替 PC 对 Codex 的跨运行时归因。
-
-完成标准：得到至少一个可复现的受控对照，使某个组件的切换能够稳定解释主要评分差距；
-同时保存逐项配置、答案、工具调用 trace、评分和运行计量。若单次结果不能支持因果结论，
-必须明确保留为候选机制，而不是宣称已经找到原因。
+- 主客户端不得包含任何 Paddle 组件或公式模型权重。
+- 客户端启动和 Agent 预检不得批量生成论文正文缓存；manifest 只建立授权论文清单。
+- 模型只对当前任务需要的论文调用 `paper-cache ensure`，按需生成内容寻址 `layout.txt`。
+- TXT 中包含 Unicode 替换字符或私用区字形的行生成稳定公式 OCR
+  `cache_slot`。
+- 纯文本模型在悬浮提示中说明可选能力，但悬浮、选择模型和启动应用均不得联网。
+- 用户仅在设置中点击下载后获取完整、签名的 Formula OCR helper。
+- `recognize_formula` 仅在纯文本模型、论文库可用且 helper 已安装时暴露。
+- 只有任务确实需要理解或引用某个乱码公式时才调用 `recognize_formula`，不得仅因发现乱码
+  就识别；`recognize` 只返回候选，模型检查后调用 `accept` 才把 LaTeX 写入新 revision、
+  原子发布为 current，并自动删除同一缓存键下的旧 revision。
+- [ ] 下一步：验证按需 TXT 生成、本地 Formula OCR 构建、安装门控、两阶段工具协议、
+  真实乱码公式识别、接受回填和跨会话 TXT 缓存命中。
+- 实现代码与构建清单已经写入工作树；完成定义还包括生成独立 Helper、用本机论文做最小
+  识别与 TXT 回填测试、确认未请求论文不生成缓存、确认主客户端未包含 Paddle、确认未点击
+  下载时无网络行为，以及发布前完成 Developer ID 签名/公证和固定 GitHub Release
+  manifest 校验。

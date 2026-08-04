@@ -78,19 +78,18 @@ Homebrew Poppler keg 本身约 33 MB，动态库 install name 指向
 
 因此当前证据层级为：
 
-1. `layout.txt` 继续承担批量发现、普通正文搜索和物理页定位；
+1. `layout.txt` 按模型实际需要生成，承担普通正文搜索和物理页定位；
 2. 原始 PDF 是公式、复杂表格和视觉布局的权威来源；
 3. 图像输入模型可通过 `inspect_page` 检查原页；纯文本（text-only）模型当前没有可靠
    回退，必须显式报告证据限制；
 4. 不能只把 TXT 改名为 Markdown，也不能把损坏字符直接替换成 LaTeX。PDF 通常只保存
    字形和坐标而非源 LaTeX；识别器还可能生成“语法合法但数学含义错误”的公式。
 
-目标缓存若采用 Markdown，应是带结构和来源映射（provenance）的派生物：普通正文使用
-Markdown，公式使用可核验 LaTeX，复杂表格使用 HTML 或结构化 cells，并保留物理页、
-bbox、提取器版本和置信度。低置信度、Unicode 替换字符（replacement character）、
-公式区或复杂表格区必须回退到原 PDF 页面或更高保真解析器。该目标尚未实现；引入新
-解析器（parser）、外部依赖或独立视觉模型调用前，仍需单独设计、许可证审查、成本估算
-和冻结论文质量评测。
+当前 `layout.txt` 保留正文和来源映射（provenance）。Unicode 替换字符（replacement
+character）或私用区字形所在行变成稳定公式 OCR 占位符；`recognize_formula` 先返回候选，
+模型显式接受后才把 LaTeX 写入新的不可变 TXT revision。原 PDF 页、region、提取器版本、
+OCR 模型与 render hash 保留在缓存 manifest 或 TXT provenance 中。
+复杂表格恢复和没有可靠 region 的行内公式仍未实现。
 
 ### Codex 源码对照
 

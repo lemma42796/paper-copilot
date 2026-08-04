@@ -105,6 +105,7 @@ rollout deadline。
 | `library_exec` | 在 conversation 级逻辑 workspace 中执行有界命令；`library/`、`cache/`、`papers/`、`research-manifests/` 只读，持久 `scratch/` 可写；长命令可 yield |
 | `library_write_stdin` | 以不透明 session ID 写入或轮询已 yield 的 `library_exec` 进程；继承原命令 sandbox |
 | `inspect_page` | 按授权 PDF SHA-256、页码和可选 region 渲染单页图像；不做 OCR、批量处理或文本回退 |
+| `recognize_formula` | 仅在纯文本模型且可选 Formula OCR 组件已安装时，按授权 PDF、物理页与公式编号或 region 返回未验证 LaTeX；与 `inspect_page` 互斥暴露 |
 | `library_edit` | 授权论文库内的用户可见写操作；禁止静默覆盖和永久删除，需要时持久审批 |
 
 ### 5.1 研究上下文与缓存
@@ -113,13 +114,13 @@ World State 只发布内建只读 `research-papers` Skill 的 catalog metadata�
 `load_skill`；session 固定首次加载的名称、版本、正文和 SHA-256，后续不重复返回正文。
 Skill 只指导研究流程，不授予权限。
 
-Runtime 在模型循环前按论文预算准备内容寻址文本缓存。conversation 环境通过只读的
-`research-manifests/current.jsonl` 和短 `papers/*.layout.txt` 别名提供按需发现；manifest
-保存授权 PDF locator、哈希、页数、缓存状态和应用内 `citation_base`。缓存文本以换页符
-保留物理页定位，模型通过有界命令批量搜索和读取，模型可见输出进入会话历史。详细契约见
+Runtime 在模型循环前只准备授权论文清单、页数、哈希和应用内 `citation_base`，不批量生成
+正文缓存。模型确定任务需要某篇论文后，通过占据整个 `library_exec` 命令的
+`paper-cache ensure <pdf>` 按需生成内容寻址 `layout.txt`；再用 `paper-cache page` 或返回的
+只读 cache path 搜索和读取。TXT 以换页符保留物理页定位，模型可见输出进入会话历史。详细契约见
 [library_exec_codex_source_mapping.md](docs/design/library_exec_codex_source_mapping.md)。
 
-`*.layout.txt` 是从 PDF 派生的搜索、普通正文读取和物理页定位层，不是 PDF 原文或
+`layout.txt` 是从 PDF 派生的搜索、普通正文读取和物理页定位层，不是 PDF 原文或
 通用的引用级（citation-grade）内容层。换页边界只保证定位关系，不保证公式字形、数学
 符号、复杂表头、合并单元格、勾叉标记或二维布局的语义保真；这些内容可能变成 Unicode
 替换字符（replacement character）、私用区字形（private-use glyph）或错误的阅读顺序。
@@ -131,10 +132,17 @@ Runtime 在模型循环前按论文预算准备内容寻址文本缓存。conver
 `inspect_page` 只在模型支持图像输入时渲染 PNG。结果绑定 PDF SHA-256、页码、region
 和 render SHA-256；图像只进入当前模型上下文，不写入 session、日志或 trace。
 
-纯文本（text-only）模型不能使用该视觉回退。当前 Runtime 没有确定性的公式 OCR、
-PDF-to-LaTeX 或复杂表格结构恢复层，因此 text-only 运行遇到公式、符号表格或明显提取
-损坏时只能明确报告证据限制，不能把 `layout.txt` 猜测性修复成看似合法的公式。结构化
-Markdown/LaTeX 缓存、置信度与原页回退属于待设计能力，不是当前已实现架构。
+纯文本（text-only）模型不能使用该视觉回退。未安装可选 Formula OCR 组件时，Runtime
+仍不暴露公式识别工具，遇到公式、符号表格或明显提取损坏时只能明确报告证据限制。组件
+安装后，纯文本模型可调用 `recognize_formula`；Runtime 使用 PDF 自带坐标定位带编号独立
+公式，或使用调用方提供的规范化 region，随后只接收本地 OCR helper 返回的 LaTeX。
+公式 OCR 不提供数学正确性保证，结果必须携带原 PDF 页、region、render hash、模型身份和
+未验证警告。`layout.txt` 中的乱码行包含稳定 `cache_slot`。只有当前任务确实需要理解或引用
+某个具体公式、且该公式的 TXT 乱码阻碍任务时，模型才调用 OCR；不得仅因发现无关乱码或
+其他公式 slot 就识别。首次 `recognize` 只返回候选 LaTeX 和 `candidate_id`，不修改缓存；
+模型判断候选可接受后再次调用 `accept`，Runtime 才把 LaTeX 写入新 revision、原子发布为
+current，随后自动删除同一缓存键下的旧 revision。模型后续只读取累积修复后的 current TXT。
+无编号行内公式没有可靠定位时不得对整页强行识别；复杂表格恢复仍属于待设计能力。
 
 成功 `inspect_page` 后，Runtime 只追加不含图像正文的页面观察事件。文本读取不另设
 登记工具；权威命令、模型可见输出和完整会话历史构成审计依据。默认 Agent loop 不按
@@ -196,7 +204,14 @@ papers/<standalone_session_id>/session.jsonl
 jobs/<job_id>/{job.json,events.jsonl,attempts/<n>/{manifest.json,trace.jsonl,state.json,payloads/}}
 fields.db / embeddings.db / embeddings_meta.json / embedding_cache.sqlite
 graph/cross-paper-links.jsonl / eval/
+optional-components/formula-ocr/{active.json,versions/<version>/}
 ```
+
+Formula OCR 是独立、签名且内容寻址校验的可选组件。主客户端和主 Python Runtime 不包含
+PaddlePaddle、PaddleOCR、PaddleX、OpenCV 或公式模型权重；模型悬浮提示和本地状态检查
+不得联网。只有用户在设置中点击下载后，macOS 客户端才读取固定 HTTPS manifest、下载完整
+helper archive、校验大小/SHA-256/代码签名并原子激活版本。Runtime 工具调用本身禁止下载，
+只执行当前 `active.json` 指向且位于应用数据根内的 helper。
 
 PDF 的 `paper_id = SHA1(PDF bytes)[:12]`，移动或重命名不改变 ID；它与 chat
 conversation session ID 是不同命名空间。模型凭据由 macOS 客户端保存在权限受限的

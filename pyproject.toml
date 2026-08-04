@@ -23,6 +23,7 @@ dependencies = [
 [project.scripts]
 paper-copilot-mcp = "paper_copilot.mcp.server:main"
 paper-copilot-runtime = "paper_copilot.api.runtime:main"
+paper-copilot-formula-ocr-helper = "paper_copilot.formula_ocr_helper:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/paper_copilot"]
@@ -34,6 +35,13 @@ dev = [
     "mypy>=1.20.1",
     "pytest>=9.0.3",
     "pytest-cov>=5.0.0",
+]
+formula-ocr = [
+    "ftfy==6.3.1",
+    "paddleocr==3.7.0",
+    "paddlepaddle==3.3.1",
+    "tokenizers==0.19.1",
+    "wand==0.7.2",
 ]
 
 [tool.ruff]
