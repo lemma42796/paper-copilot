@@ -16,25 +16,41 @@ enum FormulaOCRInstallStatus: Equatable {
 }
 
 final class FormulaOCRManager: @unchecked Sendable {
-    private struct RemoteManifest: Decodable {
-        let schemaVersion: Int
-        let component: String
-        let version: String
+    private struct RemoteArtifact: Decodable {
         let archiveURL: URL
         let archiveSHA256: String
         let archiveBytes: Int64
         let installedBytes: Int64
+        let treeSHA256: String
+        let rootDirectory: String
+
+        enum CodingKeys: String, CodingKey {
+            case archiveURL = "archive_url"
+            case archiveSHA256 = "archive_sha256"
+            case archiveBytes = "archive_bytes"
+            case installedBytes = "installed_bytes"
+            case treeSHA256 = "tree_sha256"
+            case rootDirectory = "root_directory"
+        }
+    }
+
+    private struct RemoteManifest: Decodable {
+        let schemaVersion: Int
+        let component: String
+        let version: String
+        let runtime: RemoteArtifact
+        let model: RemoteArtifact
         let helperRelativePath: String
+        let modelRelativePath: String
 
         enum CodingKeys: String, CodingKey {
             case schemaVersion = "schema_version"
             case component
             case version
-            case archiveURL = "archive_url"
-            case archiveSHA256 = "archive_sha256"
-            case archiveBytes = "archive_bytes"
-            case installedBytes = "installed_bytes"
+            case runtime
+            case model
             case helperRelativePath = "helper_relative_path"
+            case modelRelativePath = "model_relative_path"
         }
     }
 
@@ -70,6 +86,12 @@ final class FormulaOCRManager: @unchecked Sendable {
         }
     }
 
+    private static let componentSchemaVersion = 2
+    private static let helperRootDirectory = "FormulaOCRHelper"
+    private static let modelRootDirectory = "PP-FormulaNet_plus-S"
+    private static let helperRelativePath = "FormulaOCRHelper/FormulaOCRHelper"
+    private static let modelRelativePath =
+        "FormulaOCRHelper/models/PP-FormulaNet_plus-S"
     private static let manifestURL = URL(
         string:
             "https://github.com/lemma42796/paper-copilot/releases/download/formula-ocr-v1/formula-ocr-macos-arm64-manifest.json"
@@ -83,8 +105,8 @@ final class FormulaOCRManager: @unchecked Sendable {
             let root = try? componentRoot(),
             let data = try? Data(contentsOf: root.appendingPathComponent("active.json")),
             let active = try? decoder.decode(ActiveManifest.self, from: data),
-            active.schemaVersion == 1,
-            let helperURL = validatedHelperURL(
+            active.schemaVersion == Self.componentSchemaVersion,
+            let helperURL = validatedFileURL(
                 relativePath: active.helperRelativePath,
                 root: root
             ),
@@ -106,20 +128,7 @@ final class FormulaOCRManager: @unchecked Sendable {
             try Self.requireSuccessfulHTTPResponse(manifestResponse)
             let manifest = try decoder.decode(RemoteManifest.self, from: manifestData)
             try validate(manifest)
-            let (archiveURL, archiveResponse) = try await URLSession.shared.download(
-                from: manifest.archiveURL
-            )
-            try Self.requireSuccessfulHTTPResponse(archiveResponse)
-            let archiveValues = try archiveURL.resourceValues(
-                forKeys: [.fileSizeKey]
-            )
-            guard Int64(archiveValues.fileSize ?? -1) == manifest.archiveBytes else {
-                throw InstallError.invalidArchiveHash
-            }
-            guard try Self.sha256(of: archiveURL) == manifest.archiveSHA256 else {
-                throw InstallError.invalidArchiveHash
-            }
-            try install(archiveURL: archiveURL, manifest: manifest)
+            try await install(manifest: manifest)
             await statusChanged(.installed(version: manifest.version))
         } catch {
             await statusChanged(.failed(error.localizedDescription))
@@ -128,32 +137,46 @@ final class FormulaOCRManager: @unchecked Sendable {
 
     private func validate(_ manifest: RemoteManifest) throws {
         guard
-            manifest.schemaVersion == 1,
+            manifest.schemaVersion == Self.componentSchemaVersion,
             manifest.component == "formula-ocr",
             !manifest.version.isEmpty,
-            manifest.archiveURL.scheme == "https",
-            manifest.archiveSHA256.range(
-                of: "^[0-9a-f]{64}$",
-                options: .regularExpression
-            ) != nil,
-            manifest.archiveBytes > 0,
-            manifest.installedBytes > 0,
-            manifest.helperRelativePath == "FormulaOCRHelper/FormulaOCRHelper"
+            manifest.helperRelativePath == Self.helperRelativePath,
+            manifest.modelRelativePath == Self.modelRelativePath,
+            manifest.runtime.rootDirectory == Self.helperRootDirectory,
+            manifest.model.rootDirectory == Self.modelRootDirectory
+        else {
+            throw InstallError.invalidManifest
+        }
+        try validate(manifest.runtime)
+        try validate(manifest.model)
+    }
+
+    private func validate(_ artifact: RemoteArtifact) throws {
+        guard
+            artifact.archiveURL.scheme == "https",
+            Self.isSHA256(artifact.archiveSHA256),
+            Self.isSHA256(artifact.treeSHA256),
+            artifact.archiveBytes > 0,
+            artifact.installedBytes > 0,
+            !artifact.rootDirectory.isEmpty,
+            !artifact.rootDirectory.contains("/")
         else {
             throw InstallError.invalidManifest
         }
     }
 
-    private func install(
-        archiveURL: URL,
-        manifest: RemoteManifest
-    ) throws {
+    private func install(manifest: RemoteManifest) async throws {
         let root = try componentRoot()
-        let versionsURL = root.appendingPathComponent("versions", isDirectory: true)
         try fileManager.createDirectory(
-            at: versionsURL,
+            at: root,
             withIntermediateDirectories: true
         )
+        if try activateExistingVersion(manifest: manifest, root: root) {
+            return
+        }
+
+        let runtimeSource = try await runtimeSource(manifest: manifest, root: root)
+        let modelSource = try await modelSource(manifest: manifest, root: root)
         let stagingURL = root.appendingPathComponent(
             ".staging-\(UUID().uuidString)",
             isDirectory: true
@@ -162,30 +185,38 @@ final class FormulaOCRManager: @unchecked Sendable {
             at: stagingURL,
             withIntermediateDirectories: false
         )
-        defer {
-            try? fileManager.removeItem(at: stagingURL)
-        }
-        try Self.run(
-            executable: URL(fileURLWithPath: "/usr/bin/ditto"),
-            arguments: ["-x", "-k", archiveURL.path, stagingURL.path]
+        defer { try? fileManager.removeItem(at: stagingURL) }
+
+        let stagedRuntime = stagingURL.appendingPathComponent(
+            Self.helperRootDirectory,
+            isDirectory: true
         )
-        guard
-            let stagedHelper = validatedHelperURL(
-                relativePath: manifest.helperRelativePath,
-                root: stagingURL
-            ),
-            fileManager.isExecutableFile(atPath: stagedHelper.path)
-        else {
-            throw InstallError.invalidArchiveContents
+        try fileManager.copyItem(at: runtimeSource, to: stagedRuntime)
+        let stagedModels = stagedRuntime.appendingPathComponent(
+            "models",
+            isDirectory: true
+        )
+        if fileManager.fileExists(atPath: stagedModels.path) {
+            try fileManager.removeItem(at: stagedModels)
         }
-        do {
-            try Self.run(
-                executable: URL(fileURLWithPath: "/usr/bin/codesign"),
-                arguments: ["--verify", "--deep", "--strict", stagedHelper.path]
+        try fileManager.createDirectory(
+            at: stagedModels,
+            withIntermediateDirectories: true
+        )
+        try fileManager.copyItem(
+            at: modelSource,
+            to: stagedModels.appendingPathComponent(
+                Self.modelRootDirectory,
+                isDirectory: true
             )
-        } catch {
-            throw InstallError.invalidCodeSignature
-        }
+        )
+        try validateInstalledVersion(stagingURL, manifest: manifest)
+
+        let versionsURL = root.appendingPathComponent("versions", isDirectory: true)
+        try fileManager.createDirectory(
+            at: versionsURL,
+            withIntermediateDirectories: true
+        )
         let versionURL = versionsURL.appendingPathComponent(
             manifest.version,
             isDirectory: true
@@ -194,8 +225,269 @@ final class FormulaOCRManager: @unchecked Sendable {
             try fileManager.removeItem(at: versionURL)
         }
         try fileManager.moveItem(at: stagingURL, to: versionURL)
+        try writeActiveManifest(manifest, root: root)
+    }
+
+    private func activateExistingVersion(
+        manifest: RemoteManifest,
+        root: URL
+    ) throws -> Bool {
+        let versionURL = root
+            .appendingPathComponent("versions", isDirectory: true)
+            .appendingPathComponent(manifest.version, isDirectory: true)
+        guard fileManager.fileExists(atPath: versionURL.path) else {
+            return false
+        }
+        do {
+            try validateInstalledVersion(versionURL, manifest: manifest)
+            try writeActiveManifest(manifest, root: root)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func runtimeSource(
+        manifest: RemoteManifest,
+        root: URL
+    ) async throws -> URL {
+        if let installed = try reusableInstalledDirectory(
+            root: root,
+            relativePath: Self.helperRootDirectory,
+            expectedTreeSHA256: manifest.runtime.treeSHA256,
+            excludingTopLevelDirectory: "models",
+            requireCodeSignature: true
+        ) {
+            return installed
+        }
+        return try await extractedArtifact(
+            manifest.runtime,
+            kind: "runtime",
+            root: root,
+            excludingTopLevelDirectory: nil,
+            requireCodeSignature: true
+        )
+    }
+
+    private func modelSource(
+        manifest: RemoteManifest,
+        root: URL
+    ) async throws -> URL {
+        if let installed = try reusableInstalledDirectory(
+            root: root,
+            relativePath: Self.modelRelativePath,
+            expectedTreeSHA256: manifest.model.treeSHA256,
+            excludingTopLevelDirectory: nil,
+            requireCodeSignature: false
+        ) {
+            return installed
+        }
+        if let localPaddleXModel = localPaddleXModel(),
+           try Self.treeSHA256(of: localPaddleXModel)
+            == manifest.model.treeSHA256 {
+            return localPaddleXModel
+        }
+        return try await extractedArtifact(
+            manifest.model,
+            kind: "model",
+            root: root,
+            excludingTopLevelDirectory: nil,
+            requireCodeSignature: false
+        )
+    }
+
+    private func reusableInstalledDirectory(
+        root: URL,
+        relativePath: String,
+        expectedTreeSHA256: String,
+        excludingTopLevelDirectory: String?,
+        requireCodeSignature: Bool
+    ) throws -> URL? {
+        let versionsURL = root.appendingPathComponent("versions", isDirectory: true)
+        guard let versions = try? fileManager.contentsOfDirectory(
+            at: versionsURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return nil
+        }
+        for version in versions.sorted(by: { $0.path < $1.path }) {
+            guard let candidate = validatedFileURL(
+                relativePath: relativePath,
+                root: version
+            ), fileManager.fileExists(atPath: candidate.path) else {
+                continue
+            }
+            guard try Self.treeSHA256(
+                of: candidate,
+                excludingTopLevelDirectory: excludingTopLevelDirectory
+            ) == expectedTreeSHA256 else {
+                continue
+            }
+            if requireCodeSignature {
+                let helper = candidate.appendingPathComponent("FormulaOCRHelper")
+                guard (try? Self.verifyCodeSignature(helper)) != nil else {
+                    continue
+                }
+            }
+            return candidate
+        }
+        return nil
+    }
+
+    private func extractedArtifact(
+        _ artifact: RemoteArtifact,
+        kind: String,
+        root: URL,
+        excludingTopLevelDirectory: String?,
+        requireCodeSignature: Bool
+    ) async throws -> URL {
+        let artifactParent = root
+            .appendingPathComponent("artifacts", isDirectory: true)
+            .appendingPathComponent(kind, isDirectory: true)
+            .appendingPathComponent(artifact.treeSHA256, isDirectory: true)
+        let artifactURL = artifactParent.appendingPathComponent(
+            artifact.rootDirectory,
+            isDirectory: true
+        )
+        if fileManager.fileExists(atPath: artifactURL.path),
+           try Self.treeSHA256(
+               of: artifactURL,
+               excludingTopLevelDirectory: excludingTopLevelDirectory
+           ) == artifact.treeSHA256 {
+            if requireCodeSignature {
+                try Self.verifyCodeSignature(
+                    artifactURL.appendingPathComponent("FormulaOCRHelper")
+                )
+            }
+            return artifactURL
+        }
+
+        let archiveURL = try await cachedArchive(artifact, root: root)
+        let stagingURL = root.appendingPathComponent(
+            ".artifact-staging-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(
+            at: stagingURL,
+            withIntermediateDirectories: false
+        )
+        defer { try? fileManager.removeItem(at: stagingURL) }
+        try Self.run(
+            executable: URL(fileURLWithPath: "/usr/bin/ditto"),
+            arguments: ["-x", "-k", archiveURL.path, stagingURL.path]
+        )
+        let extractedURL = stagingURL.appendingPathComponent(
+            artifact.rootDirectory,
+            isDirectory: true
+        )
+        guard fileManager.fileExists(atPath: extractedURL.path),
+              try Self.treeSHA256(
+                  of: extractedURL,
+                  excludingTopLevelDirectory: excludingTopLevelDirectory
+              ) == artifact.treeSHA256 else {
+            throw InstallError.invalidArchiveContents
+        }
+        if requireCodeSignature {
+            try Self.verifyCodeSignature(
+                extractedURL.appendingPathComponent("FormulaOCRHelper")
+            )
+        }
+        if fileManager.fileExists(atPath: artifactParent.path) {
+            try fileManager.removeItem(at: artifactParent)
+        }
+        try fileManager.createDirectory(
+            at: artifactParent.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try fileManager.moveItem(at: stagingURL, to: artifactParent)
+        return artifactURL
+    }
+
+    private func cachedArchive(
+        _ artifact: RemoteArtifact,
+        root: URL
+    ) async throws -> URL {
+        let downloadsURL = root.appendingPathComponent("downloads", isDirectory: true)
+        try fileManager.createDirectory(
+            at: downloadsURL,
+            withIntermediateDirectories: true
+        )
+        let cachedURL = downloadsURL.appendingPathComponent(
+            "\(artifact.archiveSHA256).zip"
+        )
+        if try archiveIsValid(cachedURL, artifact: artifact) {
+            return cachedURL
+        }
+        if fileManager.fileExists(atPath: cachedURL.path) {
+            try fileManager.removeItem(at: cachedURL)
+        }
+        let (temporaryURL, response) = try await URLSession.shared.download(
+            from: artifact.archiveURL
+        )
+        try Self.requireSuccessfulHTTPResponse(response)
+        guard try archiveIsValid(temporaryURL, artifact: artifact) else {
+            throw InstallError.invalidArchiveHash
+        }
+        let partialURL = downloadsURL.appendingPathComponent(
+            ".partial-\(UUID().uuidString)"
+        )
+        defer { try? fileManager.removeItem(at: partialURL) }
+        try fileManager.copyItem(at: temporaryURL, to: partialURL)
+        try fileManager.moveItem(at: partialURL, to: cachedURL)
+        return cachedURL
+    }
+
+    private func archiveIsValid(
+        _ url: URL,
+        artifact: RemoteArtifact
+    ) throws -> Bool {
+        guard fileManager.fileExists(atPath: url.path) else {
+            return false
+        }
+        let values = try url.resourceValues(forKeys: [.fileSizeKey])
+        guard Int64(values.fileSize ?? -1) == artifact.archiveBytes else {
+            return false
+        }
+        return try Self.sha256(of: url) == artifact.archiveSHA256
+    }
+
+    private func validateInstalledVersion(
+        _ versionURL: URL,
+        manifest: RemoteManifest
+    ) throws {
+        guard
+            let helper = validatedFileURL(
+                relativePath: manifest.helperRelativePath,
+                root: versionURL
+            ),
+            let runtime = validatedFileURL(
+                relativePath: Self.helperRootDirectory,
+                root: versionURL
+            ),
+            let model = validatedFileURL(
+                relativePath: manifest.modelRelativePath,
+                root: versionURL
+            ),
+            fileManager.isExecutableFile(atPath: helper.path),
+            fileManager.fileExists(atPath: model.path),
+            try Self.treeSHA256(
+                of: runtime,
+                excludingTopLevelDirectory: "models"
+            ) == manifest.runtime.treeSHA256,
+            try Self.treeSHA256(of: model) == manifest.model.treeSHA256
+        else {
+            throw InstallError.invalidArchiveContents
+        }
+        try Self.verifyCodeSignature(helper)
+    }
+
+    private func writeActiveManifest(
+        _ manifest: RemoteManifest,
+        root: URL
+    ) throws {
         let active = ActiveManifest(
-            schemaVersion: 1,
+            schemaVersion: Self.componentSchemaVersion,
             version: manifest.version,
             helperRelativePath:
                 "versions/\(manifest.version)/\(manifest.helperRelativePath)"
@@ -221,7 +513,15 @@ final class FormulaOCRManager: @unchecked Sendable {
             .appendingPathComponent("formula-ocr", isDirectory: true)
     }
 
-    private func validatedHelperURL(
+    private func localPaddleXModel() -> URL? {
+        let candidate = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent(".paddlex", isDirectory: true)
+            .appendingPathComponent("official_models", isDirectory: true)
+            .appendingPathComponent(Self.modelRootDirectory, isDirectory: true)
+        return fileManager.fileExists(atPath: candidate.path) ? candidate : nil
+    }
+
+    private func validatedFileURL(
         relativePath: String,
         root: URL
     ) -> URL? {
@@ -232,9 +532,26 @@ final class FormulaOCRManager: @unchecked Sendable {
         else {
             return nil
         }
-        let candidate = root.appendingPathComponent(relativePath).standardizedFileURL
-        let rootPath = root.standardizedFileURL.path + "/"
+        let candidate = root
+            .appendingPathComponent(relativePath)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let rootPath = root
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path + "/"
         return candidate.path.hasPrefix(rootPath) ? candidate : nil
+    }
+
+    private static func verifyCodeSignature(_ helper: URL) throws {
+        do {
+            try run(
+                executable: URL(fileURLWithPath: "/usr/bin/codesign"),
+                arguments: ["--verify", "--deep", "--strict", helper.path]
+            )
+        } catch {
+            throw InstallError.invalidCodeSignature
+        }
     }
 
     private static func requireSuccessfulHTTPResponse(
@@ -248,6 +565,13 @@ final class FormulaOCRManager: @unchecked Sendable {
         }
     }
 
+    private static func isSHA256(_ value: String) -> Bool {
+        value.range(
+            of: "^[0-9a-f]{64}$",
+            options: .regularExpression
+        ) != nil
+    }
+
     private static func sha256(of url: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
@@ -256,6 +580,65 @@ final class FormulaOCRManager: @unchecked Sendable {
             let data = try handle.read(upToCount: 1024 * 1024) ?? Data()
             if data.isEmpty {
                 break
+            }
+            hasher.update(data: data)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func treeSHA256(
+        of root: URL,
+        excludingTopLevelDirectory excluded: String? = nil
+    ) throws -> String {
+        let keys: [URLResourceKey] = [
+            .isDirectoryKey,
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+        ]
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: keys,
+            options: []
+        ) else {
+            throw InstallError.invalidArchiveContents
+        }
+        let rootPath = root.standardizedFileURL.path + "/"
+        var entries: [(relativePath: String, url: URL, isSymbolicLink: Bool)] = []
+        while let url = enumerator.nextObject() as? URL {
+            let path = url.standardizedFileURL.path
+            guard path.hasPrefix(rootPath) else {
+                throw InstallError.invalidArchiveContents
+            }
+            let relativePath = String(path.dropFirst(rootPath.count))
+            let values = try url.resourceValues(forKeys: Set(keys))
+            if let excluded,
+               relativePath == excluded || relativePath.hasPrefix("\(excluded)/") {
+                if values.isDirectory == true {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+            if values.isSymbolicLink == true {
+                entries.append((relativePath, url, true))
+            } else if values.isRegularFile == true {
+                entries.append((relativePath, url, false))
+            } else if values.isDirectory != true {
+                throw InstallError.invalidArchiveContents
+            }
+        }
+        var hasher = SHA256()
+        for entry in entries.sorted(by: { $0.relativePath < $1.relativePath }) {
+            let record: String
+            if entry.isSymbolicLink {
+                let destination = try FileManager.default.destinationOfSymbolicLink(
+                    atPath: entry.url.path
+                )
+                record = "L\0\(entry.relativePath)\0\(destination)\n"
+            } else {
+                record = "F\0\(entry.relativePath)\0\(try sha256(of: entry.url))\n"
+            }
+            guard let data = record.data(using: .utf8) else {
+                throw InstallError.invalidArchiveContents
             }
             hasher.update(data: data)
         }

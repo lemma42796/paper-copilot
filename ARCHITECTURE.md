@@ -203,7 +203,7 @@ papers/<conversation_id>/session.jsonl
 papers/<standalone_session_id>/session.jsonl
 jobs/<job_id>/{job.json,events.jsonl,attempts/<n>/{manifest.json,trace.jsonl,state.json,payloads/}}
 cache/<pdf_sha256>/<extractor_fingerprint>/revisions/<revision_id>/layout.txt
-optional-components/formula-ocr/{active.json,versions/<version>/}
+optional-components/formula-ocr/{active.json,downloads/,artifacts/,versions/<version>/}
 ```
 
 论文目录本身是论文清单的唯一事实源。Core 不保存论文结构化字段、全文索引、向量索引或
@@ -213,9 +213,12 @@ SHA-256，再命中或生成对应缓存。
 
 Formula OCR 是独立、签名且内容寻址校验的可选组件。主客户端和主 Python Runtime 不包含
 PaddlePaddle、PaddleOCR、PaddleX、OpenCV 或公式模型权重；模型悬浮提示和本地状态检查
-不得联网。只有用户在设置中点击下载后，macOS 客户端才读取固定 HTTPS manifest、下载完整
-helper archive、校验大小/SHA-256/代码签名并原子激活版本。Runtime 工具调用本身禁止下载，
-只执行当前 `active.json` 指向且位于应用数据根内的 helper。
+不得联网。只有用户在设置中点击下载后，macOS 客户端才读取固定 HTTPS manifest。manifest
+分别声明 Helper Runtime 与公式权重的 archive、安装目录树 SHA-256 和大小。安装器优先复用
+哈希匹配且签名有效的已安装 Runtime、自有下载/解包缓存，以及哈希匹配的 PaddleX 官方模型
+缓存；只下载缺失产物。任意 Python 环境中的零散依赖不得拼装为可信 Runtime。全部校验通过后
+才原子激活 `active.json`。Runtime 工具调用本身禁止下载，只执行当前 `active.json` 指向且位于
+应用数据根内的 helper。
 
 PDF 的 `paper_id = SHA1(PDF bytes)[:12]`，移动或重命名不改变 ID；它与 chat
 conversation session ID 是不同命名空间。模型凭据由 macOS 客户端保存在权限受限的

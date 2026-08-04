@@ -216,14 +216,14 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func formulaOCRHoverHelp(for model: ModelConfiguration) -> String {
-        if !model.supportsImageInput && !formulaOCRStatus.isInstalled {
-            return "纯文本模型不能直接查看 PDF 公式。可在设置中按需下载本地公式 OCR；指向模型不会触发下载。"
+    func formulaOCRMenuDetail(for model: ModelConfiguration) -> String? {
+        guard !model.supportsImageInput else {
+            return nil
         }
-        if !model.supportsImageInput {
-            return "纯文本模型将使用已安装的本地公式 OCR 读取公式。"
+        if formulaOCRStatus.isInstalled {
+            return "已安装本地公式 OCR"
         }
-        return model.menuTitle
+        return "公式 OCR 未安装，可在设置中下载"
     }
 
     func selectReasoningEffort(_ effort: ReasoningEffort) {

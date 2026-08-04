@@ -27,7 +27,7 @@ def main() -> int:
     try:
         latex = _recognize(image_path, model_dir)
     except Exception as error:
-        sys.stderr.write(f"formula recognition failed: {error}\n")
+        sys.stderr.write(f"formula recognition failed: {_error_chain(error)}\n")
         return 1
     payload = {
         "schema_version": _SCHEMA_VERSION,
@@ -63,6 +63,17 @@ def _recognize(image_path: Path, model_dir: Path) -> str:
     if not isinstance(latex, str) or not latex.strip():
         raise RuntimeError("formula recognizer returned empty LaTeX")
     return latex
+
+
+def _error_chain(error: Exception) -> str:
+    messages: list[str] = []
+    current: BaseException | None = error
+    while current is not None and len(messages) < 4:
+        message = " ".join(str(current).split())[:400]
+        if message and message not in messages:
+            messages.append(message)
+        current = current.__cause__
+    return " caused by: ".join(messages) or type(error).__name__
 
 
 if __name__ == "__main__":

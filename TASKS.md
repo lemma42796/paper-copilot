@@ -21,7 +21,8 @@
 - TXT 中包含 Unicode 替换字符或私用区字形的行生成稳定公式 OCR
   `cache_slot`。
 - 纯文本模型在悬浮提示中说明可选能力，但悬浮、选择模型和启动应用均不得联网。
-- 用户仅在设置中点击下载后获取完整、签名的 Formula OCR helper。
+- 用户仅在设置中点击下载后解析 Formula OCR manifest；Helper Runtime 与权重按内容哈希
+  分别复用或下载，全部校验通过后才激活组件。
 - `recognize_formula` 仅在纯文本模型、论文库可用且 helper 已安装时暴露。
 - 只有任务确实需要理解或引用某个乱码公式时才调用 `recognize_formula`，不得仅因发现乱码
   就识别；`recognize` 只返回候选，模型检查后调用 `accept` 才把 LaTeX 写入新 revision、

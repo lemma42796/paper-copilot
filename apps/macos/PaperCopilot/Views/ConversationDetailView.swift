@@ -168,8 +168,12 @@ struct ConversationDetailView: View {
                             } else {
                                 Text(model.menuTitle)
                             }
+                            if let detail = appModel.formulaOCRMenuDetail(
+                                for: model
+                            ) {
+                                Text(detail)
+                            }
                         }
-                        .help(appModel.formulaOCRHoverHelp(for: model))
                     }
                 } label: {
                     HStack {

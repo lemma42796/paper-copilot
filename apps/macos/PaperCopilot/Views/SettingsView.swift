@@ -66,7 +66,7 @@ struct SettingsView: View {
                 }
 
                 Text(
-                    "仅在点击下载后获取 PaddlePaddle、PaddleOCR、运行依赖和 PP-FormulaNet_plus-S 权重。选择或指向模型不会联网。"
+                    "仅在点击下载后校验并复用本机已有组件；缺失时才获取 PaddlePaddle、PaddleOCR、运行依赖和 PP-FormulaNet_plus-S 权重。选择或指向模型不会联网。"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -117,7 +117,7 @@ struct SettingsView: View {
         case .notInstalled:
             LabeledContent("状态", value: "未下载")
         case .downloading:
-            LabeledContent("状态", value: "正在下载并校验…")
+            LabeledContent("状态", value: "正在复用或下载并校验…")
         case .installed(let version):
             LabeledContent("状态", value: "已安装 · \(version)")
         case .failed(let message):
