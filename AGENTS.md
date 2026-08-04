@@ -1,8 +1,8 @@
 # AGENTS.md
 
 Repository-wide engineering instructions for Paper Copilot. Keep this file to
-stable, repository-specific working rules. The current task belongs in
-`TASKS.md`, its resumable state in `STATUS.md`, architecture in
+stable, repository-specific working rules. Active tasks belong in `TASKS.md`,
+their resumable state in `STATUS.md`, architecture in
 `ARCHITECTURE.md`, experiment links in `docs/design/experiment_index.md`, and
 detailed decisions in `docs/design/`.
 
@@ -21,8 +21,9 @@ detailed decisions in `docs/design/`.
 
 ## Sources of truth
 
-- `TASKS.md`: the current task only.
-- `STATUS.md`: the latest cross-session handoff state for that task.
+- `TASKS.md`: all active, unfinished tasks. It may contain more than one task;
+  remove completed tasks and preserve or update unfinished tasks.
+- `STATUS.md`: the latest cross-session handoff state for the active tasks.
 - `ARCHITECTURE.md`: product surfaces, ownership, dependencies, storage, and
   model/context policy.
 - `pyproject.toml`: Python version, dependencies, Ruff, mypy, and pytest policy.
@@ -47,6 +48,9 @@ For Agent tools, command execution, sandboxing, approvals, process lifecycle,
 Skills, context, and trace behavior, inspect the pinned Codex source before
 designing. Reuse its structure and semantics where the capability exists,
 adapting only Paper Copilot's authorization and research-domain boundaries.
+The pinned local Codex source checkout is
+`/Users/a123/Documents/agent学习/codex`; use this path whenever Codex source
+inspection is required.
 
 A Paper Copilot-specific mechanism requires all of the following:
 
@@ -59,7 +63,7 @@ A Paper Copilot-specific mechanism requires all of the following:
 
 Before changing code:
 
-1. Read the sole current task, current status, and affected architecture sections.
+1. Read the active tasks, current status, and affected architecture sections.
 2. Inspect every directly involved module and relevant existing test.
 3. Check the worktree and preserve unrelated changes.
 4. Propose a short plan and wait for confirmation when the change introduces a

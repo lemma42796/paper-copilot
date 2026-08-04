@@ -55,7 +55,7 @@ index 25d45bb93..df65dc590 100644
 +        for tool in registry.entries_mut() {
 +            if matches!(
 +                tool.runtime.tool_name().name.as_str(),
-+                "library_exec" | "library_write_stdin"
++                "load_skill" | "library_exec" | "library_write_stdin"
 +            ) {
 +                tool.exposure = ToolExposure::Direct;
 +            }
@@ -71,7 +71,7 @@ index 25d45bb93..df65dc590 100644
 +        if std::env::var_os("CODEX_DEEPSEEK_LIBRARY_ABLATION").is_some()
 +            && !matches!(
 +                tool_name.name.as_str(),
-+                "library_exec" | "library_write_stdin"
++                "load_skill" | "library_exec" | "library_write_stdin"
 +            )
 +        {
 +            continue;

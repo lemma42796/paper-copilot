@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +23,7 @@ from paper_copilot.agents.paper_copilot import (
     PaperCopilotContext,
     _prepare_paper_cache,
 )
+from paper_copilot.agents.research_skill import load_research_skill
 from paper_copilot.agents.tools.runtimes import LibraryEnvironment
 from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.session.paths import pdf_cache_dir
@@ -73,12 +76,29 @@ class ExperimentPaths:
 
 
 def _required_path(name: str) -> Path:
-    import os
-
     raw_value = os.environ.get(name)
     if raw_value is None or not raw_value.strip():
         raise RuntimeError(f"missing required environment variable: {name}")
     return Path(raw_value).expanduser().resolve()
+
+
+def _required_sha256(name: str) -> str | None:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return None
+    value = raw_value.strip().lower()
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+        raise RuntimeError(f"{name} must be a lowercase SHA-256 digest")
+    return value
+
+
+def _required_bool(name: str) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return False
+    if raw_value not in {"0", "1"}:
+        raise RuntimeError(f"{name} must be 0 or 1")
+    return raw_value == "1"
 
 
 def _experiment_paths() -> ExperimentPaths:
@@ -124,14 +144,45 @@ async def _prepare_environment(
     return environment
 
 
-def create_server() -> FastMCP:
-    import os
+def _reuse_environment(
+    paths: ExperimentPaths,
+    *,
+    expected_manifest_sha256: str,
+) -> LibraryEnvironment:
+    environment = LibraryEnvironment(paths.environment_root)
+    manifests_directory = environment.workspace / "research-manifests"
+    current_manifest = manifests_directory / "current.jsonl"
+    if not current_manifest.is_file():
+        raise RuntimeError("resume manifest is missing")
+    resolved_manifest = current_manifest.resolve()
+    try:
+        resolved_manifest.relative_to(manifests_directory.resolve())
+    except ValueError as error:
+        raise RuntimeError("resume manifest escapes the research manifest directory") from error
+    actual_manifest_sha256 = hashlib.sha256(resolved_manifest.read_bytes()).hexdigest()
+    if actual_manifest_sha256 != expected_manifest_sha256:
+        raise RuntimeError(
+            "resume manifest SHA-256 mismatch: "
+            f"expected {expected_manifest_sha256}, got {actual_manifest_sha256}"
+        )
+    return environment
 
+
+def create_server() -> FastMCP:
     paths = _experiment_paths()
     max_papers = int(os.environ.get("CODEX_LIBRARY_MAX_PAPERS", "14"))
     if max_papers < 1:
         raise RuntimeError("CODEX_LIBRARY_MAX_PAPERS must be at least 1")
-    environment = asyncio.run(_prepare_environment(paths, max_papers=max_papers))
+    resume_manifest_sha256 = _required_sha256(
+        "CODEX_LIBRARY_RESUME_MANIFEST_SHA256"
+    )
+    if resume_manifest_sha256 is None:
+        environment = asyncio.run(_prepare_environment(paths, max_papers=max_papers))
+    else:
+        environment = _reuse_environment(
+            paths,
+            expected_manifest_sha256=resume_manifest_sha256,
+        )
     cache_root = pdf_cache_dir(paths.paper_copilot_root).expanduser().resolve()
 
     server = FastMCP(
@@ -141,6 +192,27 @@ def create_server() -> FastMCP:
             "library command runtime. The prepared manifest is authoritative."
         ),
     )
+    skill_loaded = _required_bool("CODEX_LIBRARY_SKILL_ALREADY_LOADED")
+
+    @server.tool(
+        description=(
+            "Load research-papers from the trusted Skill catalog when local PDF "
+            "research is needed. The returned version is fixed for this conversation."
+        )
+    )
+    async def load_skill(name: str) -> dict[str, str]:
+        nonlocal skill_loaded
+        if name != "research-papers":
+            raise ValueError("unknown Skill; available: research-papers")
+        skill = load_research_skill()
+        if skill_loaded:
+            return {"status": "already_loaded", **skill.trace_attributes()}
+        skill_loaded = True
+        return {
+            "status": "loaded",
+            **skill.trace_attributes(),
+            "instructions": skill.context_fragment(),
+        }
 
     @server.tool(description=library_exec_tool_description())
     async def library_exec(

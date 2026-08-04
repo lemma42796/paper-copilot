@@ -1,7 +1,7 @@
 # DeepSeek V4 Flash 与 Codex/Paper Copilot 实验记录
 
-状态：单次 T01 诊断已完成；不作统计显著性结论  
-日期：2026-08-01 至 2026-08-02  
+状态：单次 T01 诊断与 Query-aligned 匿名盲评已完成；不作统计显著性结论
+日期：2026-08-01 至 2026-08-04
 语料：`multi-thesis-v1`，14 篇论文  
 模型：`deepseek-v4-flash`，reasoning effort `max`
 
@@ -22,18 +22,104 @@
 
 ## 完成运行总表
 
-| 运行 | 协议、工具与输入 | 工具调用 | total tokens | 耗时 | T01 工作评分 |
+| 运行 | 协议、工具与输入 | 工具调用 | total tokens | 耗时 | 旧 claim-detail 工作评分 |
 |---|---|---:|---:|---:|---|
-| Paper Copilot T01 复跑 | 生产 Chat 路径；Skill v16；`library_exec`；`layout.txt` | 5 | 82,660 | 68.6 s | 11 C / 3 P；strict 78.6%，weighted 89.3% |
+| Paper Copilot 历史 T01 repeat（未纳入新盲评） | 生产 Chat 路径；Skill v16；`library_exec`；`layout.txt` | 5 | 82,660 | 68.6 s | 11 C / 3 P；strict 78.6%，weighted 89.3% |
+| Paper Copilot 新盲评候选 | 同一组合；2026-08-03 独立复跑 | 8 | 184,240 | 106.1 s | 11 C / 3 P；无逐项 scorecard |
 | Codex Chat adapter v2 | Responses-to-Chat；通用命令；原始 PDF | 45 | 847,516 | 196.7 s | 未评分 |
 | Codex 原生基础指令 T01 | DeepSeek Responses；通用命令；原始 PDF | 30 | 505,315 | 188 s | 未评分 |
 | Codex 最小基础指令 T01 | DeepSeek Responses；通用命令；原始 PDF | 27 | 617,228 | 172.7 s | 未评分 |
 | B：Codex library/no Skill | DeepSeek Responses；`library_exec`；`layout.txt` | 67 | 3,022,640 | 308 s | 6 C / 8 P；strict 42.9%，weighted 71.4% |
 | C：Codex library/Skill v16 | 与 B 相同，只增加冻结 Skill developer instruction | 26 | 675,679 | 279 s | 8 C / 6 P；strict 57.1%，weighted 78.6% |
+| D：Codex 原生动态 Skill | DeepSeek Responses；`exec_command`；原始 PDF；Codex 适配 Skill v16 | 34 | 1,147,975 | 263.3 s | 8 C / 6 P；strict 57.1%，weighted 78.6% |
+| E：Codex + PC 式动态 Skill | DeepSeek Responses；`load_skill`；`library_exec`；`layout.txt`；原版 Skill v16 | 12 | 430,233 | 147.9 s | 7 C / 7 P；strict 50.0%，weighted 75.0% |
 
-所有评分分母均为 Gold revision 2 的 T01 14 个 required claim occurrence，partial
-按 0.5 计；三个已评分运行 coverage 均为 100%。这些分数是本轮统一复核后的单次工作
-评分，不是独立复核或统计重复结果。
+本表最后一列保留历史记录：分母是 Gold revision 2 的 T01 14 个 required claim
+occurrence，partial 按 0.5 计。该口径主要评价具体方法细节，与 Query 1 明确要求错位，
+且 PC `11 C / 3 P` 缺少逐项 scorecard；它已被下方 `query1-aligned-v1` 主任务评分取代，
+不得再用于证明跨系统回答质量差距。
+
+## Query 1-aligned 匿名盲评
+
+2026-08-03 在打开候选答案前冻结 [评分规范](query1-rubric-v1.md)，主分为 14 篇 ×
+题目、作者、唯一主要类别、监督设定、模态、判断页码，共 84 个等权原子项。方法名称、
+机制细节和次要主题只做诊断，遗漏不扣主分。随后匿名随机排列 PC、B、C、D、E 和可恢复
+的原生 Codex T01 答案；六份逐论文逐字段 scorecard 锁定哈希后才揭盲。
+
+| 系统 | 匿名号 | correct / partial / incorrect / missing | strict | weighted | 覆盖 |
+|---|---|---:|---:|---:|---:|
+| 原生 Codex | A01 | 79 / 5 / 0 / 0 | 94.05% | 97.02% | 14/14 |
+| C | A04 | 79 / 5 / 0 / 0 | 94.05% | 97.02% | 14/14 |
+| B | A05 | 78 / 6 / 0 / 0 | 92.86% | 96.43% | 14/14 |
+| D | A02 | 78 / 6 / 0 / 0 | 92.86% | 96.43% | 14/14 |
+| E | A03 | 77 / 7 / 0 / 0 | 91.67% | 95.83% | 14/14 |
+| Paper Copilot | A06 | 76 / 6 / 2 / 0 | 90.48% | 94.05% | 14/14 |
+
+全部答案都覆盖 14 篇并提供可核验页码，weighted 最大差距只有 2.97 个百分点。PC 的
+主要实质问题是把 P12 说成完全无标签、把 P14 缩窄为可见光—红外并漏掉近红外/热红外；
+因此新结果不支持 PC 回答质量高于 Codex 桥接组。完整匿名包、scorecard、揭盲映射和
+新旧差异审计保存在：
+
+```text
+/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-vs-pc-v4flash/_audit/query1-blind-rescore-v1/
+```
+
+揭盲后的 trace 合规审计确认六组都有正文/PDF 或 `layout.txt` 内容读取，未发现网络命令；
+运行效率与可靠性仍按原始 trace 独立报告，不进入 84 项质量分。
+
+## Query 2–4 当前评分口径
+
+当前说明见
+[Query 2–4 评分规范](query2-4-rubrics-v1.md)：
+
+- Query 2：54 项，覆盖主要无监督筛选、监督类型边界、排除后问题集合及
+  P02/P04/P06/P08/P11 的问题、方法、作者和页码；
+- Query 3：上一轮实际纳入项按 `7 × 项数` 动态评分；项莘泽三个组件另计 15 项；两者
+  不合成总分；
+- Query 4：分别报告 14 项最终纳入判断、110 项内容准确度和 88 项逐单元格
+  可追溯性，不把内容与证据压成一个 composite。
+
+Query 2–4 已完成匿名盲评、scorecard 锁定和揭盲。当前结果保存在私有
+`_audit/query2-4-blind-rescore-v2/`，当前分数入口为私有 `scores.yaml`；旧
+`query2-4-pc-vs-native-rescore-v1` 仅作历史诊断。
+
+| 系统 | Q2 weighted | Q3 prior review | Q3 项莘泽 | Q4 relevance | Q4 content | Q4 traceability |
+|---|---:|---:|---:|---:|---:|---:|
+| Paper Copilot | 87.04% | 100.00% | 96.67% | 100.00% | 99.55% | 86.36% |
+| clean native Codex | 87.96% | 98.21% | 96.67% | 100.00% | 99.55% | 92.61% |
+
+Query 3 两个评分族分开报告，Query 4 不生成正式 composite；这些结果是单语料、单链的
+描述性结果。按用户要求另计算便利总分：所有原子评分项等权微平均，分母为
+`84 + 54 + 43 + 212 = 393`。
+
+| 系统 | Q1–4 weighted points / 393 | weighted | strict | completion |
+|---|---:|---:|---:|---:|
+| Paper Copilot | 370.5 / 393 | 94.27% | 89.57% | 98.73% |
+| clean native Codex | 376.0 / 393 | 95.67% | 92.88% | 98.73% |
+
+该便利总分包含 Q4 可追溯性；若只合并回答内容、排除 Q4 可追溯性，分母为 305，两组
+weighted 均为 96.56%。
+
+### Q1–Q4 系统级汇总
+
+这是跨实验拼接的系统级视图：Q1 来自既有 `query1-blind-rescore-v1`，Q2–4 来自当前
+`query2-4-blind-rescore-v2`；它们不是同一条连续 Q1–4 会话，因此不生成总分。
+
+| 系统 | Q1 weighted | Q2 weighted | Q3 prior review | Q3 项莘泽 | Q4 relevance | Q4 content | Q4 traceability |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Paper Copilot | 94.05% | 87.04% | 100.00% | 96.67% | 100.00% | 99.55% | 86.36% |
+| clean native Codex | 97.02% | 87.96% | 98.21% | 96.67% | 100.00% | 99.55% | 92.61% |
+
+完整汇总见私有盲评包中的 `results/q1-4-paired-summary.md`。
+
+机器可读当前真源是私有共享目录中的 `gold/labels/query1.yaml` 至 `query4.yaml` 和
+`rubrics/query1.yaml` 至 `query4.yaml`。旧冻结包只作历史审计：
+
+```text
+/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-vs-pc-v4flash/_audit/query2-4-rubric-freeze-v1/
+```
+
+该目录不作为当前评分入口。
 
 ## 1. Responses-to-Chat adapter 兼容性链
 
@@ -99,13 +185,14 @@ B/C；它们适合判断“只替换 base instructions 是否足够”，不适�
 配置为 V4 Flash/max、纯文本输入、Skill v16 和当前 Paper Copilot Runtime。运行正常
 `end_turn`：5 次 LLM 调用、5 次工具调用（1 次 `load_skill`、4 次
 `library_exec`）、82,660 total tokens、68.6 秒、¥0.0516306；无 timeout、recovery、
-模型失败、terminal tool failure 或输出省略。统一 T01 评分为 11 correct / 3 partial，
-strict 78.6%、weighted 89.3%、coverage 100%。
+模型失败、terminal tool failure 或输出省略。历史 T01 claim-detail 工作分为
+11 correct / 3 partial，strict 78.6%、weighted 89.3%、coverage 100%；该口径现已撤销
+为跨系统回答质量证据。
 
 该运行同时拥有 Skill、prepared manifest、短路径 `layout.txt`、Paper Copilot base
 instructions、工具结果协议和 Runtime orchestration，不能单独说明哪一层造成 5 次调用。
-它证明的是组合系统在该次 T01 上确实同时取得了更少调用、更低 token 和更高工作评分；
-低价格只解释金额，不解释工具调用、token 或正确率优势。
+它证明的是组合系统在该次 T01 上取得了更少调用和更低 token；低价格只解释金额。由于
+该次旧答案没有纳入新盲评，且旧工作分口径已经撤销，不能继续用它证明回答质量更高。
 
 ## 4. B/C library 与 Skill 成对诊断
 
@@ -132,15 +219,59 @@ C 相对 B：
 - 工具调用 67 -> 26（-61.2%）；
 - total tokens 3,022,640 -> 675,679（-77.7%）；
 - 工具输出字符 198,259 -> 63,200（-68.1%）；
-- strict 42.9% -> 57.1%，weighted 71.4% -> 78.6%；
+- 旧 claim-detail strict 42.9% -> 57.1%，weighted 71.4% -> 78.6%；
 - 0 个可点击论文引用 -> 41 个 `paper-copilot://` 引用；
 - wall time 308 秒 -> 279 秒（仅 -9.6%）。
 
 C 仍发生 4 个失败后自行修正的命令和一次约 10 秒的全局查找，26 次不是优化下限。该
-成对单次结果强烈支持 Skill instruction 抑制碎片化探索并改善 T01 回答，但仍需重复运行
-才能估计方差。
+成对单次结果强烈支持 Skill instruction 抑制碎片化探索。新 Query-aligned 盲评中 B 为
+96.43%、C 为 97.02%，只差 0.59 个 weighted 百分点；当前不再声称 Skill 显著改善 T01
+回答质量，且仍需重复运行才能估计方差。
 
-## 5. 上下文污染复核
+## 5. Codex 原生动态 Skill 桥接诊断
+
+```text
+/Users/a123/paper-copilot-eval-private/multi-thesis-v1/runs/codex-v4flash-native-skill-query1/20260803T102855Z-8c451575-0b8c-4321-bc04-7fc9dc583e4f/
+```
+
+D 使用全新 Codex thread、V4 Flash/max、纯文本输入、原始 14 篇 PDF、通用
+`exec_command` 和 Codex 原生渐进式 Skill 交付。为了不引入 PC 工具和缓存，实验
+Skill 从 PC v16 删除了 `library_exec`、prepared manifest、`layout.txt`、
+`paper-copilot://`、`inspect_page` 和 `library_edit` 依赖，改用 `exec_command`、
+`pdftotext -layout`、`pdfinfo` 和普通 PDF 页码证据。Skill SHA-256 为
+`8291d592cddba5b984b26f70f227610b9a5043d6c670427677652d5d4d1a1c74`。
+
+native rollout 确认模型先在 catalog 中选择 `research-papers`，再读取完整
+`SKILL.md`，不是静态 developer instruction。运行正常 `turn.completed`：34 次命令调用，
+1 次无匹配批量搜索返回非零，1,147,975 total tokens，263.3 秒，估算 ¥0.13108412。
+历史 T01 claim-detail 工作分为 8 correct / 6 partial，strict 57.1%、weighted 78.6%、
+coverage 100%。
+
+新 Query-aligned 分数为 D 96.43%、C 97.02%，仅差 0.59 个百分点。该单次结果不支持
+Codex 原生动态 Skill 产生可辨识的主任务质量优势。D 同时使用了为 Codex 原生工具改写的
+Skill，且与 A/C 不是同时重复，不能将近似分数解释为交付机制完全无效。
+
+E 进一步把 PC 的 catalog + `load_skill` 交付方式接入 C 的 Codex Runtime、Responses、
+`world_state`、`library_exec`、prepared manifest 和 `layout.txt`，并在首次调用时原样返回
+当前 Paper Copilot Skill v16；同一 MCP 进程只允许首次加载返回完整指令。正式运行目录：
+
+```text
+/Users/a123/paper-copilot-eval-private/multi-thesis-v1/runs/codex-v4flash-responses-library-e-query1/20260803T144642Z-lane-e-c7657487-e8c8-4547-b8b2-b5245556acb8/
+```
+
+fresh `CODEX_HOME`、唯一 UTC 目录、无 smoke、无自动重试。native rollout 确认
+`load_skill` 恰好 1 次，之后 11 次 `library_exec`，共 13 次模型调用；最终用量为
+414,207 input、16,026 output，即 430,233 total tokens，其中 cached input 364,160。
+运行正常退出，耗时 147.9 秒，12 次工具调用全部成功。MCP stderr 记录 22 条
+`Internal Server Error` 日志，但没有对应终态工具失败，作为可靠性异常单独保留。
+
+历史 claim-detail 分为 7 correct / 7 partial，strict 50.0%、weighted 75.0%。新
+Query-aligned 分数为 E 95.83%、C 97.02%、PC 94.05%。相对 C，E 的工具调用
+26 -> 12、token -36.3%、耗时 -47.0%，但主任务质量只低 1.19 个百分点；E 反而比 PC
+高 1.78 个百分点。因此该单次结果只对效率有正向信号，不支持“PC 式动态 Skill 交付是
+PC 质量优势的原因”。
+
+## 6. 上下文污染复核
 
 旧四轮 direct run：
 
@@ -159,16 +290,18 @@ Paper Copilot `AGENTS.md` 进入用户上下文。因此：
 - metadata 中存在 Skill v16 SHA-256 也不能证明 Skill 已加载，trace 没有 `load_skill`；
 - 最终 B/C 通过独立 Terminal、fresh home、禁止父 task 和禁用项目文档消除了已识别污染。
 
-## 6. 当前可支持的总判断
+## 7. 当前可支持的总判断
 
 1. **不是单纯协议问题。** Responses 通用工具运行为 30 次，修复后的 Chat adapter 为
    45 次；两者都高。协议会影响可靠性和 history 语义，但切换 Chat 没有自动恢复低调用。
 2. **不是单纯 Codex base instructions 问题。** 最小 base 仍为 27 次，且 token 高于
    原生 base 单次运行。
-3. **Skill 对 V4 Flash 行为影响很大。** 在 B/C 受控条件下，Skill 把调用和 token
-   分别降低 61.2% 和 77.7%，同时提高工作评分。
-4. **Paper Copilot 的优势不能只记到低价模型。** 同一 V4 Flash 的 PC 复跑为 5 次调用、
-   82,660 tokens 和更高 T01 工作评分；价格只影响账单，不能解释这些机制指标。
+3. **Skill 对 V4 Flash 的工具行为影响很大，但质量信号很小。** 在 B/C 受控条件下，
+   Skill 把调用和 token 分别降低 61.2% 和 77.7%；新盲评只提高 0.59 个 weighted
+   百分点，不能据此声称稳定质量提升。
+4. **Paper Copilot 的效率信号与回答质量必须分开。** 历史 PC 运行的低调用、低 token
+   仍然有效；新盲评中 PC 为 94.05%，低于其余五组，旧 `11 C / 3 P` 不再是质量优势
+   证据。
 5. **V4 Flash 不是在所有 Agent 上都必然高调用。** 它在 PC 组合中只调用 5 次；历史
    V4 Pro/max Chat adapter 又能在 19 次 native function call 内完成四轮。跨模型历史
    对照不能证明模型因果，但共同指向“模型与 Agent context/tool loop 的交互”，而不是
@@ -178,18 +311,25 @@ Paper Copilot `AGENTS.md` 进入用户上下文。因此：
    功劳。
 7. **PDF 证据能力必须单独表述。** B、C 和 PC 复跑都读取 `layout.txt`，不是直接读取
    PDF 视觉原文；它们的 T01 分类结果不能证明公式和复杂表格解析能力。
+8. **Codex 原生动态 Skill 没有产生可辨识的主任务优势。** D 为 96.43%、C 为 97.02%；
+   不过单次近似分数不能单独否定交付机制与 Runtime 的交互。
+9. **PC 式 catalog + `load_skill` 的主要信号是效率。** E 比 C 更少调用、更少 token、
+   更快，质量只低 1.19 个百分点；E 又高于 PC 1.78 个百分点，不能把交付机制解释为
+   PC 质量优势。
+10. **旧跨系统质量结论已撤销。** 新评分下六组 weighted 范围为 94.05%–97.02%，原生
+    Codex/C 并列最高、PC 最低；这是单语料单次描述，不是稳定排名或因果证据。
 
-## 7. 下一步与停止条件
+## 8. 下一步与停止条件
 
-当前不需要继续重复已经明显失败的 adapter 请求，也不需要为了判断乱码机制全量扫描
-14 篇 PDF。若继续实验，优先级为：
+当前评分修复任务已经完成，不需要发起新模型调用。若未来获得新的付费执行授权，优先级为：
 
-1. 在 Paper Copilot 当前同一提交内做 Skill on/off T01 成对运行，隔离 PC Runtime 内部
-   的 Skill 贡献；
-2. 若需要估计稳定性，再对关键 B/C 或 PC 对照重复至少 3 次；
+1. 若需要估计稳定性，对关键 B/C 或 PC 对照至少重复 3 次，并统一使用
+   `query1-aligned-v1`；
+2. 在 Paper Copilot 同一提交内做 Skill on/off 成对运行，只把调用、token 和质量分别
+   作为独立指标；
 3. 将公式/复杂表格质量放入独立 PDF 结构化证据评测，不与当前 T01 分类分数混为一项。
 
-## 8. 实验实现与原始证据
+## 9. 实验实现与原始证据
 
 本目录同时保存 B/C 桥接实验的 runner、配置和 Codex 补丁。准备与付费执行分离：
 

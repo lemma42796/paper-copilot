@@ -8,8 +8,8 @@ fi
 
 lane=$1
 runs_root=$2
-if [[ "$lane" != "b" && "$lane" != "c" ]]; then
-  print -u2 "lane must be b or c"
+if [[ "$lane" != "b" && "$lane" != "c" && "$lane" != "e" ]]; then
+  print -u2 "lane must be b, c, or e"
   exit 2
 fi
 if [[ -n "${CODEX_THREAD_ID:-}" || -n "${CODEX_INTERNAL_ORIGINATOR_OVERRIDE:-}" ]]; then

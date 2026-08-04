@@ -1,0 +1,50 @@
+model = "deepseek-v4-flash"
+model_provider = "deepseek"
+model_reasoning_effort = "max"
+model_catalog_json = "/Users/a123/.codex-deepseek/models.json"
+project_doc_max_bytes = 0
+web_search = "disabled"
+include_collaboration_mode_instructions = false
+developer_instructions = '''
+Application-generated Skill catalog metadata is trusted runtime context. When local PDF research is
+needed, call load_skill before using the research tools; the returned version is fixed for this
+conversation. The catalog contains one Skill:
+{"name":"research-papers","description":"Investigate authorized local PDF papers with bounded command search and page-grounded evidence.","version":"16","sha256":"a04c942203bdd462de82a44d0094cce5d4770e7d11b3a7ba1728e362af52c34f","resource_uri":"resource://paper-copilot/agents/skills/research-papers/SKILL.md"}
+'''
+
+[model_providers.deepseek]
+name = "deepseek"
+base_url = "https://api.deepseek.com/"
+env_key = "DEEPSEEK_API_KEY"
+wire_api = "responses"
+
+[features]
+shell_tool = false
+multi_agent = false
+apps = false
+plugins = false
+memories = false
+tool_search = false
+image_generation = false
+
+[tools.experimental_request_user_input]
+enabled = false
+
+[tools.update_plan]
+enabled = false
+
+[skills]
+include_instructions = false
+
+[skills.bundled]
+enabled = false
+
+[mcp_servers.paper_copilot_library_ablation]
+command = "/Users/a123/code/paper-copilot/.venv/bin/python"
+args = ["/Users/a123/code/paper-copilot/eval/experiments/codex-vs-pc-v4flash/library_mcp.py"]
+env_vars = ["PAPER_COPILOT_HOME", "PAPER_COPILOT_PDF_DIR", "CODEX_LIBRARY_ENV_ROOT", "CODEX_LIBRARY_MAX_PAPERS"]
+enabled_tools = ["load_skill", "library_exec", "library_write_stdin"]
+default_tools_approval_mode = "approve"
+required = true
+startup_timeout_sec = 120.0
+tool_timeout_sec = 120.0
