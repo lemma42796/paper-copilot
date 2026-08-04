@@ -5,7 +5,7 @@ description: Investigate local PDF papers with bounded command search and page-g
 
 # Research Papers
 
-Skill version: 19
+Skill version: 20
 
 ## Understand the paper inventory
 
@@ -16,8 +16,10 @@ Skill version: 19
   those mappings for the task.
 - Runtime does not generate every paper cache before the model starts. For a paper needed by the
   request, call `library_exec` with the whole command `paper-cache ensure <pdf>` using its manifest
-  `pdf` value. Then use `paper-cache page <paper_id> <page>` for selected pages or search the returned
-  `cache_path`. Do not ensure papers that are not needed.
+  `pdf` value. Then use `paper-cache page <pdf> <page>` for selected pages or
+  `paper-cache search <pdf> <query>`. These controlled reads recompute the live PDF SHA-256 before
+  using a cache; do not read a previously returned revision path after the PDF may have changed.
+  Do not ensure papers that are not needed.
 - Each generated `layout.txt` is a read-only, page-delimited TXT cache. Form-feed `\f` separates PDF
   pages. A garbled formula is represented by a stable `cache_slot`. Call `recognize_formula` only
   when the current request requires understanding or citing that specific formula and the garbled
@@ -26,7 +28,7 @@ Skill version: 19
   region. Inspect the candidate LaTeX; only if it is acceptable call `recognize_formula` again with
   `operation=accept` and the returned `candidate_id`. Accept atomically publishes the repaired
   current TXT and removes superseded TXT revisions, so accepted formula repairs accumulate. After
-  accept, use its new `cache_path` or `paper-cache page`; do not reuse a superseded cache path.
+  accept, use `paper-cache page <pdf> <page>` again; do not reuse a superseded cache path.
 - `library_exec` provides shell utilities and controlled Python with the standard library. For work
   spanning several papers or pages, prefer one bounded Python or shell command that reads the
   manifest, splits the selected text files on `\f`, and prints labeled results. Keep each result

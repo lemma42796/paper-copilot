@@ -7,7 +7,7 @@
 
 ## 新会话从这里继续
 
-下一步只验证“按需 TXT 缓存 + 可选本地公式 OCR”闭环，不继续扩展功能。目标行为是：
+下一步验证“无论文数据库 + 按需 TXT 缓存 + 可选本地公式 OCR”闭环。目标行为是：
 
 1. 客户端启动和 Agent 预检不批量生成论文正文缓存，只建立授权论文 inventory manifest；
 2. 模型只对当前任务需要的论文调用 `paper-cache ensure <pdf>`，生成该论文的
@@ -17,8 +17,25 @@
 4. `recognize` 只返回 `PP-FormulaNet_plus-S` 候选 LaTeX 和 `candidate_id`，不修改 TXT；
 5. 模型判断候选可接受后调用 `accept`，Runtime 才在新 revision 中替换对应乱码区块，
    原子发布为 current，并自动删除同一缓存键下的旧 revision。
+6. 论文目录是唯一 inventory；不创建 `fields.db`、`embeddings.db`、
+   `embeddings_meta.json` 或 `embedding_cache.sqlite`。
+7. `paper-cache page/search` 使用 PDF 相对路径，每次读取前重算 PDF SHA-256；完整启动扫描
+   成功后删除没有现存 PDF 哈希对应的孤立缓存，扫描失败时不删除。
 
 ## 已实现但尚未验证
+
+- 已物理删除现有四个论文数据库文件；Python Runtime 不再打开论文数据库或预热 embedding
+  模型，`sqlite-vec` 依赖和论文索引核心模块已经删除。
+- Agent 与 MCP 不再暴露旧的论文数据库检索、读取、比较和 Composer 索引工具；模型工具面
+  保留 `load_skill`、受限 shell、页图、OCR 和 library edit。
+- `agents/paper_copilot.py` 中不可达的旧索引 schema、分发分支、检索/比较函数和相关 imports
+  已清理，不再以死代码保留旧论文索引实现。
+- `paper-cache page/search` 已改为以当前 PDF 相对路径定位，并在每次读取前执行 SHA-256
+  校验/按需 ensure。替换 PDF 会使用新哈希键，不会返回旧 PDF 的缓存。
+- inventory 对全部 PDF 计算哈希；仅在完整扫描无失败时删除孤立缓存。运行期间 Finder 删除
+  PDF 后允许缓存保留到下次启动/首轮完整扫描。
+- 缓存受控读取使用共享文件锁，OCR 的读取-替换-发布使用独占文件锁；同一 TXT 的多次 OCR
+  接受会在最新 current 上累积，并继续只保留当前 revision。
 
 - PDF cache schema 已改为 v2，持久产物恢复为 `layout.txt`，不再使用
   `structured.md`。`pdftotext` 仍由受控缓存层内部调用；模型命令环境不直接暴露它。
@@ -26,7 +43,7 @@
   `page-NNNN-formula-NNNN` OCR slot，同时保留原始提取文本。
 - Runtime 预检现在只计算授权 PDF 的 SHA-256 和页数并生成 inventory manifest，不再
   `ensure` 全部论文。manifest 的 `text` 可为空，`cached=false`。
-- `library_exec` 恢复窄化的 `paper-cache status/ensure/page` broker；命令必须独占整个
+- `library_exec` 提供窄化的 `paper-cache status/ensure/page/search` broker；命令必须独占整个
   `cmd`，禁止管道、循环、命令链、命令替换和越出授权论文库的路径。
 - Formula OCR 工具已改为两阶段协议：`recognize` 将冻结候选保存在当前 Runtime 进程；
   `accept` 校验候选、论文、页码和 PDF SHA 后才调用 cache writeback。
@@ -60,8 +77,8 @@
 
 1. 记录验证前 cache 状态；启动客户端并新建对话，确认只出现 inventory manifest，没有任何
    论文生成 `layout.txt`。
-2. 让模型选中一篇论文并调用 `paper-cache ensure`；确认只有这一篇产生 TXT，随后用
-   `paper-cache page` 和返回的 `cache_path` 都能读取。
+2. 让模型选中一篇论文并调用 `paper-cache ensure`；确认只有这一篇产生 TXT，随后用 PDF
+   相对路径调用 `paper-cache page/search`，并确认替换 PDF 后不会沿用旧哈希缓存。
 3. 做静态依赖检查：默认 Runtime 和主客户端产物不得包含或导入 Paddle；只有
    `formula-ocr` 依赖组与独立 Helper 可以包含它。
 4. 构建开发版 ARM64 Helper。该步骤会写 `build/formula-ocr-component/`，开始前向用户说明
@@ -87,7 +104,8 @@
 
 ## 工作树事实
 
-- 当前改动未 commit、未 push。
+- OCR 代码已以 `199cbd2` push 到 `origin/main`；本轮论文数据库删除与缓存一致性改造也已
+  完成，并由本文件所在提交 push 到 `origin/main`。
 - 工作树同时包含用户此前的实验 runner、Skill、配置、评分文档、`AGENTS.md`、依赖锁文件
   和 `tmp/` 改动；它们不是本验证任务可以清理或覆盖的内容。
 - 新会话开始时先读 `TASKS.md`、本文件、`ARCHITECTURE.md` 的研究缓存章节和

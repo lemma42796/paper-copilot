@@ -11,10 +11,9 @@
 
 [简体中文](README.md) | English
 
-Paper Copilot targets personal libraries of roughly 50–100 papers. It turns
-PDFs into structured reports, builds local SQLite/sqlite-vec indexes, and
-supports paper Q&A, cross-paper search, comparison, and research-proposal
-composition through a macOS client or MCP.
+Paper Copilot lets the Agent browse an authorized PDF directory directly and
+creates content-addressed `layout.txt` files only for papers needed by the
+current task. It maintains no paper database, vector index, or embeddings.
 
 PDFs, indexes, sessions, reports, and traces remain local by default. Text
 fragments selected by local retrieval may be sent to a user-configured cloud
@@ -27,10 +26,9 @@ Current product surfaces:
 
 - **SwiftUI macOS client:** paper folders, model configuration, persistent
   jobs, conversations, reports, interruption/recovery, and diagnostics.
-- **Local MCP Server:** six read-only paper tools and four long-running job
-  tools.
-- **Python Core:** Agent, PDF parsing, hybrid retrieval, sessions, job
-  recovery, eval, and observability.
+- **Local MCP Server:** persistent job-state tools.
+- **Python Core:** Agent, on-demand PDF text cache, sessions, job recovery,
+  and observability.
 
 M20–M24 are complete, including a self-contained Apple Silicon app, a
 development-preview DMG, and retirement of the old Next.js UI. Developer ID
@@ -39,14 +37,10 @@ signing and notarization are deferred until public release. See
 
 ## Capabilities
 
-- Extract contributions, methods, experiments, limitations, and cross-paper
-  relationships from PDFs.
-- Search the local library with FTS5/BM25, `text-embedding-v4`, sqlite-vec,
-  and reciprocal-rank fusion.
-- Let one bounded Paper Copilot loop select reading, retrieval, comparison,
-  and Composer tools.
-- Compose a baseline, compatible modules, risks, ablations, and evidence into
-  a testable research draft.
+- Read papers through a bounded shell, rendered PDF pages, and on-demand
+  `layout.txt` artifacts.
+- Verify the live PDF hash before controlled cache reads, so replacements use
+  a new cache key automatically.
 - Preserve recovery and diagnostic evidence in append-only sessions,
   persistent job attempts, rollout replay, and local traces.
 - Gate model changes with field goldens, retrieval suites, and cost/latency
@@ -116,7 +110,7 @@ credentials are never stored in the repository.
 | `LLM_BASE_URL` | OpenAI-compatible LLM endpoint |
 | `LLM_API_KEY` | LLM API key |
 | `LLM_MODEL` | Model ID; defaults to `qwen3.6-flash` |
-| `DASHSCOPE_API_KEY` | Key for `text-embedding-v4` |
+| `DASHSCOPE_API_KEY` | DashScope LLM key (legacy-compatible setting) |
 | `PAPER_COPILOT_HOME` | Data root; defaults to `~/.paper-copilot` |
 | `PAPER_COPILOT_PDF_DIR` | Local PDF directory |
 
@@ -199,17 +193,10 @@ model policy, and data flows.
 Runtime data lives under `~/.paper-copilot/` by default:
 
 ```text
-papers/<paper_id>/          # PDF, session, report
+papers/<conversation_id>/   # session and report
 jobs/<job_id>/              # job, events, attempt traces
-fields.db                   # structured fields
-embeddings.db               # FTS5 + sqlite-vec chunks
-embedding_cache.sqlite      # embedding cache
-graph/                      # cross-paper relationships
-eval/                       # local eval results
+cache/<pdf_sha256>/         # on-demand layout.txt revisions
 ```
-
-`paper_id = SHA1(PDF bytes)[:12]`, so renaming or moving a PDF does not change
-its ID.
 
 ## Development
 

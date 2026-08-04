@@ -185,8 +185,9 @@ def library_exec_tool_description() -> str:
         "persistent storage for this conversation. The research manifest lists the "
         "authorized PDFs but does not generate their text caches. When a paper is "
         "needed, run paper-cache ensure <library-relative-pdf>; then read selected "
-        "pages with paper-cache page <paper-id> <page> or search the returned layout.txt "
-        "cache path. The "
+        "pages with paper-cache page <library-relative-pdf> <page>, or search it with "
+        "paper-cache search <library-relative-pdf> <query>. These read commands re-hash "
+        "the live PDF before using its cache. The "
         "returned command output becomes model-visible evidence. "
         "paper-cache must occupy the whole cmd and cannot be chained. The environment contains no user "
         "credentials; sandboxing "
@@ -651,7 +652,7 @@ def _intercept_paper_cache(
             )
         return None
     if len(arguments) < 2:
-        raise KnowledgeError("paper-cache requires status, ensure, or page")
+        raise KnowledgeError("paper-cache requires status, ensure, page, or search")
     return _PaperCacheCommand(
         operation=arguments[1],
         arguments=tuple(arguments[2:]),
@@ -690,21 +691,68 @@ async def _run_paper_cache_command(
                             source_locator=source_locator,
                         )
                     )
-                case ("page", (paper_id, raw_page)):
+                case ("page", (relative_pdf, raw_page)):
                     try:
                         page_number = int(raw_page)
                     except ValueError as error:
                         raise KnowledgeError(
                             "paper-cache page requires an integer page number"
                         ) from error
+                    pdf_path, source_locator = _resolve_library_pdf(
+                        library_root,
+                        relative_pdf,
+                    )
                     payload = (
-                        await cache.page_for_paper_id(paper_id, page=page_number)
+                        await cache.page_for_pdf(
+                            pdf_path,
+                            source_locator=source_locator,
+                            page=page_number,
+                        )
                     ).model_dump(mode="json")
+                case ("search", (relative_pdf, query)):
+                    pdf_path, source_locator = _resolve_library_pdf(
+                        library_root,
+                        relative_pdf,
+                    )
+                    lookup = await cache.ensure(
+                        pdf_path,
+                        source_locator=source_locator,
+                    )
+                    if lookup.manifest is None or lookup.cache_ref is None:
+                        raise KnowledgeError("paper cache could not be prepared")
+                    current_lookup = await cache.status(pdf_path)
+                    if (
+                        current_lookup.cache_ref is None
+                        or current_lookup.cache_ref.pdf_sha256
+                        != lookup.cache_ref.pdf_sha256
+                    ):
+                        raise KnowledgeError(
+                            "PDF content changed before the cached text was searched"
+                        )
+                    matches: list[dict[str, Any]] = []
+                    needle = query.casefold()
+                    for page_number in range(1, lookup.manifest.page_count + 1):
+                        cached_page = await cache.page(lookup.cache_ref, page=page_number)
+                        for line_number, line in enumerate(cached_page.text.splitlines(), start=1):
+                            if needle in line.casefold():
+                                matches.append(
+                                    {
+                                        "page": page_number,
+                                        "line": line_number,
+                                        "text": line[:500],
+                                    }
+                                )
+                                if len(matches) >= 100:
+                                    break
+                        if len(matches) >= 100:
+                            break
+                    payload = {"query": query, "matches": matches, "truncated": len(matches) >= 100}
                 case _:
                     raise KnowledgeError(
                         "usage: paper-cache status <relative-pdf> | "
                         "paper-cache ensure <relative-pdf> | "
-                        "paper-cache page <paper-id> <page>"
+                        "paper-cache page <relative-pdf> <page> | "
+                        "paper-cache search <relative-pdf> <query>"
                     )
         raw_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     except TimeoutError:

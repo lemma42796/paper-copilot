@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,17 +22,9 @@ from paper_copilot.agents.tool_security import (
     ToolApprovalRequest,
     ToolApprovalReviewEvent,
 )
-from paper_copilot.eval._paths import default_report_path
-from paper_copilot.eval.report import write_report
-from paper_copilot.eval.runs import load_history, write_research_quality_run
-from paper_copilot.knowledge.embeddings_store import EmbeddingsStore
-from paper_copilot.knowledge.fields_store import FieldsStore
-from paper_copilot.knowledge.meta import IndexMeta, require_match, write_meta
 from paper_copilot.schemas.compaction import CompactionSummary
 from paper_copilot.session import SessionStore
-from paper_copilot.session.paths import default_pdf_dir, default_root, embedding_cache_file
-from paper_copilot.shared.embedder import EMBEDDING_DIM, MODEL_NAME, Embedder
-from paper_copilot.shared.embedding_cache import CachedEmbedder, EmbeddingCache, EmbeddingEncoder
+from paper_copilot.session.paths import default_pdf_dir, default_root
 from paper_copilot.shared.errors import KnowledgeError
 
 
@@ -94,62 +85,19 @@ async def handle_chat_request(
     if library_dir is not None and not library_dir.is_dir():
         raise KnowledgeError(f"pdf_dir does not exist: {library_dir}")
 
-    fields_db = home / "fields.db"
-    embeddings_db = home / "embeddings.db"
-    meta_path = home / "embeddings_meta.json"
-    embedder: EmbeddingEncoder | None = None
-    with ExitStack() as stack:
-        fields_store = stack.enter_context(FieldsStore.open(fields_db))
-        embeddings_store: EmbeddingsStore | None = None
-        if library_dir is not None or embeddings_db.exists():
-            if embeddings_db.exists():
-                require_match(
-                    meta_path,
-                    embedding_model=MODEL_NAME,
-                    embedding_dim=EMBEDDING_DIM,
-                )
-            raw_embedder = Embedder()
-            raw_embedder.warmup()
-            embedding_cache = stack.enter_context(
-                EmbeddingCache.open(embedding_cache_file(home), dim=EMBEDDING_DIM)
-            )
-            embedder = CachedEmbedder(raw_embedder, embedding_cache)
-            embeddings_store = stack.enter_context(
-                EmbeddingsStore.open(embeddings_db, dim=EMBEDDING_DIM)
-            )
-            if not meta_path.exists():
-                write_meta(
-                    meta_path,
-                    IndexMeta.fresh(
-                        embedding_model=MODEL_NAME,
-                        embedding_dim=EMBEDDING_DIM,
-                    ).with_counts(
-                        n_papers=embeddings_store.count_papers(),
-                        n_chunks=embeddings_store.count_chunks(),
-                    ),
-                )
-
-        client = llm if llm is not None else LLMClient()
-        read_client = read_llm if read_llm is not None else _read_client(client)
-        context = PaperCopilotContext(
-            fields_store=fields_store,
-            embeddings_store=embeddings_store,
-            encode_query=(
-                (lambda query: embedder.encode([query])[0]) if embedder is not None else None
-            ),
-            embedder=embedder,
-            pdf_dir=library_dir,
-            root=home,
-            max_papers=max_papers,
-            library_environment=(
-                get_library_environment(
-                    session_store.path.parent / "library-environment"
-                )
-                if session_store is not None
-                else None
-            ),
-        )
-        run = await run_paper_copilot(
+    client = llm if llm is not None else LLMClient()
+    read_client = read_llm if read_llm is not None else _read_client(client)
+    context = PaperCopilotContext(
+        pdf_dir=library_dir,
+        root=home,
+        max_papers=max_papers,
+        library_environment=(
+            get_library_environment(session_store.path.parent / "library-environment")
+            if session_store is not None
+            else None
+        ),
+    )
+    run = await run_paper_copilot(
             prompt=request,
             llm=client,
             read_llm=read_client,
@@ -171,7 +119,7 @@ async def handle_chat_request(
             request_tool_approval=request_tool_approval,
             approval_mode=approval_mode,
             approval_review_callback=approval_review_callback,
-        )
+    )
 
     return _persist_chat_result(
         request=request,
@@ -199,17 +147,8 @@ def _persist_chat_result(
 
     quality_run_path: Path | None = None
     eval_report_path: Path | None = None
-    if record_quality and run.tool_names:
-        quality_run_path = write_research_quality_run(
-            run.session_path,
-            runs_dir=runs_dir,
-            turn_id=turn_id,
-        )
-        if update_report:
-            eval_report_path = write_report(
-                load_history(runs_dir=runs_dir, suite_name="research"),
-                report_out_path if report_out_path is not None else default_report_path(),
-            )
+    # Paper-index retrieval evaluation was removed with the paper index. Session
+    # and trace artifacts remain the authoritative runtime record.
 
     return ChatRunResult(
         request=request,

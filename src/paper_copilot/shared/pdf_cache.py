@@ -9,6 +9,8 @@ import re
 import shutil
 import tempfile
 from datetime import UTC, datetime
+from contextlib import contextmanager
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -184,30 +186,37 @@ class PdfTextCache:
     ) -> PdfCachePage:
         if page < 1:
             raise PdfCacheError("page must be at least 1")
-        revision_dir = self._revision_dir(cache_ref)
-        manifest = await asyncio.to_thread(_read_manifest, revision_dir)
-        if _cache_ref(manifest) != cache_ref:
-            raise PdfCacheError("cache reference does not match the stored manifest")
-        if page > manifest.page_count:
-            raise PdfCacheError(
-                f"page {page} exceeds cached page count {manifest.page_count}"
+        return await asyncio.to_thread(self._read_page, cache_ref, page)
+
+    def _read_page(self, cache_ref: PdfCacheRef, page: int) -> PdfCachePage:
+        key_dir = self._key_dir(
+            cache_ref.pdf_sha256,
+            cache_ref.extractor_fingerprint,
+        )
+        with _paper_file_lock(key_dir, exclusive=False):
+            revision_dir = self._revision_dir(cache_ref)
+            manifest = _read_manifest(revision_dir)
+            if _cache_ref(manifest) != cache_ref:
+                raise PdfCacheError("cache reference does not match the stored manifest")
+            if page > manifest.page_count:
+                raise PdfCacheError(
+                    f"page {page} exceeds cached page count {manifest.page_count}"
+                )
+            if not _artifact_is_valid(revision_dir, manifest):
+                raise PdfCacheError("cached text artifact failed its integrity check")
+            boundary = manifest.page_boundaries[page - 1]
+            text = _read_text_range(
+                revision_dir / manifest.artifact.filename,
+                boundary.start_offset,
+                boundary.end_offset,
             )
-        if not await asyncio.to_thread(_artifact_is_valid, revision_dir, manifest):
-            raise PdfCacheError("cached text artifact failed its integrity check")
-        boundary = manifest.page_boundaries[page - 1]
-        text = await asyncio.to_thread(
-            _read_text_range,
-            revision_dir / manifest.artifact.filename,
-            boundary.start_offset,
-            boundary.end_offset,
-        )
-        return PdfCachePage(
-            cache_ref=cache_ref,
-            paper_id=cache_ref.pdf_sha256,
-            page=page,
-            text=text,
-            artifact_sha256=manifest.artifact.sha256,
-        )
+            return PdfCachePage(
+                cache_ref=cache_ref,
+                paper_id=cache_ref.pdf_sha256,
+                page=page,
+                text=text,
+                artifact_sha256=manifest.artifact.sha256,
+            )
 
     async def page_for_paper_id(
         self,
@@ -231,6 +240,26 @@ class PdfTextCache:
             reason = lookup.reason or "no compatible current revision"
             raise PdfCacheError(f"paper cache is unavailable: {reason}")
         return await self.page(lookup.cache_ref, page=page)
+
+    async def page_for_pdf(
+        self,
+        pdf_path: Path,
+        *,
+        source_locator: str,
+        page: int,
+    ) -> PdfCachePage:
+        """Read a page only after binding the cache to the PDF's current bytes."""
+        lookup = await self.ensure(pdf_path, source_locator=source_locator)
+        if lookup.cache_ref is None:
+            raise PdfCacheError("paper cache could not be prepared")
+        current_pdf_sha256 = await asyncio.to_thread(_sha256_file, pdf_path)
+        if current_pdf_sha256 != lookup.cache_ref.pdf_sha256:
+            raise PdfCacheError("PDF content changed before the cached page was read")
+        return await self.page(lookup.cache_ref, page=page)
+
+    async def prune_orphans(self, live_pdf_sha256: set[str]) -> tuple[str, ...]:
+        """Remove content-addressed caches that no current library PDF references."""
+        return await asyncio.to_thread(self._prune_orphans, live_pdf_sha256)
 
     async def record_formula_ocr(
         self,
@@ -347,7 +376,31 @@ class PdfTextCache:
         model: str,
         render_sha256: str,
     ) -> PdfCacheLookup:
-        lookup = self._lookup(pdf_sha256, identity)
+        key_dir = self._key_dir(pdf_sha256, identity.fingerprint)
+        with _paper_file_lock(key_dir, exclusive=True):
+            return self._record_formula_ocr_locked(
+                pdf_sha256,
+                identity,
+                page,
+                cache_slot,
+                latex,
+                region,
+                model,
+                render_sha256,
+            )
+
+    def _record_formula_ocr_locked(
+        self,
+        pdf_sha256: str,
+        identity: PopplerIdentity,
+        page: int,
+        cache_slot: str,
+        latex: str,
+        region: dict[str, float],
+        model: str,
+        render_sha256: str,
+    ) -> PdfCacheLookup:
+        lookup = self._lookup_unlocked(pdf_sha256, identity)
         if lookup.status != "hit" or lookup.cache_ref is None or lookup.manifest is None:
             raise PdfCacheError("formula-aware text cache is unavailable for formula OCR")
         manifest = lookup.manifest
@@ -403,7 +456,7 @@ class PdfTextCache:
                 staging_path / _MANIFEST_FILENAME,
                 derived.model_dump(mode="json"),
             )
-            _publish_revision(staging_path, key_dir, revision_id)
+            _publish_revision_unlocked(staging_path, key_dir, revision_id)
             return PdfCacheLookup(
                 status="hit",
                 cache_ref=_cache_ref(derived),
@@ -423,6 +476,15 @@ class PdfTextCache:
             return lock
 
     def _lookup(
+        self,
+        pdf_sha256: str,
+        identity: PopplerIdentity,
+    ) -> PdfCacheLookup:
+        key_dir = self._key_dir(pdf_sha256, identity.fingerprint)
+        with _paper_file_lock(key_dir, exclusive=False):
+            return self._lookup_unlocked(pdf_sha256, identity)
+
+    def _lookup_unlocked(
         self,
         pdf_sha256: str,
         identity: PopplerIdentity,
@@ -468,6 +530,24 @@ class PdfTextCache:
             / "revisions"
             / cache_ref.revision_id
         )
+
+    def _prune_orphans(self, live_pdf_sha256: set[str]) -> tuple[str, ...]:
+        if not self._root.is_dir():
+            return ()
+        removed: list[str] = []
+        for candidate in self._root.iterdir():
+            name = candidate.name.lower()
+            if (
+                candidate.is_dir()
+                and len(name) == 64
+                and all(character in "0123456789abcdef" for character in name)
+                and name not in live_pdf_sha256
+            ):
+                with _paper_file_lock(candidate, exclusive=True):
+                    if candidate.is_dir():
+                        shutil.rmtree(candidate)
+                        removed.append(name)
+        return tuple(sorted(removed))
 
 
 def _page_boundaries(layout_bytes: bytes, page_count: int) -> list[PageBoundary]:
@@ -601,17 +681,30 @@ def _publish_revision(
     key_dir: Path,
     revision_id: str,
 ) -> None:
-    lock_path = key_dir / ".publish.lock"
+    with _paper_file_lock(key_dir, exclusive=True):
+        _publish_revision_unlocked(staging_path, key_dir, revision_id)
+
+
+def _publish_revision_unlocked(
+    staging_path: Path,
+    key_dir: Path,
+    revision_id: str,
+) -> None:
+    revision_target = key_dir / "revisions" / revision_id
+    os.replace(staging_path, revision_target)
+    _publish_current(key_dir, revision_id)
+    _delete_superseded_revisions(key_dir, keep_revision_id=revision_id)
+
+
+@contextmanager
+def _paper_file_lock(key_dir: Path, *, exclusive: bool) -> Iterator[None]:
+    key_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = key_dir / ".paper.lock"
     with lock_path.open("a+b") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+        fcntl.flock(lock_file.fileno(), operation)
         try:
-            revision_target = key_dir / "revisions" / revision_id
-            os.replace(staging_path, revision_target)
-            _publish_current(key_dir, revision_id)
-            _delete_superseded_revisions(
-                key_dir,
-                keep_revision_id=revision_id,
-            )
+            yield
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 

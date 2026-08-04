@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from typing import Any, Literal, cast
 
-from paper_copilot.agents.composer_library import ComposerPool
+ComposerPool = Literal["ccf_a", "ccf_b", "other"]
 
 ComposerRole = Literal["baseline", "module"]
 ComposerDecisionAction = Literal[

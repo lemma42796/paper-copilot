@@ -202,10 +202,14 @@ observability bundle；Reducer 只消费完整事件前缀并校验顺序与引�
 papers/<conversation_id>/session.jsonl
 papers/<standalone_session_id>/session.jsonl
 jobs/<job_id>/{job.json,events.jsonl,attempts/<n>/{manifest.json,trace.jsonl,state.json,payloads/}}
-fields.db / embeddings.db / embeddings_meta.json / embedding_cache.sqlite
-graph/cross-paper-links.jsonl / eval/
+cache/<pdf_sha256>/<extractor_fingerprint>/revisions/<revision_id>/layout.txt
 optional-components/formula-ocr/{active.json,versions/<version>/}
 ```
+
+论文目录本身是论文清单的唯一事实源。Core 不保存论文结构化字段、全文索引、向量索引或
+embeddings。客户端启动后的首次完整 inventory 扫描成功时，删除没有任何现存 PDF 哈希
+对应的孤立缓存；扫描失败时不删除。受控 `page/search` 读取每次先重新计算当前 PDF 的
+SHA-256，再命中或生成对应缓存。
 
 Formula OCR 是独立、签名且内容寻址校验的可选组件。主客户端和主 Python Runtime 不包含
 PaddlePaddle、PaddleOCR、PaddleX、OpenCV 或公式模型权重；模型悬浮提示和本地状态检查
@@ -219,10 +223,6 @@ Application Support 中，经 Runtime 环境变量传入，不进入论文库、
 
 客户端优先通过 SSE 接收 job 事件，断线后按同一游标增量轮询。App 重启只恢复显示，
 不自动重跑任务。
-
-Embedding 当前固定为 DashScope `text-embedding-v4`、1024 维；模型或维度变化必须
-重建索引，不允许在同一索引混用。详见
-[dashscope_text_embedding.md](docs/design/dashscope_text_embedding.md)。
 
 ## 8. 模型与上下文
 

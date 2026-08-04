@@ -17,11 +17,6 @@ def default_root() -> Path:
     return Path.home() / ".paper-copilot"
 
 
-def embedding_cache_file(root: Path | None = None) -> Path:
-    base = root if root is not None else default_root()
-    return base / "embedding_cache.sqlite"
-
-
 def pdf_cache_dir(root: Path | None = None) -> Path:
     base = root if root is not None else default_root()
     return base / "paper-cache"

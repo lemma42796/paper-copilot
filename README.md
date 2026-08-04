@@ -10,9 +10,8 @@
 
 简体中文 | [English](README.en.md)
 
-Paper Copilot 面向个人论文知识库。它把 PDF 转为结构化报告，建立本地
-SQLite / sqlite-vec 索引，并通过 macOS 客户端或 MCP 完成论文问答、跨论文检索、对比
-和研究方案组合。
+Paper Copilot 面向个人论文库。Agent 直接浏览用户授权的 PDF 目录，并为当前任务按需生成
+内容寻址的 `layout.txt`；不建立论文数据库、向量索引或 embeddings。
 
 PDF、索引、session、报告和 trace 默认保存在本地。本地检索选出的文本片段可能发送给
 用户配置的云端模型；“PDF 未上传”不表示任何论文内容都不会离开设备。
@@ -23,9 +22,8 @@ PDF、索引、session、报告和 trace 默认保存在本地。本地检索选
 
 - **SwiftUI macOS 客户端**：论文目录、模型配置、持久任务、对话、报告、停止/恢复和
   diagnostics。
-- **Local MCP Server**：六个只读论文工具和四个长任务工具。
-- **Python Core**：Agent、PDF 解析、hybrid retrieval、session、job recovery、eval
-  和 observability。
+- **Local MCP Server**：持久任务状态工具。
+- **Python Core**：Agent、按需 PDF 文本缓存、session、job recovery 和 observability。
 
 M20–M24 已完成，包括自包含 Apple Silicon `.app`、开发预览 DMG 和旧 Next.js Web UI
 退役。Developer ID 与 Apple 公证留到正式发布阶段。完整状态见
@@ -33,10 +31,8 @@ M20–M24 已完成，包括自包含 Apple Silicon `.app`、开发预览 DMG �
 
 ## Capabilities
 
-- 将 PDF 提取为贡献、方法、实验、局限和跨论文关系。
-- 使用 FTS5/BM25、`text-embedding-v4`、sqlite-vec 和 RRF 检索本地论文库。
-- 通过一个 bounded Paper Copilot loop 选择读取、检索、对比和 Composer 工具。
-- 组合 baseline、可接入模块、风险、消融计划和 evidence，生成待验证研究草案。
+- 通过受限 shell、PDF 页图和按需 `layout.txt` 读取论文。
+- 每次受控缓存读取前校验当前 PDF 哈希；替换 PDF 后自动切换到新缓存键。
 - 使用 append-only session、持久 job/attempt、rollout replay 和本地 trace 保留
   恢复与诊断证据。
 - 使用字段 golden、retrieval suite、成本和延迟趋势约束模型变更。
@@ -100,14 +96,13 @@ notarytool profile 必须预先保存到 Keychain；仓库不保存证书或 App
 | `LLM_BASE_URL` | OpenAI-compatible LLM endpoint |
 | `LLM_API_KEY` | LLM API Key |
 | `LLM_MODEL` | 模型 ID，默认 `qwen3.6-flash` |
-| `DASHSCOPE_API_KEY` | `text-embedding-v4` Key |
+| `DASHSCOPE_API_KEY` | DashScope LLM Key（兼容旧配置） |
 | `PAPER_COPILOT_HOME` | 数据根目录，默认 `~/.paper-copilot` |
 | `PAPER_COPILOT_PDF_DIR` | 本地 PDF 目录 |
 
 macOS 客户端将 LLM Key 保存到
 `~/Library/Application Support/PaperCopilot/auth.json`，文件权限为 `0600`。
 旧版 Keychain 密钥不会自动迁移，升级后需在模型设置中重新输入一次 API Key。
-embedding 模型或维度变化后必须重建索引。
 
 使用 DeepSeek 官方 API 时只需替换前三个 LLM 变量；embedding 仍使用独立的
 `DASHSCOPE_API_KEY`。
@@ -169,8 +164,8 @@ Local MCP Server ──────► MCP services ─────────�
                                        Python Paper Core
 ```
 
-Core 包含单一 Paper Copilot loop、持久 job、JSONL session、SQLite knowledge stores、
-rollout trace 和 eval。模块职责、依赖规则、模型策略及数据流见
+Core 包含单一 Paper Copilot loop、持久 job、JSONL session、按需 PDF 文本缓存和
+rollout trace。模块职责、依赖规则、模型策略及数据流见
 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
 ## Data
@@ -178,16 +173,10 @@ rollout trace 和 eval。模块职责、依赖规则、模型策略及数据流�
 运行时数据默认位于 `~/.paper-copilot/`：
 
 ```text
-papers/<paper_id>/          # PDF、session、report
+papers/<conversation_id>/   # session、report
 jobs/<job_id>/              # job、events、attempt traces
-fields.db                   # 结构化字段
-embeddings.db               # FTS5 + sqlite-vec chunks
-embedding_cache.sqlite      # embedding cache
-graph/                      # 跨论文关系
-eval/                       # 本地 eval 结果
+cache/<pdf_sha256>/         # 按需 layout.txt revisions
 ```
-
-`paper_id = SHA1(PDF bytes)[:12]`，因此重命名或移动 PDF 不改变 ID。
 
 ## Development
 

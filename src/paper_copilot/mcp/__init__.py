@@ -1,3 +1,1 @@
-from paper_copilot.mcp.service import MCPReadService
-
-__all__ = ["MCPReadService"]
+"""Paper Copilot MCP job-state surface."""

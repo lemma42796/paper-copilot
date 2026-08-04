@@ -15,7 +15,6 @@ from paper_copilot.agents.tool_security import (
     cap_tool_output,
     evaluate_tool_call,
 )
-from paper_copilot.knowledge.fields_store import FieldsStore
 from paper_copilot.shared.cost import CostTracker, pricing_for_model
 
 
@@ -60,25 +59,21 @@ def test_approved_library_mutation_executes_once(tmp_path: Path) -> None:
         approvals.append(getattr(request, "tool_name"))
         return True
 
-    with FieldsStore.open(tmp_path / "fields.db") as fields_store:
-        context = PaperCopilotContext(
-            fields_store=fields_store,
-            pdf_dir=tmp_path,
+    context = PaperCopilotContext(pdf_dir=tmp_path)
+    tool_result = asyncio.run(
+        dispatch_paper_copilot_tool_async(
+            ToolUseRequest(
+                id="mkdir-1",
+                name="library_files",
+                input={"operation": "mkdir", "destination": "new"},
+            ),
+            context,
+            read_llm=None,
+            cost=CostTracker(pricing=pricing_for_model("qwen3.6-flash")),
+            max_budget_cny=1.0,
+            request_tool_approval=approve,
         )
-        tool_result = asyncio.run(
-            dispatch_paper_copilot_tool_async(
-                ToolUseRequest(
-                    id="mkdir-1",
-                    name="library_files",
-                    input={"operation": "mkdir", "destination": "new"},
-                ),
-                context,
-                read_llm=None,
-                cost=CostTracker(pricing=pricing_for_model("qwen3.6-flash")),
-                max_budget_cny=1.0,
-                request_tool_approval=approve,
-            )
-        )
+    )
 
     assert tool_result.is_error is False
     assert approvals == ["library_files"]
