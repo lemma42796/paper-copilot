@@ -457,8 +457,150 @@ def _locate_numbered_formula(
             )
         label = max(candidates, key=lambda rect: rect.x0)
         page_rect = page.rect
+        content_bbox = _formula_content_bbox(page, label)
+        if content_bbox is not None:
+            width = page_rect.width
+            height = page_rect.height
+            padding = 3.0
+            x1 = max(0.0, (content_bbox[0] - padding) / width)
+            y1 = max(0.0, (content_bbox[1] - padding) / height)
+            x2 = min(1.0, (content_bbox[2] + padding) / width)
+            y2 = min(1.0, (content_bbox[3] + padding) / height)
+            if x2 > x1 and y2 > y1:
+                return InspectPageRegion(x1=x1, y1=y1, x2=x2, y2=y2)
+        # Fall back to the label-anchored column heuristic when the PDF has no
+        # usable text-layer geometry beside the label (for example vector-only
+        # equations). Geometry-based crops cover centered single-column
+        # equations that the legacy column assumption would truncate.
+        return _legacy_label_region(label, page_rect)
     finally:
         document.close()
+
+
+_WORD_TUPLE = tuple[float, float, float, float, str, int, int, int]
+
+
+def _formula_content_bbox(
+    page: pymupdf.Page,
+    label: pymupdf.Rect,
+) -> tuple[float, float, float, float] | None:
+    """Return the union box of text-layer words belonging to the labelled formula.
+
+    The label rect anchors the equation line; words whose vertical center lies
+    within one label height of it are clustered from the label leftwards. The
+    box then expands to nearby visual text rows only when the whole row stays
+    horizontally inside the equation box. This works for single-column centered
+    equations, two-column layouts, and sub/superscript or fraction rows without
+    assuming a page-half column boundary.
+    """
+    words = page.get_text("words")
+    vertical_tolerance = max(label.height * 0.6, 5.0)
+    gap_tolerance = max(label.height * 1.0, 14.0)
+    center = (label.y0 + label.y1) / 2.0
+    candidates = [
+        word
+        for word in words
+        if abs((word[1] + word[3]) / 2 - center) <= label.height
+        and word[2] <= label.x0 - 2.0
+    ]
+    if not candidates:
+        return None
+    ordered = sorted(candidates, key=lambda word: word[0])
+    clusters: list[list[_WORD_TUPLE]] = []
+    for word in ordered:
+        if clusters and word[0] - clusters[-1][-1][2] <= gap_tolerance:
+            clusters[-1].append(word)
+        else:
+            clusters.append([word])
+    cluster = max(clusters, key=lambda candidate: max(word[2] for word in candidate))
+    bbox = [
+        min(word[0] for word in cluster),
+        min(word[1] for word in cluster),
+        max(word[2] for word in cluster),
+        max(word[3] for word in cluster),
+    ]
+    included = {id(word) for word in cluster}
+    rows = _formula_visual_rows(page, words, label.x0)
+    changed = True
+    while changed:
+        changed = False
+        for row_box, row_words in rows:
+            if all(id(word) in included for word in row_words):
+                continue
+            if (
+                row_box[1] > bbox[3] + vertical_tolerance
+                or row_box[3] < bbox[1] - vertical_tolerance
+            ):
+                continue
+            if (
+                row_box[0] < bbox[0] - gap_tolerance
+                or row_box[2] > bbox[2] + gap_tolerance
+            ):
+                continue
+            for word in row_words:
+                included.add(id(word))
+            bbox[0] = min(bbox[0], row_box[0])
+            bbox[1] = min(bbox[1], row_box[1])
+            bbox[2] = max(bbox[2], row_box[2])
+            bbox[3] = max(bbox[3], row_box[3])
+            changed = True
+    return (bbox[0], bbox[1], bbox[2], bbox[3])
+
+
+def _formula_visual_rows(
+    page: pymupdf.Page,
+    words: list[_WORD_TUPLE],
+    label_x0: float,
+) -> list[tuple[list[float], list[_WORD_TUPLE]]]:
+    """Merge dict lines into visual rows for equation-content containment.
+
+    Dict lines are the extractor's own text-line fragments. Adjacent fragments
+    that overlap vertically by more than two points belong to the same visual
+    row; a full-width paragraph row therefore fails horizontal containment even
+    when one of its inline-math fragments fits inside the equation box.
+    """
+    rows: list[tuple[list[float], list[_WORD_TUPLE]]] = []
+    for block in page.get_text("dict")["blocks"]:
+        for line in block.get("lines", []):
+            line_box = line["bbox"]
+            line_words = [
+                word
+                for word in words
+                if word[2] <= label_x0 - 2.0
+                and line_box[0] - 0.5 <= word[0]
+                and word[2] <= line_box[2] + 0.5
+                and line_box[1] - 0.5 <= word[1]
+                and word[3] <= line_box[3] + 0.5
+            ]
+            if not line_words:
+                continue
+            merged = False
+            for row_box, row_words in rows:
+                if (
+                    line_box[1] <= row_box[3] - 2.0
+                    and line_box[3] >= row_box[1] + 2.0
+                ):
+                    row_box[0] = min(row_box[0], line_box[0])
+                    row_box[1] = min(row_box[1], line_box[1])
+                    row_box[2] = max(row_box[2], line_box[2])
+                    row_box[3] = max(row_box[3], line_box[3])
+                    row_words.extend(line_words)
+                    merged = True
+                    break
+            if not merged:
+                rows.append(
+                    (
+                        [line_box[0], line_box[1], line_box[2], line_box[3]],
+                        line_words,
+                    )
+                )
+    return rows
+
+
+def _legacy_label_region(
+    label: pymupdf.Rect,
+    page_rect: pymupdf.Rect,
+) -> InspectPageRegion:
     width = page_rect.width
     height = page_rect.height
     column_left = page_rect.x0 if label.x0 < width / 2 else width / 2
