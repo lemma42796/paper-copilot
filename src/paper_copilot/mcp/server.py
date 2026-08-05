@@ -22,7 +22,7 @@ def create_server(
         "paper-copilot",
         instructions=(
             "Bounded access to Paper Copilot job state. Paper discovery and reading "
-            "use the Agent's filesystem and paper-cache tools; no paper index or "
+            "use the Agent's filesystem and paper reading tools; no paper index or "
             "embedding database is maintained."
         ),
     )

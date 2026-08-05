@@ -6,7 +6,7 @@
 > 当前接力状态见 [STATUS.md](STATUS.md)，当前架构见
 > [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-更新于 2026-08-05。
+更新于 2026-08-06。
 
 ## 未完成任务
 
@@ -16,8 +16,10 @@
 - 客户端启动和 Agent 预检不得批量生成论文正文缓存；manifest 只建立授权论文清单。
 - 不保存论文结构化字段数据库、全文索引、向量索引或 embeddings。
 - 启动后的完整 inventory 扫描成功时清理没有现存 PDF 哈希对应的缓存；失败时不删除。
-- `paper-cache page/search` 必须用 PDF 相对路径，并在读取前校验当前 PDF SHA-256。
-- 模型只对当前任务需要的论文调用 `paper-cache ensure`，按需生成内容寻址 `layout.txt`。
+- 模型可见命令为 `paper read/search`（内部按需生成内容寻址 `layout.txt`），必须用 PDF
+  相对路径，并在读取前由 agent 自动校验当前 PDF SHA-256。
+- 模型只对当前任务需要的论文发起 `paper read/search`；缓存由 agent 按需自动生成，模型
+  不接触缓存键、哈希或 revision。
 - TXT 中包含 Unicode 替换字符或私用区字形的行生成稳定公式 OCR
   `cache_slot`。
 - 纯文本模型在悬浮提示中说明可选能力，但悬浮、选择模型和启动应用均不得联网。
@@ -29,9 +31,13 @@
   原子发布为 current，并自动删除同一缓存键下的旧 revision。
 - [ ] 下一步：在客户端完成真实乱码公式 `recognize`/`accept` 回填与跨会话命中
   （`recognize` 已用真实 Helper 直接调用验证干净候选；`accept` 与跨会话尚未在客户端
-  执行），随后验证工具暴露矩阵、按需缓存一致性（新增/删除/查询/替换 PDF）、未请求论文
-  不生成缓存、主客户端无 Paddle 静态检查与未点击下载无网络行为。
+  执行），并用新的 `paper read/search` 命令面在客户端重跑按需缓存一致性；随后验证
+  未请求论文不生成缓存、主客户端无 Paddle 静态检查与未点击下载无网络行为；同步
+  `docs/design/` 中仍引用旧 `paper-cache` 命令名的文档。
 - 已完成：Helper 重建（含受限异常因果输出与 pypdfium2 收集）、真实论文公式推理、
   ad-hoc Release `formula-ocr-v1` 发布、App 内安装与模型复用闭环、工具超时 45 → 120 秒。
   公式定位逻辑修复（`_locate_numbered_formula` 几何裁剪，单栏居中公式 OCR 乱码问题
-  解决，recognize 直接调用验证干净 LaTeX）。正式发布仍需 Developer ID 签名与公证。
+  解决，recognize 直接调用验证干净 LaTeX）；工具暴露矩阵 PASS；按需缓存一致性
+  （新增/查询/替换/删除 PDF）客户端真机验证 ALL PASS，删除会连外层空目录一起清掉；
+  缓存从模型可见面隐藏（`paper read/search`，SKILL v22）。正式发布仍需 Developer ID
+  签名与公证。

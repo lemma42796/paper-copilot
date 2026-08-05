@@ -391,6 +391,7 @@ async def run_paper_copilot(
     read_llm: LLMClient | None = None,
     session_id: str | None = None,
     session_store: SessionStore | None = None,
+    new_session: bool | None = None,
     turn_input_persisted: bool = False,
     event_callback: Callable[[Event], None] | None = None,
     stream_event_callback: LLMStreamEventCallback | None = None,
@@ -417,6 +418,9 @@ async def run_paper_copilot(
         )
     else:
         store = session_store
+    effective_new_session = (
+        new_session if new_session is not None else session_store is None
+    )
     cost = CostTracker(pricing=pricing_for_model(DEFAULT_MODEL))
     system_prompt = _BASE_SYSTEM_PROMPT
     store.append_system_message(system_prompt)
@@ -466,7 +470,14 @@ async def run_paper_copilot(
         else nullcontext()
     )
     with preflight_trace as preflight_operation:
-        cache_preflight = await _prepare_paper_cache(context)
+        preflight_scanned = effective_new_session
+        if effective_new_session:
+            cache_preflight = await _prepare_paper_cache(context)
+        else:
+            cache_preflight = _load_session_preflight(context)
+            if cache_preflight is None:
+                cache_preflight = await _prepare_paper_cache(context)
+                preflight_scanned = True
         if preflight_operation is not None:
             preflight_operation.set_result(
                 attributes={
@@ -483,7 +494,8 @@ async def run_paper_copilot(
                 },
             )
     if (
-        context.library_environment is not None
+        preflight_scanned
+        and context.library_environment is not None
         and (cache_preflight.total_pdf_count or cache_preflight.failures)
     ):
         cache_root = pdf_cache_dir(context.root).expanduser().resolve()
@@ -1185,6 +1197,11 @@ async def _handle_public_library_exec(
         raw_execution_context,
     )
     context = execution_context.context
+    research_manifest = (
+        context.library_environment.workspace / "research-manifests" / "current.jsonl"
+        if context.library_environment is not None
+        else None
+    )
     library_exec_run = await run_library_exec(
         cast(LibraryExecInput, parsed_input),
         context.pdf_dir,
@@ -1196,6 +1213,7 @@ async def _handle_public_library_exec(
             )
         ),
         environment=context.library_environment,
+        research_manifest=research_manifest,
     )
     return ToolResultData(
         output=library_exec_run.output,
@@ -1501,6 +1519,67 @@ def _pdfs_under(pdf_dir: Path) -> list[Path]:
         for path in pdf_dir.rglob("*")
         if path.is_file() and path.suffix.lower() == ".pdf"
     )
+
+
+def _load_session_preflight(
+    context: PaperCopilotContext,
+) -> _PaperCachePreflight | None:
+    """Reuse the persisted inventory instead of re-scanning on continuation turns."""
+    if context.library_environment is None:
+        return None
+    manifest_path = (
+        context.library_environment.workspace
+        / "research-manifests"
+        / "current.jsonl"
+    )
+    try:
+        lines = [
+            line
+            for line in manifest_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        if not lines:
+            return None
+        header = json.loads(lines[0])
+        if header.get("record_type") != "research_manifest":
+            return None
+        total_pdf_count = header["total_pdf_count"]
+        failures = header.get("failures", [])
+        if not isinstance(total_pdf_count, int) or not isinstance(failures, list):
+            return None
+        prepared: list[_PreparedPaperCache] = []
+        for line in lines[1:]:
+            record = json.loads(line)
+            if record.get("record_type") != "paper":
+                continue
+            pdf_value = record.get("pdf")
+            paper_id = record.get("paper_id")
+            pages = record.get("pages")
+            if (
+                not isinstance(pdf_value, str)
+                or not isinstance(paper_id, str)
+                or not isinstance(pages, int)
+            ):
+                return None
+            source_locator = pdf_value.removeprefix("library/")
+            if not source_locator or source_locator.startswith(("..", "/")):
+                return None
+            prepared.append(
+                _PreparedPaperCache(
+                    source_locator=source_locator,
+                    paper_id=paper_id,
+                    page_count=pages,
+                )
+            )
+        return _PaperCachePreflight(
+            total_pdf_count=total_pdf_count,
+            prepared=tuple(prepared),
+            failures=tuple(
+                item for item in failures if isinstance(item, dict)
+            ),
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 async def _prepare_paper_cache(

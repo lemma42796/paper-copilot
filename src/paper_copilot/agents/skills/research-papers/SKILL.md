@@ -5,35 +5,37 @@ description: Investigate local PDF papers with bounded command search and page-g
 
 # Research Papers
 
-Skill version: 20
+Skill version: 22
 
 ## Understand the paper inventory
 
 - `research-manifests/current.jsonl` is an index, not paper evidence. Its first record describes the
-  inventory attempt; each following `paper` record maps an authorized PDF (`pdf`) to its optional
-  TXT alias (`text`), cache state (`cached`), page count (`pages`), and citation base
-  (`citation_base`). Read it once and keep
-  those mappings for the task.
-- Runtime does not generate every paper cache before the model starts. For a paper needed by the
-  request, call `library_exec` with the whole command `paper-cache ensure <pdf>` using its manifest
-  `pdf` value. Then use `paper-cache page <pdf> <page>` for selected pages or
-  `paper-cache search <pdf> <query>`. These controlled reads recompute the live PDF SHA-256 before
-  using a cache; do not read a previously returned revision path after the PDF may have changed.
-  Do not ensure papers that are not needed.
-- Each generated `layout.txt` is a read-only, page-delimited TXT cache. Form-feed `\f` separates PDF
-  pages. A garbled formula is represented by a stable `cache_slot`. Call `recognize_formula` only
-  when the current request requires understanding or citing that specific formula and the garbled
-  TXT cannot support the task; do not call OCR merely because unrelated garbled text or formula
-  slots exist. Use `operation=recognize`, that slot, the physical page, and an equation label or
-  region. Inspect the candidate LaTeX; only if it is acceptable call `recognize_formula` again with
-  `operation=accept` and the returned `candidate_id`. Accept atomically publishes the repaired
-  current TXT and removes superseded TXT revisions, so accepted formula repairs accumulate. After
-  accept, use `paper-cache page <pdf> <page>` again; do not reuse a superseded cache path.
+  inventory attempt; each following `paper` record maps an authorized PDF (`pdf`) to its page count
+  (`pages`) and citation base (`citation_base`). Read it once and keep those mappings for the task.
+  Do not read extracted-text artifacts directly; always read through the paper commands below.
+- Reading a paper prepares its text automatically on first access; no manual preparation step is
+  needed. For a paper needed by the request, call `library_exec` with the whole command
+  `paper read <pdf> <page>` for a page, or `paper search <pdf> <query>` to locate evidence.
+  These commands handle freshness and consistency automatically; do not read papers that are not
+  needed.
+- Returned page text is delimited by `[[paper-copilot-page:N]]` markers. A garbled formula is
+  represented by a stable `cache_slot` inside a
+  `[公式 OCR 待识别；cache_slot=...]` marker. Call `recognize_formula` only when the current
+  request requires understanding or citing that specific formula, the slot is still marked 待识别,
+  and the garbled TXT cannot support the task; do not call OCR merely because unrelated garbled
+  text or formula slots exist. A slot already marked `paper-copilot-ocr:recognized` is a repaired
+  formula — do not re-recognize it; its marker includes `label=` when the equation label is known,
+  so use it to map the slot to the requested formula. Use `operation=recognize` with that slot, the
+  physical page, and an equation label or region. Inspect the candidate LaTeX; only if it is
+  acceptable call `recognize_formula` again with `operation=accept` and the returned
+  `candidate_id`. Accept atomically publishes the repaired current TXT and removes superseded TXT
+  revisions, so accepted formula repairs accumulate. After accept, use
+  `paper read <pdf> <page>` again to obtain the repaired page text.
 - `library_exec` provides shell utilities and controlled Python with the standard library. For work
-  spanning several papers or pages, prefer one bounded Python or shell command that reads the
-  manifest, splits the selected text files on `\f`, and prints labeled results. Keep each result
-  labeled with its paper and PDF page so evidence remains attributable. Use the manifest's raw `pdf`
-  path with `pdfinfo` only when the cached TXT is insufficient.
+  spanning several papers or pages, prefer bounded `paper read`/`paper search` calls, one per
+  paper, page, or query, and keep each result labeled with its paper and PDF page so evidence
+  remains attributable. Use the manifest's raw `pdf` path with `pdfinfo` only when the returned
+  text is insufficient.
 
 ## Research the request
 

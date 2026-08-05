@@ -900,6 +900,7 @@ class ChatJobRegistry:
                         update_report=record.spec.update_report,
                         session_id=session_id,
                         session_store=session_store,
+                        new_session=not session_preexisting,
                         turn_input_persisted=True,
                         turn_id=job_id,
                         event_callback=record_event,

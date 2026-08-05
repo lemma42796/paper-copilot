@@ -337,6 +337,7 @@ async def _accept_formula_candidate(
             region=candidate.region,
             model=candidate.model,
             render_sha256=candidate.render_sha256,
+            equation_label=candidate.equation_label,
         )
         if lookup.cache_ref is None or lookup.manifest is None:
             raise KnowledgeError("formula OCR acceptance produced no text cache revision")

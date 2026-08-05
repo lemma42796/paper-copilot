@@ -39,6 +39,7 @@ _READ_CHUNK_BYTES = 1024 * 1024
 _OCR_START_TEMPLATE = "[[paper-copilot-ocr:start slot={slot} page={page}]]"
 _OCR_END_TEMPLATE = "[[paper-copilot-ocr:end slot={slot}]]"
 _REVISION_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+_SAFE_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _log = get_logger(__name__)
 
 
@@ -154,6 +155,23 @@ class PdfTextCache:
         pdf_sha256 = await asyncio.to_thread(_sha256_file, pdf_path)
         identity = await self._extractor.identity()
         return await asyncio.to_thread(self._lookup, pdf_sha256, identity)
+
+    async def lookup_by_sha(self, pdf_sha256: str) -> PdfCacheLookup:
+        identity = await self._extractor.identity()
+        return await asyncio.to_thread(self._lookup, pdf_sha256, identity)
+
+    async def delete(self, pdf_sha256: str) -> None:
+        identity = await self._extractor.identity()
+        key_dir = self._key_dir(pdf_sha256, identity.fingerprint)
+        await asyncio.to_thread(self._delete_key, key_dir)
+
+    async def delete_by_source_locator(self, source_locator: str) -> tuple[str, ...]:
+        identity = await self._extractor.identity()
+        return await asyncio.to_thread(
+            self._delete_by_source_locator,
+            source_locator,
+            identity.fingerprint,
+        )
 
     async def ensure(
         self,
@@ -271,6 +289,7 @@ class PdfTextCache:
         region: dict[str, float],
         model: str,
         render_sha256: str,
+        equation_label: str | None,
     ) -> PdfCacheLookup:
         identity = await self._extractor.identity()
         cache_key = f"{pdf_sha256}:{identity.fingerprint}"
@@ -286,6 +305,7 @@ class PdfTextCache:
                 region,
                 model,
                 render_sha256,
+                equation_label,
             )
 
     async def _build(
@@ -375,6 +395,7 @@ class PdfTextCache:
         region: dict[str, float],
         model: str,
         render_sha256: str,
+        equation_label: str | None,
     ) -> PdfCacheLookup:
         key_dir = self._key_dir(pdf_sha256, identity.fingerprint)
         with _paper_file_lock(key_dir, exclusive=True):
@@ -387,6 +408,7 @@ class PdfTextCache:
                 region,
                 model,
                 render_sha256,
+                equation_label,
             )
 
     def _record_formula_ocr_locked(
@@ -399,6 +421,7 @@ class PdfTextCache:
         region: dict[str, float],
         model: str,
         render_sha256: str,
+        equation_label: str | None,
     ) -> PdfCacheLookup:
         lookup = self._lookup_unlocked(pdf_sha256, identity)
         if lookup.status != "hit" or lookup.cache_ref is None or lookup.manifest is None:
@@ -417,9 +440,13 @@ class PdfTextCache:
                 f"formula OCR cache slot is unavailable on page {page}: {cache_slot}"
             )
         normalized_latex = latex.strip()
+        label_token = _marker_label_token(equation_label)
+        marker = (
+            f"[[paper-copilot-ocr:recognized slot={cache_slot} page={page}"
+            f"{label_token} model={model} render_sha256={render_sha256} verified=false]]"
+        )
         replacement = (
-            f"[[paper-copilot-ocr:recognized slot={cache_slot} page={page} "
-            f"model={model} render_sha256={render_sha256} verified=false]]\n"
+            f"{marker}\n"
             f"$$\n{normalized_latex}\n$$"
         )
         updated = pattern.sub(lambda _: replacement, text, count=1)
@@ -549,6 +576,54 @@ class PdfTextCache:
                         removed.append(name)
         return tuple(sorted(removed))
 
+    def _delete_key(self, key_dir: Path) -> None:
+        if not key_dir.is_dir():
+            return
+        with _paper_file_lock(key_dir, exclusive=True):
+            if key_dir.is_dir():
+                shutil.rmtree(key_dir)
+        parent = key_dir.parent
+        if parent != self._root and parent.is_dir():
+            try:
+                parent.rmdir()
+            except OSError:
+                # Another fingerprint directory (or writer) still occupies this
+                # key; leaving the outer sha directory in place is correct.
+                pass
+
+    def _delete_by_source_locator(
+        self,
+        source_locator: str,
+        fingerprint: str,
+    ) -> tuple[str, ...]:
+        if not self._root.is_dir():
+            return ()
+        removed: list[str] = []
+        for candidate in self._root.iterdir():
+            name = candidate.name.lower()
+            if not (
+                candidate.is_dir()
+                and len(name) == 64
+                and all(character in "0123456789abcdef" for character in name)
+            ):
+                continue
+            key_dir = candidate / fingerprint
+            try:
+                current_path = key_dir / _CURRENT_FILENAME
+                current = _CurrentRevision.model_validate_json(
+                    current_path.read_text(encoding="utf-8")
+                )
+                manifest = _read_manifest(
+                    key_dir / "revisions" / current.revision_id
+                )
+            except (OSError, ValueError):
+                continue
+            if manifest.source_locator != source_locator:
+                continue
+            self._delete_key(key_dir)
+            removed.append(name)
+        return tuple(sorted(removed))
+
 
 def _page_boundaries(layout_bytes: bytes, page_count: int) -> list[PageBoundary]:
     separator = b"\f"
@@ -614,6 +689,12 @@ def _render_text_page(text: str, page: int) -> str:
         else:
             lines.append(line)
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _marker_label_token(equation_label: str | None) -> str:
+    if equation_label is None or _SAFE_LABEL_PATTERN.fullmatch(equation_label) is None:
+        return ""
+    return f" label={equation_label}"
 
 
 def _contains_extraction_garble(text: str) -> bool:

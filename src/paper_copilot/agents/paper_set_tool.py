@@ -415,7 +415,7 @@ async def _snapshot_papers(
             reason = lookup.reason or lookup.status
             raise KnowledgeError(
                 f"paper {requested_id} has no compatible text-cache revision: {reason}; "
-                "run paper-cache ensure before creating the set"
+                "read the paper first with paper read before creating the set"
             )
         if lookup.cache_ref.pdf_sha256 != pdf_sha256:
             raise KnowledgeError(f"paper {requested_id} changed while it was snapshotted")

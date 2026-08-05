@@ -37,8 +37,8 @@ _OUTPUT_COLLECTION_MAX_BYTES = 1024 * 1024
 _OUTPUT_COLLECTION_MAX_TOKENS = (
     _OUTPUT_COLLECTION_MAX_BYTES // _APPROX_BYTES_PER_TOKEN
 )
-_PAPER_CACHE_COMMAND_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9_.-])paper-cache(?![A-Za-z0-9_.-])"
+_PAPER_READ_COMMAND_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_.-])paper[ \t]+(?:read|search)(?![A-Za-z0-9_.-])"
 )
 _DEFAULT_YIELD_TIME_MS = 10_000
 _DEFAULT_STDIN_YIELD_TIME_MS = 5_000
@@ -146,7 +146,7 @@ class _ResolvedCommand:
 
 
 @dataclass(frozen=True, slots=True)
-class _PaperCacheCommand:
+class _PaperCommand:
     operation: str
     arguments: tuple[str, ...]
 
@@ -179,17 +179,16 @@ def library_exec_tool_description() -> str:
     return (
         "Run a bounded command in a Codex-style macOS sandbox. The fixed logical "
         "workspace exposes the configured paper library as read-only library/, "
-        "derived text cache as read-only cache/, optional cached-text aliases as "
-        "read-only papers/, research-manifests/ as their machine-readable indexes, "
-        "and only scratch/ as writable "
+        "optional extracted-text aliases as read-only papers/, research-manifests/ "
+        "as their machine-readable inventory, and only scratch/ as writable "
         "persistent storage for this conversation. The research manifest lists the "
-        "authorized PDFs but does not generate their text caches. When a paper is "
-        "needed, run paper-cache ensure <library-relative-pdf>; then read selected "
-        "pages with paper-cache page <library-relative-pdf> <page>, or search it with "
-        "paper-cache search <library-relative-pdf> <query>. These read commands re-hash "
-        "the live PDF before using its cache. The "
-        "returned command output becomes model-visible evidence. "
-        "paper-cache must occupy the whole cmd and cannot be chained. The environment contains no user "
+        "authorized PDFs but does not extract their text up front. When a paper is "
+        "needed, read a page with `paper read <library-relative-pdf> <page>`, or "
+        "search it with `paper search <library-relative-pdf> <query>`. These "
+        "commands return page text or matching lines as model-visible evidence; "
+        "text preparation and consistency checks are handled automatically. "
+        "`paper read`/`paper search` must occupy the whole cmd and cannot be "
+        "chained. The environment contains no user "
         "credentials; sandboxing "
         "blocks network access, library/cache writes, and reads outside authorized "
         "roots. A command still running after yield_time_ms returns a session_id; "
@@ -211,6 +210,7 @@ async def run_library_exec(
     *,
     cache_root: Path | None = None,
     environment: LibraryEnvironment | None = None,
+    research_manifest: Path | None = None,
 ) -> LibraryExecRun:
     root = _resolve_library_root(library_root)
     resolved_cache_root = (
@@ -219,14 +219,15 @@ async def run_library_exec(
         else cache_root.expanduser().resolve()
     )
     resolved_command = _resolve_command(args.cmd)
-    paper_cache_command = _intercept_paper_cache(resolved_command)
-    if paper_cache_command is not None:
-        return await _run_paper_cache_command(
-            paper_cache_command,
+    paper_command = _intercept_paper_read(resolved_command)
+    if paper_command is not None:
+        return await _run_paper_read_command(
+            paper_command,
             resolved_command=resolved_command,
             args=args,
             library_root=root,
             cache_root=resolved_cache_root,
+            research_manifest=research_manifest,
         )
 
     _require_macos_sandbox()
@@ -635,37 +636,46 @@ def _expand_macho_loader_path(
     raise ValueError(f"unsupported Mach-O rpath {path!r} for {object_path}")
 
 
-def _intercept_paper_cache(
+def _intercept_paper_read(
     resolved_command: _ResolvedCommand,
-) -> _PaperCacheCommand | None:
+) -> _PaperCommand | None:
     try:
         arguments = shlex.split(resolved_command.source_cmd, posix=True)
     except ValueError as error:
-        if _PAPER_CACHE_COMMAND_PATTERN.search(resolved_command.source_cmd):
-            raise KnowledgeError(f"invalid paper-cache command: {error}") from error
-        return None
-    if not arguments or arguments[0] != "paper-cache":
-        if _PAPER_CACHE_COMMAND_PATTERN.search(resolved_command.source_cmd):
+        if _PAPER_READ_COMMAND_PATTERN.search(resolved_command.source_cmd):
             raise KnowledgeError(
-                "paper-cache must be the entire library_exec cmd; do not place it "
+                f"invalid paper read/search command: {error}"
+            ) from error
+        return None
+    if (
+        len(arguments) < 2
+        or arguments[0] != "paper"
+        or arguments[1] not in {"read", "search"}
+    ):
+        if _PAPER_READ_COMMAND_PATTERN.search(resolved_command.source_cmd):
+            raise KnowledgeError(
+                "paper read/search must be the entire library_exec cmd; do not place it "
                 "inside a pipeline, loop, chained command, substitution, or find -exec"
             )
         return None
-    if len(arguments) < 2:
-        raise KnowledgeError("paper-cache requires status, ensure, page, or search")
-    return _PaperCacheCommand(
+    if arguments[1] == "read" and len(arguments) < 4:
+        raise KnowledgeError("paper read requires a PDF path and page number")
+    if arguments[1] == "search" and len(arguments) < 3:
+        raise KnowledgeError("paper search requires a PDF path and query")
+    return _PaperCommand(
         operation=arguments[1],
         arguments=tuple(arguments[2:]),
     )
 
 
-async def _run_paper_cache_command(
-    command: _PaperCacheCommand,
+async def _run_paper_read_command(
+    command: _PaperCommand,
     *,
     resolved_command: _ResolvedCommand,
     args: LibraryExecInput,
     library_root: Path,
     cache_root: Path,
+    research_manifest: Path | None,
 ) -> LibraryExecRun:
     started = time.monotonic()
     command_ref = _command_ref(resolved_command, _BROKER_POLICY_ID)
@@ -674,90 +684,79 @@ async def _run_paper_cache_command(
     try:
         async with asyncio.timeout(_BROKER_TIMEOUT_SECONDS):
             match command.operation, command.arguments:
-                case ("status", (relative_pdf,)):
-                    pdf_path, _source_locator = _resolve_library_pdf(
-                        library_root,
-                        relative_pdf,
-                    )
-                    payload = _cache_lookup_payload(await cache.status(pdf_path))
-                case ("ensure", (relative_pdf,)):
-                    pdf_path, source_locator = _resolve_library_pdf(
-                        library_root,
-                        relative_pdf,
-                    )
-                    payload = _cache_lookup_payload(
-                        await cache.ensure(
-                            pdf_path,
-                            source_locator=source_locator,
-                        )
-                    )
-                case ("page", (relative_pdf, raw_page)):
+                case ("read", (relative_pdf, raw_page)):
                     try:
                         page_number = int(raw_page)
                     except ValueError as error:
                         raise KnowledgeError(
-                            "paper-cache page requires an integer page number"
+                            "paper read requires an integer page number"
                         ) from error
+                    manifest_key = _manifest_key_for_path(
+                        research_manifest,
+                        relative_pdf,
+                    )
                     pdf_path, source_locator = _resolve_library_pdf(
                         library_root,
                         relative_pdf,
+                        require_file=manifest_key is None,
                     )
-                    payload = (
-                        await cache.page_for_pdf(
-                            pdf_path,
-                            source_locator=source_locator,
-                            page=page_number,
-                        )
-                    ).model_dump(mode="json")
-                case ("search", (relative_pdf, query)):
-                    pdf_path, source_locator = _resolve_library_pdf(
-                        library_root,
-                        relative_pdf,
-                    )
-                    lookup = await cache.ensure(
-                        pdf_path,
-                        source_locator=source_locator,
-                    )
-                    if lookup.manifest is None or lookup.cache_ref is None:
-                        raise KnowledgeError("paper cache could not be prepared")
-                    current_lookup = await cache.status(pdf_path)
-                    if (
-                        current_lookup.cache_ref is None
-                        or current_lookup.cache_ref.pdf_sha256
-                        != lookup.cache_ref.pdf_sha256
-                    ):
+                    if not pdf_path.is_file():
+                        if manifest_key is not None:
+                            await cache.delete(manifest_key)
+                        await cache.delete_by_source_locator(source_locator)
+                        if manifest_key is not None:
+                            raise KnowledgeError(
+                                "PDF no longer exists in the library"
+                            )
                         raise KnowledgeError(
-                            "PDF content changed before the cached text was searched"
+                            "PDF not found in the authorized library"
                         )
-                    matches: list[dict[str, Any]] = []
-                    needle = query.casefold()
-                    for page_number in range(1, lookup.manifest.page_count + 1):
-                        cached_page = await cache.page(lookup.cache_ref, page=page_number)
-                        for line_number, line in enumerate(cached_page.text.splitlines(), start=1):
-                            if needle in line.casefold():
-                                matches.append(
-                                    {
-                                        "page": page_number,
-                                        "line": line_number,
-                                        "text": line[:500],
-                                    }
-                                )
-                                if len(matches) >= 100:
-                                    break
-                        if len(matches) >= 100:
-                            break
-                    payload = {"query": query, "matches": matches, "truncated": len(matches) >= 100}
+                    payload = await _cached_or_fresh_page(
+                        cache,
+                        pdf_path=pdf_path,
+                        source_locator=source_locator,
+                        manifest_key=manifest_key,
+                        page=page_number,
+                    )
+                case ("search", (relative_pdf, query)):
+                    manifest_key = _manifest_key_for_path(
+                        research_manifest,
+                        relative_pdf,
+                    )
+                    pdf_path, source_locator = _resolve_library_pdf(
+                        library_root,
+                        relative_pdf,
+                        require_file=manifest_key is None,
+                    )
+                    if not pdf_path.is_file():
+                        if manifest_key is not None:
+                            await cache.delete(manifest_key)
+                        await cache.delete_by_source_locator(source_locator)
+                        if manifest_key is not None:
+                            raise KnowledgeError(
+                                "PDF no longer exists in the library"
+                            )
+                        raise KnowledgeError(
+                            "PDF not found in the authorized library"
+                        )
+                    payload = await _cached_or_fresh_search(
+                        cache,
+                        pdf_path=pdf_path,
+                        source_locator=source_locator,
+                        manifest_key=manifest_key,
+                        query=query,
+                    )
                 case _:
                     raise KnowledgeError(
-                        "usage: paper-cache status <relative-pdf> | "
-                        "paper-cache ensure <relative-pdf> | "
-                        "paper-cache page <relative-pdf> <page> | "
-                        "paper-cache search <relative-pdf> <query>"
+                        "usage: paper read <relative-pdf> <page> | "
+                        "paper search <relative-pdf> <query>"
                     )
         raw_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     except TimeoutError:
         exit_code = None
-        raw_text = f"paper-cache timed out after {_BROKER_TIMEOUT_SECONDS} seconds"
+        raw_text = (
+            f"paper read/search timed out after {_BROKER_TIMEOUT_SECONDS} seconds"
+        )
     except (PaperCopilotError, OSError, ValueError) as error:
         exit_code = 1
         raw_text = str(error)
@@ -794,36 +793,161 @@ async def _run_paper_cache_command(
 def _resolve_library_pdf(
     library_root: Path,
     relative_pdf: str,
+    *,
+    require_file: bool = True,
 ) -> tuple[Path, str]:
     locator = Path(relative_pdf)
     if locator.is_absolute() or ".." in locator.parts:
         raise KnowledgeError(
-            "paper-cache requires a PDF path relative to the authorized library"
+            "paper read/search requires a PDF path relative to the authorized library"
         )
     if locator.parts[:1] == ("library",):
         locator = Path(*locator.parts[1:])
     if not locator.parts:
-        raise KnowledgeError("paper-cache requires a PDF path")
+        raise KnowledgeError("paper read/search requires a PDF path")
     candidate = (library_root / locator).resolve()
     try:
         source_locator = candidate.relative_to(library_root).as_posix()
     except ValueError as error:
         raise KnowledgeError("PDF path resolves outside the authorized library") from error
-    if candidate.suffix.lower() != ".pdf" or not candidate.is_file():
-        raise KnowledgeError("paper-cache target must be an existing PDF")
+    if candidate.suffix.lower() != ".pdf":
+        raise KnowledgeError("paper read/search target must be an existing PDF")
+    if require_file and not candidate.is_file():
+        raise KnowledgeError("PDF not found in the authorized library")
     return candidate, source_locator
 
 
-def _cache_lookup_payload(lookup: PdfCacheLookup) -> dict[str, Any]:
-    payload = lookup.model_dump(mode="json", exclude_none=True)
-    if lookup.cache_ref is not None and lookup.manifest is not None:
-        payload["cache_path"] = (
-            "cache/"
-            f"{lookup.cache_ref.pdf_sha256}/"
-            f"{lookup.cache_ref.extractor_fingerprint}/revisions/"
-            f"{lookup.cache_ref.revision_id}/{lookup.manifest.artifact.filename}"
-        )
-    return payload
+def _manifest_key_for_path(
+    research_manifest: Path | None,
+    relative_pdf: str,
+) -> str | None:
+    if research_manifest is None:
+        return None
+    try:
+        lines = [
+            line
+            for line in research_manifest.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        if not lines:
+            return None
+        header = json.loads(lines[0])
+        if header.get("record_type") != "research_manifest":
+            return None
+        locator = _normalized_locator(relative_pdf)
+        for line in lines[1:]:
+            record = json.loads(line)
+            if record.get("record_type") != "paper":
+                continue
+            pdf_value = record.get("pdf")
+            if not isinstance(pdf_value, str):
+                continue
+            if _normalized_locator(pdf_value) != locator:
+                continue
+            paper_id = record.get("paper_id")
+            return paper_id if isinstance(paper_id, str) else None
+        return None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _normalized_locator(value: str) -> str:
+    path = Path(value)
+    if path.parts[:1] == ("library",):
+        path = Path(*path.parts[1:])
+    return path.as_posix()
+
+
+async def _cached_or_fresh_page(
+    cache: PdfTextCache,
+    *,
+    pdf_path: Path,
+    source_locator: str,
+    manifest_key: str | None,
+    page: int,
+) -> dict[str, Any]:
+    if manifest_key is not None:
+        old_lookup = await cache.lookup_by_sha(manifest_key)
+        if old_lookup.status == "hit" and old_lookup.cache_ref is not None:
+            current = await cache.status(pdf_path)
+            if (
+                current.status == "hit"
+                and current.cache_ref is not None
+                and current.cache_ref.pdf_sha256 == manifest_key
+            ):
+                cached_page = await cache.page(old_lookup.cache_ref, page=page)
+                return cached_page.model_dump(mode="json")
+            await cache.delete(manifest_key)
+            await cache.delete_by_source_locator(source_locator)
+    fresh = await cache.page_for_pdf(
+        pdf_path,
+        source_locator=source_locator,
+        page=page,
+    )
+    return fresh.model_dump(mode="json")
+
+
+async def _cached_or_fresh_search(
+    cache: PdfTextCache,
+    *,
+    pdf_path: Path,
+    source_locator: str,
+    manifest_key: str | None,
+    query: str,
+) -> dict[str, Any]:
+    if manifest_key is not None:
+        old_lookup = await cache.lookup_by_sha(manifest_key)
+        if old_lookup.status == "hit" and old_lookup.cache_ref is not None:
+            current = await cache.status(pdf_path)
+            if (
+                current.status == "hit"
+                and current.cache_ref is not None
+                and current.cache_ref.pdf_sha256 == manifest_key
+            ):
+                return await _search_cached(cache, old_lookup, query)
+            await cache.delete(manifest_key)
+            await cache.delete_by_source_locator(source_locator)
+    lookup = await cache.ensure(pdf_path, source_locator=source_locator)
+    if lookup.manifest is None or lookup.cache_ref is None:
+        raise KnowledgeError("paper cache could not be prepared")
+    current_lookup = await cache.status(pdf_path)
+    if (
+        current_lookup.cache_ref is None
+        or current_lookup.cache_ref.pdf_sha256 != lookup.cache_ref.pdf_sha256
+    ):
+        raise KnowledgeError("PDF content changed before the cached text was searched")
+    return await _search_cached(cache, lookup, query)
+
+
+async def _search_cached(
+    cache: PdfTextCache,
+    lookup: PdfCacheLookup,
+    query: str,
+) -> dict[str, Any]:
+    if lookup.manifest is None or lookup.cache_ref is None:
+        raise KnowledgeError("paper cache could not be prepared")
+    matches: list[dict[str, Any]] = []
+    needle = query.casefold()
+    for page_number in range(1, lookup.manifest.page_count + 1):
+        cached_page = await cache.page(lookup.cache_ref, page=page_number)
+        for line_number, line in enumerate(cached_page.text.splitlines(), start=1):
+            if needle in line.casefold():
+                matches.append(
+                    {
+                        "page": page_number,
+                        "line": line_number,
+                        "text": line[:500],
+                    }
+                )
+                if len(matches) >= 100:
+                    break
+        if len(matches) >= 100:
+            break
+    return {
+        "query": query,
+        "matches": matches,
+        "truncated": len(matches) >= 100,
+    }
 
 
 def _model_output(
