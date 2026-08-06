@@ -48,7 +48,7 @@ Paper Copilot 不再把 JSON schema 或页面证据当成默认的最终回答�
 ```yaml
 name: library_exec
 input:
-  cmd: paper-cache ensure <needed-pdf>
+  cmd: paper read <needed-pdf> <page>   # 或 paper search <needed-pdf> <query>
 output:
   exit_code: <integer>
   output: <bounded model-visible text>
@@ -162,7 +162,7 @@ lifecycle。
 完成条件：
 
 - 模型工具表面不含 `paper_set`；`library_exec` 仅接受占据整个命令的窄化
-  `paper-cache status/ensure/page` broker，不允许管道、循环、命令链或命令替换；
+  `paper read/search` 命令，不允许管道、循环、命令链或命令替换；
 - 文本只通过 `library_exec` 读取授权缓存，模型可见输出进入完整历史；
 - 只有成功的 `inspect_page` 产生结构化 observed-page fact；
 - recovery 可重建相同 ledger 和 active set；

@@ -39,8 +39,8 @@ Codex worktree：当前固定为 `/Users/a123/Documents/agent学习/codex`；Sli
   完整 PDF SHA-256；
 - `ingest_revision` 在当前无独立 v2 ingest store 的条件下等于原始 PDF SHA-256；
   `cache_ref` 单独保存 extractor fingerprint 和 revision ID；
-- create 只读取已有 cache revision；cache 不存在时明确要求先运行 `paper-cache ensure`，
-  不在 `paper_set` 内执行 PDF 提取；
+- create 只读取已有 cache revision；cache 不存在时由 `paper read/search` 首次访问
+  自动按需生成，不在 `paper_set` 内执行 PDF 提取；
 - derive 保存父集合、完整成员快照、被排除成员和排除原因，不修改父集合，也不继承父集合
   的 evidence coverage；
 - evidence ref 初版只接受 `[<pdf_sha256>:page[<page>]]`，并通过快照 cache artifact
@@ -55,7 +55,7 @@ Codex worktree：当前固定为 `/Users/a123/Documents/agent学习/codex`；Sli
 
 ## 4. Query 1 验收后的已知缺口
 
-简化重构后的冻结 Query 1 没有调用 `paper-cache page` 或 `inspect_page`，模型明确使用
+简化重构后的冻结 Query 1 没有调用 `paper read` 或 `inspect_page`，模型明确使用
 approximate pages，却仍通过 14 次 `record_evidence` 得到 14/14 coverage complete。
 现有 `_validate_evidence_ref` 会读取 cache page 以确认页码和 revision 可用，但不会证明
 该页内容已经作为 citation-grade evidence 返回给模型，也没有把 evidence 绑定到先前

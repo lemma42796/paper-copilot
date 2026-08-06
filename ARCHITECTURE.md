@@ -116,8 +116,8 @@ Skill 只指导研究流程，不授予权限。
 
 Runtime 在模型循环前只准备授权论文清单、页数、哈希和应用内 `citation_base`，不批量生成
 正文缓存。模型确定任务需要某篇论文后，通过占据整个 `library_exec` 命令的
-`paper-cache ensure <pdf>` 按需生成内容寻址 `layout.txt`；再用 `paper-cache page` 或返回的
-只读 cache path 搜索和读取。TXT 以换页符保留物理页定位，模型可见输出进入会话历史。详细契约见
+`paper read <pdf> <page>` / `paper search <pdf> <query>` 按需生成并读取内容寻址
+`layout.txt`；模型不接触缓存键、哈希或 revision。TXT 以换页符保留物理页定位，模型可见输出进入会话历史。详细契约见
 [library_exec_codex_source_mapping.md](docs/design/library_exec_codex_source_mapping.md)。
 
 `layout.txt` 是从 PDF 派生的搜索、普通正文读取和物理页定位层，不是 PDF 原文或

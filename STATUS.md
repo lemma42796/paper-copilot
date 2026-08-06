@@ -7,75 +7,99 @@
 
 ## 新会话从这里继续
 
-“无论文数据库 + 按需 TXT 缓存 + 可选本地公式 OCR”的缓存一致性（新增/查询/替换/删除
-PDF）已在客户端真机验证全部通过，删除逻辑现在会连外层空目录一起清掉。缓存已从模型
-可见面隐藏：模型只使用 `paper read/search`，哈希核对、删除与重建全部由 agent 工具层
-自动完成（SKILL v22）。剩余验证项：用新命令面在客户端重跑一遍、`recognize`/`accept`
-回填与跨会话命中、未请求论文不生成缓存、主客户端静态依赖与网络门控；`docs/design/`
-中仍引用旧 `paper-cache` 命令名，尚未同步。
+“无论文数据库 + 按需 TXT 缓存 + 可选本地公式 OCR”的仓库内验证项已全部完成：
+新命令面（`paper read/search`）缓存一致性客户端重跑 ALL PASS，未请求论文不生成缓存
+磁盘复核通过，工具暴露矩阵四场景复跑 PASS，主客户端静态依赖与网络门控代码级核查
+PASS，`paper read/search` 模型可见输出去哈希化并四轮复跑 ALL PASS，
+`docs/design/` 与 `ARCHITECTURE.md` 旧命令文案已同步。无剩余待办。
 
 ## 当前已实现与已验证
 
-### 按需缓存一致性（2026-08-06，客户端真机验证完成）
+### 新命令面缓存一致性客户端重跑（2026-08-06 完成）
 
-- 同一会话四轮（增/查/改/删）8 项断言全 PASS，模型为 deepseek-v4-flash：
-  - 增：新会话预检清单包含新增 PDF，清单键=PDF SHA-256；首次 `page` 读取按需生成
-    A 键缓存（revision 为新生成）。
-  - 查：第二轮再读同一页，命中同一 revision，revision 不变，缓存仍在。
-  - 改：同名不同内容 PDF（何子玲→张振宇）替换后，旧键 A 缓存被删、新键 B 缓存生成。
-  - 删：PDF 删除后读取报 “PDF no longer exists in the library”，B 键缓存被删。
-- 磁盘复核：运行期间只有 A/B 两个键目录变化，测试 PDF 已清理；删除后键内容清空。
-- 验证脚本 `/private/tmp/paper_copilot_cache_verify.py`（仓库外）：修过三个问题——
-  LLM 端点瞬时断连（加重试）、`max_papers=14` 导致清单只收录 14/50 篇（改 60）、
-  脚本检查路径把 `paper-cache` 重复拼接（修正）。
-- 四轮模型成本合计约 ¥0.038。
+- 同一会话四轮（增/查/改/删）12 项断言 ALL PASS，模型 deepseek-v4-flash
+  （api.deepseek.com），四轮成本合计约 ¥0.08；会话
+  `conversation-new-surface-20260806181858`。
+- 增：新会话清单包含测试 PDF，清单键=PDF SHA-256（A=`324a2128…`）；模型使用
+  `paper read`，首次读取按需生成 A 键 revision（`fbb65467…`）。
+- 查：第二轮重读命中同一 revision，revision 不变。
+- 改：同名不同内容替换后旧键 A 删除、新键 B（`ed3a3bc7…`）生成。
+- 删：删除后 `paper read` 报 “PDF no longer exists in the library”，B 键与外层
+  空目录删除。
+- 磁盘复核：全程只有 A/B 键变化，未请求论文零缓存生成；无旧键被清理。
+- 表面断言：整场会话无 `paper-cache` 命令被路由；world state 不出现 paper-cache。
+- 验证脚本 `/private/tmp/paper_copilot_new_surface_verify.py`（仓库外，未提交）。
 
-### 缓存表面去暴露（2026-08-06，已完成）
+### 模型可见输出去哈希化（2026-08-06 完成）
 
-- `library_exec` 模型可见命令改为 `paper read <pdf> <page>` / `paper search <pdf> <query>`；
-  `paper-cache ensure/status/page/search` 不再路由。
-- 错误文案去缓存化（删除后只报论文不存在，不再提 stale cache）；SKILL 升 v22。
-- `PdfTextCache._delete_key` 删除 `<sha>/<fingerprint>` 后，外层 `<sha>/` 为空时一并
-  `rmdir`（非空或并发写入时自动跳过）。
-- 直接工具层验证通过：read/search 正常、参数错误明确、旧命令失效、缓存后台照常生成。
-- 已知保留：公式 OCR `cache_slot` 标记仍模型可见（待单独决策）；工作区 `cache/` 目录
-  仍在但不再写入工具描述。
+- `paper read` 模型可见输出仅含 `page`/`text`；`paper search` 仅含
+  `query`/`matches`/`truncated`；不再出现 `cache_ref`、revision_id、paper_id 或
+  artifact_sha256。
+- 同一脚本四轮客户端重跑 ALL PASS（会话
+  `conversation-new-surface-20260806183148`，成本约 ¥0.054），含脱敏断言：每轮
+  read 输出字段集合严格等于 `{page, text}`。
+- 实现：`library_exec_tool.py` 新增 `_model_visible_page()`，在返回前剥离缓存身份
+  字段；search 输出原本就只有 query/matches/truncated。
+
+### 工具暴露矩阵复跑（2026-08-06 PASS）
+
+- 四场景注册表断言 + 客户端 world_state 交叉验证：
+  - text-only + 库 + helper → `recognize_formula` 暴露，`inspect_page` 不暴露；
+  - 无 helper → `recognize_formula` 不暴露；
+  - 有图模型 → `inspect_page` 暴露，`recognize_formula` 不暴露；
+  - 无库 → library 工具全部不暴露。
+
+### 主客户端静态依赖与网络门控（2026-08-06 代码级核查）
+
+- 主 `dependencies` 不含 Paddle；`paper_copilot.api.runtime` import 图不含
+  paddle/paddleocr/torch；已构建 App（`dist/macos/PaperCopilot.app`）内无 Paddle/
+  PP-FormulaNet 文件。Paddle 组件与权重仅存在于可选 helper 组件目录
+  （`~/Library/Application Support/Paper Copilot/optional-components/formula-ocr/…`）
+  与构建脚本产物中。
+- Swift 网络调用点仅两处：`PaperCopilotAPI` → 本地 runtime（127.0.0.1）；
+  `FormulaOCRManager.downloadAndInstall` → GitHub manifest/下载，仅由设置页
+  “下载本地公式 OCR…”按钮触发。悬浮、选模型、启动路径无网络调用；运行时 world
+  state `network=denied`，library sandbox 默认拒绝网络。
+
+### 缓存表面去暴露与旧命令面一致性（此前已完成）
+
+- `library_exec` 模型可见命令改为 `paper read/search`；`paper-cache …` 不再路由；
+  SKILL v22；`_delete_key` 会清理空外层目录。旧命令面四轮验证 ALL PASS 已随
+  `a97d700` 提交推送。
 
 ### 公式 OCR 与 Helper（此前已完成）
 
-- 公式定位逻辑改为几何裁剪（`_locate_numbered_formula`），单栏居中公式 OCR 乱码解决；
-  `recognize` 真实 Helper 验证返回干净 LaTeX；`accept` 与跨会话命中尚未在客户端执行。
-- Helper 构建（受限异常因果输出、pypdfium2 收集）、ad-hoc Release `formula-ocr-v1`
-  发布、App 内安装闭环、超时 45→120 秒均完成；正式发布仍需 Developer ID 签名与公证。
-- 工具暴露矩阵三场景此前 PASS；代码面变化后建议复跑。
+- 几何裁剪定位修复；客户端 recognize/accept 回填与跨会话命中已于 2026-08-05 验证
+  （会话 `conversation-20260805T133620-7d4e2c06c7` 等，accept 发布 revision
+  `dadd8d9d…`，后续会话直接命中 recognized 标记）。
+- 注意：该修复 revision 在 08-06 缓存一致性清理时随 `324a2128…` 键删除（测试 PDF
+  与真实论文同哈希），实时缓存中不再存在；机制已验证。
+- Helper v1.0.0 已安装（`active.json` schema_version=2）。
 
-## 下一步（按顺序）
+## 已知保留与决策点
 
-1. （可选）用新的 `paper read/search` 命令面在客户端重跑缓存一致性验证。
-2. 客户端完成真实乱码公式 `recognize`/`accept` 回填与跨会话命中。
-3. 验证未请求论文不生成缓存；复核工具暴露矩阵。
-4. 主客户端静态依赖检查（不含 Paddle 组件/权重）与 UI 网络门控验证。
-5. 同步 `docs/design/` 中旧 `paper-cache` 文案；如需再把 `cache_slot` 语义化。
+- `cache_slot` 标记保持模型可见（OCR 定位必需），未改动。
+
+## 下一步
+
+无剩余待办（仓库内验证与文档同步均已收口）。
 
 ## 验证边界与剩余风险
 
-- `accept` 回填、跨会话命中、Swift 构建、pytest/Ruff/mypy、静态依赖与网络门控尚未验证。
+- 本次未运行 Swift 构建、pytest、Ruff 或 mypy（未请求）；网络门控为代码级核查，
+  未做 GUI 级抓包复测。
 - 原 PDF 始终是公式权威证据；`accept` 只授权写派生 TXT，不等于公式数学正确。
-- 开发构建使用 ad-hoc 签名，不等同于 Developer ID 签名、公证或发布验证。
 
 ## 工作树事实
 
-- 当前分支 `main`；未提交改动（本次将提交并推送）：
-  - `src/paper_copilot/shared/pdf_cache.py`（删除清空外层目录、按需缓存相关）
-  - `src/paper_copilot/agents/library_exec_tool.py`（`paper read/search` 命令面）
-  - `src/paper_copilot/agents/paper_copilot.py`、`chat/jobs.py`、`chat/runtime.py`
-    （新会话预检与会话内复用清单）
-  - `src/paper_copilot/agents/skills/research-papers/SKILL.md`（v22）
-  - `src/paper_copilot/agents/paper_set_tool.py`、`mcp/server.py`（文案）
-  - `src/paper_copilot/agents/formula_ocr_tool.py`（公式定位逻辑）
-  - `TASKS.md` / `STATUS.md`（本文档）
-- 验证脚本 `/private/tmp/paper_copilot_cache_verify.py` 在仓库外，未提交。
-- 未运行 Swift 构建、pytest、Ruff 或 mypy。
+- 当前分支 `main`；本次提交推送包含：
+  - `ARCHITECTURE.md` 与 `docs/design/` 4 个文件：旧 `paper-cache` 文案 →
+    `paper read/search`；
+  - `src/paper_copilot/agents/library_exec_tool.py`：`paper read` 模型可见输出剥离
+    缓存身份字段（只返回 `page`/`text`）；
+  - `STATUS.md` / `TASKS.md`：本文档。
+- 验证脚本 `/private/tmp/paper_copilot_new_surface_verify.py` 在仓库外，未提交；
+  旧脚本 `/private/tmp/paper_copilot_cache_verify.py` 已不存在（已清理）。
 
 关键入口：
 

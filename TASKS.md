@@ -29,15 +29,23 @@
 - 只有任务确实需要理解或引用某个乱码公式时才调用 `recognize_formula`，不得仅因发现乱码
   就识别；`recognize` 只返回候选，模型检查后调用 `accept` 才把 LaTeX 写入新 revision、
   原子发布为 current，并自动删除同一缓存键下的旧 revision。
-- [ ] 下一步：在客户端完成真实乱码公式 `recognize`/`accept` 回填与跨会话命中
-  （`recognize` 已用真实 Helper 直接调用验证干净候选；`accept` 与跨会话尚未在客户端
-  执行），并用新的 `paper read/search` 命令面在客户端重跑按需缓存一致性；随后验证
-  未请求论文不生成缓存、主客户端无 Paddle 静态检查与未点击下载无网络行为；同步
-  `docs/design/` 中仍引用旧 `paper-cache` 命令名的文档。
+- 已完成：`paper read/search` 模型可见输出已去哈希化（`paper read` 只返回
+  `page`/`text`，`paper search` 只返回 `query`/`matches`/`truncated`，不再含
+  `cache_ref`、revision_id、paper_id 或 artifact_sha256）；客户端一致性四轮重跑
+  ALL PASS（2026-08-06，deepseek-v4-flash，会话
+  `conversation-new-surface-20260806183148`，成本约 ¥0.054）。
 - 已完成：Helper 重建（含受限异常因果输出与 pypdfium2 收集）、真实论文公式推理、
   ad-hoc Release `formula-ocr-v1` 发布、App 内安装与模型复用闭环、工具超时 45 → 120 秒。
   公式定位逻辑修复（`_locate_numbered_formula` 几何裁剪，单栏居中公式 OCR 乱码问题
-  解决，recognize 直接调用验证干净 LaTeX）；工具暴露矩阵 PASS；按需缓存一致性
-  （新增/查询/替换/删除 PDF）客户端真机验证 ALL PASS，删除会连外层空目录一起清掉；
-  缓存从模型可见面隐藏（`paper read/search`，SKILL v22）。正式发布仍需 Developer ID
-  签名与公证。
+  解决，recognize 直接调用验证干净 LaTeX）；客户端真实乱码公式 `recognize`/`accept`
+  回填与跨会话命中（2026-08-05：accept 成功发布修复 revision，后续会话直接命中
+  recognized 标记不再 OCR；该修复随后随缓存一致性清理删除，机制已验证）；工具暴露
+  矩阵四场景复跑 PASS；按需缓存一致性（新增/查询/替换/删除 PDF）客户端真机验证
+  ALL PASS，删除会连外层空目录一起清掉；缓存从模型可见面隐藏
+  （`paper read/search`，SKILL v22）；新命令面客户端一致性重跑 ALL PASS
+  （2026-08-06，deepseek-v4-flash，会话 `conversation-new-surface-20260806181858`，
+  四轮成本约 ¥0.08，含未请求论文不生成缓存磁盘复核）；主客户端静态依赖与网络门控
+  核查 PASS（import 图无 paddle、打包 App 无 Paddle 文件；联网仅限设置下载按钮，
+  运行时 `network=denied`）；`docs/design/` 与 `ARCHITECTURE.md` 中旧 `paper-cache`
+  文案已同步为 `paper read/search`；模型可见 read/search 输出去哈希化并四轮复跑
+  ALL PASS（2026-08-06，会话 `conversation-new-surface-20260806183148`，约 ¥0.054）。

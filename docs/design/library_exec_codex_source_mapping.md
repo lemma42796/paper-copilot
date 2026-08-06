@@ -27,7 +27,7 @@ Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地�
 | sandbox 选择 | `sandboxing/src/manager.rs` | `SandboxManager` 根据文件系统、网络策略和平台选择 sandbox，再把声明式权限转换为平台命令 | 直接采用 | handler 不直接拥有安全规则；先构造声明式策略，再由 macOS renderer 生成 Seatbelt 命令 |
 | macOS sandbox | `sandboxing/src/seatbelt.rs` | 基础策略 + readable roots + writable roots + network policy，最终包装 `/usr/bin/sandbox-exec` | 直接采用 + 必要适配 | readable roots 为 library/cache；writable root 仅 scratch；网络 restricted |
 | 权限审批 | `tools/runtimes/shell.rs` | canonical command、cwd、sandbox permissions 和 additional permissions 共同组成 approval key；策略允许时可审批或升级 | 必要适配 | `library_exec` 不开放额外权限，也不在 sandbox 失败后升级；用户可见写操作继续由 `library_edit` 承担 |
-| 特殊命令拦截 | `unified_exec/exec_command.rs` 中的 `intercept_apply_patch` | 命令解析后、通用进程启动前，把一个窄化命令交给专用 handler | 直接采用 + Codex 缺失 | `paper-cache` 采用相同拦截位置和失败语义，仅接受占据整个 `cmd` 的直接命令；复合使用明确拒绝，具体缓存操作是论文领域专用能力 |
+| 特殊命令拦截 | `unified_exec/exec_command.rs` 中的 `intercept_apply_patch` | 命令解析后、通用进程启动前，把一个窄化命令交给专用 handler | 直接采用 + Codex 缺失 | `paper read/search` 采用相同拦截位置和失败语义，仅接受占据整个 `cmd` 的直接命令；复合使用明确拒绝，缓存操作由专用 broker 内部完成 |
 | 进程生命周期 | `unified_exec/process_manager.rs` | 分配 process id、启动、yield、取消、退出 watcher、并发上限和持续进程存储 | 必要适配 | Slice 2 仅实现一次性有界进程、取消和进程组终止；不实现 PTY、yield session 或 `write_stdin` |
 | 执行时限 | `tools/runtimes/shell.rs`、`unified_exec/process_manager.rs` | request 携带 expiration/cancellation；长进程可 yield 后继续 | 必要适配 | 因不提供持续进程，`timeout_ms` 作为硬 deadline，超时终止整个进程组 |
 | 原始输出上限 | `unified_exec/head_tail_buffer.rs` | 固定容量保存 head 和 tail，丢弃中间内容并记录 omitted bytes | 直接采用 | 替换当前只保留开头的 stdout/stderr capture，采用对称 head-tail 和明确 omission marker |
@@ -47,7 +47,7 @@ Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地�
 - 固定论文授权根；
 - macOS Seatbelt、无网络和仅 scratch 可写；
 - deadline 后终止进程组；
-- `paper-cache` 作为窄化内部 broker；
+- `paper read/search` 作为窄化内部 broker；
 - Runtime 控制的 `rg`/`pdfinfo` 调用级命令目录；`pdftotext` 只由缓存生成器内部调用，
   不再暴露给模型命令环境；
 - tool input/result 写入现有 session 和 trace。
@@ -60,7 +60,7 @@ Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地�
    `completed/failed` 状态作为主要协议；
 4. `command_ref` 和 sandbox identity 移入权威 trace，不作为模型工具返回字段；
 5. 把 handler 内手写安全规则拆成声明式 filesystem/network policy 和 macOS renderer；
-6. `paper-cache` 在命令完成 shell resolution 后拦截，参照 `intercept_apply_patch`，
+6. `paper read/search` 在命令完成 shell resolution 后拦截，参照 `intercept_apply_patch`，
    只接受占据整个命令的直接调用；复合使用明确拒绝，不在入口处用独立解析路径抢先执行；
 7. 环境策略补齐 Codex 的非交互输出约束。
 8. 补齐 Codex restricted platform defaults 中用于获取 cwd 的根目录项读取规则；
@@ -75,7 +75,7 @@ Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地�
 - Slice 2 不实现 `yield_time_ms`、持续 session 和 `write_stdin`；该历史限制已由 E3
   conversation 级环境取代；
 - 不开放 sandbox/additional permissions，也不在 sandbox 失败后升级；
-- 保留 Paper Copilot 专用 `paper-cache` broker；
+- 保留 Paper Copilot 专用 `paper read/search` broker；
 - Slice 2 保留一次性命令的硬 `timeout_ms`；E3 改为 bounded `yield_time_ms`，整体
   deadline 继续由 Agent/job Runtime 强制；
 - 当前额外 CPU/file-size `limit` wrapper 是 Codex unified exec 中没有的设计，作为
@@ -127,7 +127,8 @@ Codex 没有 Paper Copilot 的论文授权、内容寻址 cache 和应用内引�
 
 - Runtime 为本次已准备论文生成内容寻址、不可变的 JSONL manifest；
 - Runtime 启动阶段只写授权 PDF inventory，不执行 cache ensure；模型确定需要某篇论文后，
-  使用占据整个命令的 `paper-cache ensure <pdf>` 生成内容寻址 `layout.txt`；
+  使用占据整个命令的 `paper read <pdf> <page>` / `paper search <pdf> <query>` 自动
+  按需生成内容寻址 `layout.txt`；
 - 模型通过 `research-manifests/current.jsonl` 按需发现当前 manifest，并在同一环境中
   使用短文本路径；
 - `python3` 仅作为既有受控 `python` 的命令别名，不增加解释器、第三方包、网络或写权限；

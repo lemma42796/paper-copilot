@@ -711,12 +711,14 @@ async def _run_paper_read_command(
                         raise KnowledgeError(
                             "PDF not found in the authorized library"
                         )
-                    payload = await _cached_or_fresh_page(
-                        cache,
-                        pdf_path=pdf_path,
-                        source_locator=source_locator,
-                        manifest_key=manifest_key,
-                        page=page_number,
+                    payload = _model_visible_page(
+                        await _cached_or_fresh_page(
+                            cache,
+                            pdf_path=pdf_path,
+                            source_locator=source_locator,
+                            manifest_key=manifest_key,
+                            page=page_number,
+                        )
                     )
                 case ("search", (relative_pdf, query)):
                     manifest_key = _manifest_key_for_path(
@@ -849,6 +851,11 @@ def _manifest_key_for_path(
         return None
     except (OSError, ValueError, TypeError):
         return None
+
+
+def _model_visible_page(payload: dict[str, Any]) -> dict[str, Any]:
+    """Strip cache identity fields (hashes, revision) from the model-visible read output."""
+    return {"page": payload["page"], "text": payload["text"]}
 
 
 def _normalized_locator(value: str) -> str:
