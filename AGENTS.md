@@ -119,6 +119,29 @@ definition-of-done items.
   execution, network access, or external side effects require an approved
   capability and authorization boundary.
 
+## Experiment artifact placement
+
+Keep each new experiment's protocol and frozen scoring artifacts in the public
+repo and its raw evidence/scoring in the private eval root:
+
+- Public `eval/experiments/<name>/`: frozen rubric, runner/config scripts,
+  protocol patches, and an `experiment.md` entry. Do not store labels, raw
+  answers, credentials, or private run artifacts here.
+- Private
+  `/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/<name>/`:
+  the current `experiment.md` and `scores.yaml` entry, a `raw/` directory of
+  symlinks into the original `runs/` trees, and one self-contained audit
+  package under `_audit/<bundle>/` per scoring round.
+- Never move, rewrite, or delete original run artifacts; `runs/` and `raw/`
+  symlinks stay append-only.
+- Each audit package contains its own `experiment.md`, `scores.yaml`,
+  `scorecards/`, and a `run` symlink to the raw run directory.
+- Keep official blind scores separate from non-blind diagnostic scores in
+  `scores.yaml`; label each entry's status and audit path explicitly.
+- Add one entry per experiment and per latest run audit to
+  `docs/design/experiment_index.md`; the index holds entry points only, not
+  scores or conclusions.
+
 ## LLM and evaluation
 
 - Every model call goes through `agents/llm_client.py`.

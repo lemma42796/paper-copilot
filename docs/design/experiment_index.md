@@ -23,3 +23,9 @@
 
 这里的每个实验与仓库目录同名，包含 `experiment.md` 快照和 `raw/`。为避免破坏历史证据
 引用，`raw/` 当前通过符号链接指向原有 `runs/` 产物；原始目录未移动或删除。
+
+## Latest run audits (private)
+
+- Codex vs Paper Copilot with DeepSeek V4 Flash — 2026-08-06 PC 当前 Query 1–4 非盲
+  单系统运行审计入口：
+  `/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-vs-pc-v4flash/_audit/query1-4-pc-v4flash-current-max-v1/experiment.md`
