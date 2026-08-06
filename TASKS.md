@@ -6,9 +6,30 @@
 > 当前接力状态见 [STATUS.md](STATUS.md)，当前架构见
 > [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-更新于 2026-08-06。
+更新于 2026-08-07。
 
 ## 未完成任务
+
+### Agent 循环相似重复调用防护
+
+- 现状：`agents/loop.py` 只在连续 3 次 **完全相同** 的（工具名、输入）时触发
+  `ToolLoopError`；输入稍有变化即绕过。
+- 证据：2026-08-06/07 AlexNet 公式讲解运行（
+  `tmp/formula-fill-check/run-20260806T155312Z/`），模型用 50+ 轮相似但不同
+  的 shell/python 命令手工解析 PDF 字节，绕开 `paper read` 与
+  `recognize_formula`，防护一次未触发，被人工终止。
+- 目标：对相似/无效重复行为建立防护（如归一化输入相似度、同类命令模式、
+  无进展检测），及时打断浪费循环。不新增外部依赖。
+
+### 优化 research Skill：精简且指令准确
+
+- 问题：模型遇到乱码公式时绕开指定路径（`paper read` +
+  `recognize_formula`/`accept`），转而手写 PDF 解析脚本；现有 Skill 对
+  乱码处理与禁止手工解析 PDF 的约束不够明确。
+- 目标：精简 SKILL.md、指令准确：正文读取走 `paper read/search`，乱码公式
+  必须 `recognize_formula` → 核对 → `accept`，禁止手工解析 PDF 字节。
+- 验证：重跑 AlexNet 公式讲解任务，确认模型走 recognize/accept 管线并填满
+  缓存槽位。
 
 ### 按需论文缓存与可选本地公式 OCR
 

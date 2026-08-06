@@ -11,6 +11,7 @@ import sys
 import sysconfig
 import tempfile
 import time
+import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -926,6 +927,31 @@ async def _cached_or_fresh_search(
     return await _search_cached(cache, lookup, query)
 
 
+def _search_needle(query: str) -> tuple[str, str]:
+    """Build (spaced, whitespace-stripped) NFKC-casefold needles.
+
+    PDF text layers in CJK-heavy corpora frequently encode Latin terms as
+    full-width characters and insert justification gaps, so ASCII queries
+    must be compared against NFKC-normalized text.
+    """
+    normalized = unicodedata.normalize("NFKC", query.casefold())
+    spaced = " ".join(normalized.split())
+    if not spaced:
+        raise KnowledgeError("paper search query is empty after normalization")
+    return spaced, "".join(normalized.split())
+
+
+def _line_matches(line: str, needle: tuple[str, str]) -> bool:
+    spaced_needle, stripped_needle = needle
+    normalized = unicodedata.normalize("NFKC", line.casefold())
+    if spaced_needle in " ".join(normalized.split()):
+        return True
+    # Fall back to whitespace-free matching for justified text where gaps
+    # split glyphs (e.g. "M a r k e t"); accept word-boundary overruns as
+    # the lesser risk versus missing evidence entirely.
+    return stripped_needle in "".join(normalized.split())
+
+
 async def _search_cached(
     cache: PdfTextCache,
     lookup: PdfCacheLookup,
@@ -934,11 +960,11 @@ async def _search_cached(
     if lookup.manifest is None or lookup.cache_ref is None:
         raise KnowledgeError("paper cache could not be prepared")
     matches: list[dict[str, Any]] = []
-    needle = query.casefold()
+    needle = _search_needle(query)
     for page_number in range(1, lookup.manifest.page_count + 1):
         cached_page = await cache.page(lookup.cache_ref, page=page_number)
         for line_number, line in enumerate(cached_page.text.splitlines(), start=1):
-            if needle in line.casefold():
+            if _line_matches(line, needle):
                 matches.append(
                     {
                         "page": page_number,
