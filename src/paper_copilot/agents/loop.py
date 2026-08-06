@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
@@ -218,6 +220,14 @@ _log = get_logger(__name__)
 # ---- Config --------------------------------------------------------------
 
 
+# A normalized signature must appear this many times inside the sliding
+# window before the similar-call guard fires; the first
+# _SIMILAR_INTERVENTION_LIMIT fires inject a corrective tool result, later
+# fires escalate to ToolLoopError.
+_SIMILAR_REPEAT_THRESHOLD = 4
+_SIMILAR_INTERVENTION_LIMIT = 2
+
+
 @dataclass(frozen=True, slots=True)
 class LoopConfig:
     max_budget_cny: float
@@ -228,6 +238,7 @@ class LoopConfig:
     compacted_target_tokens: int | None = None
     emergency_compact_tokens: int | None = None
     max_consecutive_identical_tool_calls: int | None = 3
+    similar_tool_call_window: int | None = 8
     tool_timeout_seconds: float | None = 600.0
 
 
@@ -287,6 +298,12 @@ async def run_agent_loop(
     last_request_history_tokens: int | None = None
     previous_tool_signature: str | None = None
     consecutive_identical_tool_calls = 0
+    # Sliding window of normalized signatures for the similar-call guard;
+    # maxlen must stay >= 1 even when the guard is disabled.
+    similar_signatures: deque[str] = deque(
+        maxlen=max(config.similar_tool_call_window or 0, 1)
+    )
+    similar_guard_interventions = 0
     stop_hook_active = False
     prompt_sha256 = compute_prompt_sha256(
         system=system,
@@ -480,6 +497,37 @@ async def run_agent_loop(
                     and consecutive_identical_tool_calls >= repeat_limit
                     else None
                 )
+                similar_guard_error: ToolLoopError | None = None
+                similar_intervention: str | None = None
+                if (
+                    loop_error is None
+                    and config.similar_tool_call_window is not None
+                ):
+                    normalized_signature = _normalized_tool_signature(block)
+                    similar_occurrences = similar_signatures.count(
+                        normalized_signature
+                    )
+                    similar_signatures.append(normalized_signature)
+                    if similar_occurrences + 1 >= _SIMILAR_REPEAT_THRESHOLD:
+                        if similar_guard_interventions >= _SIMILAR_INTERVENTION_LIMIT:
+                            similar_guard_error = ToolLoopError(
+                                "tool loop blocked before dispatch: "
+                                f"{block.name} repeated similar calls after "
+                                f"{similar_guard_interventions} interventions"
+                            )
+                        else:
+                            similar_guard_interventions += 1
+                            similar_intervention = (
+                                "Blocked: your recent calls to "
+                                f"'{block.name}' repeat the same approach with "
+                                "only superficial changes and no progress. Do "
+                                "not retry variations of this call; switch to a "
+                                "different approach or finish with what you "
+                                "have. Further repetition will end the run."
+                            )
+                blocked_error = (
+                    loop_error if loop_error is not None else similar_guard_error
+                )
                 yield ToolUse(id=block.id, name=block.name, input=block.input)
                 recorder = current_recorder()
                 trace = (
@@ -499,21 +547,42 @@ async def run_agent_loop(
                 )
                 result: ToolResultData | None = None
                 with trace as operation:
-                    if loop_error is not None:
+                    if blocked_error is not None:
+                        if operation is not None:
+                            guard_attributes: dict[str, Any] = (
+                                {
+                                    "guard": "repeated_tool_call",
+                                    "repeat_count": consecutive_identical_tool_calls,
+                                    "repeat_limit": repeat_limit,
+                                }
+                                if loop_error is not None
+                                else {
+                                    "guard": "similar_tool_call",
+                                    "intervention_count": similar_guard_interventions,
+                                }
+                            )
+                            operation.set_result(
+                                status="aborted",
+                                output_payload={
+                                    "output": str(blocked_error),
+                                    "is_error": True,
+                                },
+                                attributes=guard_attributes,
+                                error_type=blocked_error.__class__.__name__,
+                                error_message=str(blocked_error),
+                            )
+                    elif similar_intervention is not None:
                         if operation is not None:
                             operation.set_result(
                                 status="aborted",
                                 output_payload={
-                                    "output": str(loop_error),
+                                    "output": similar_intervention,
                                     "is_error": True,
                                 },
                                 attributes={
-                                    "guard": "repeated_tool_call",
-                                    "repeat_count": consecutive_identical_tool_calls,
-                                    "repeat_limit": repeat_limit,
+                                    "guard": "similar_tool_call",
+                                    "intervention_count": similar_guard_interventions,
                                 },
-                                error_type=loop_error.__class__.__name__,
-                                error_message=str(loop_error),
                             )
                     else:
                         request = ToolUseRequest(
@@ -553,15 +622,50 @@ async def run_agent_loop(
                                 **result.trace_attributes,
                             },
                         )
-                if loop_error is not None:
-                    _log.error(
-                        "agent.repeated_tool_call_blocked",
+                if blocked_error is not None:
+                    if loop_error is not None:
+                        _log.error(
+                            "agent.repeated_tool_call_blocked",
+                            agent=agent_name,
+                            tool_name=block.name,
+                            repeat_count=consecutive_identical_tool_calls,
+                            repeat_limit=repeat_limit,
+                        )
+                    else:
+                        _log.error(
+                            "agent.similar_tool_call_blocked",
+                            agent=agent_name,
+                            tool_name=block.name,
+                            intervention_count=similar_guard_interventions,
+                        )
+                    raise blocked_error
+                if similar_intervention is not None:
+                    _log.warning(
+                        "agent.similar_tool_call_intervention",
                         agent=agent_name,
                         tool_name=block.name,
-                        repeat_count=consecutive_identical_tool_calls,
-                        repeat_limit=repeat_limit,
+                        intervention_count=similar_guard_interventions,
                     )
-                    raise loop_error
+                    if store is not None:
+                        store.append_tool_result(
+                            block.id,
+                            similar_intervention,
+                            True,
+                        )
+                    yield ToolResult(
+                        id=block.id,
+                        output=similar_intervention,
+                        is_error=True,
+                    )
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": similar_intervention,
+                            "is_error": True,
+                        }
+                    )
+                    continue
                 assert result is not None
                 if store is not None:
                     store.append_tool_result(block.id, result.output, result.is_error)
@@ -650,3 +754,18 @@ def _tool_call_signature(block: ToolUseBlock) -> str:
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def _normalized_tool_signature(block: ToolUseBlock) -> str:
+    """Signature tolerant of superficial input changes.
+
+    Masks hex values, decimals, and numbers embedded in structure (e.g.
+    `skip=2`, ranges like `40,120p`) while keeping bare trailing integers
+    such as page numbers, so legitimately different bounded reads stay
+    distinct but retrying the same tactic with new offsets collapses to
+    one signature. Whitespace is folded; bounded to keep the window cheap.
+    """
+    raw = _tool_call_signature(block)
+    masked = re.sub(r"0[xX][0-9a-fA-F]+|\d+\.\d+|\d+(?!\\?\"[,}]|$)", "#", raw)
+    masked = re.sub(r"\s+", " ", masked)
+    return masked[:512]

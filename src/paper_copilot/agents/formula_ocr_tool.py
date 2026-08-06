@@ -18,12 +18,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from paper_copilot.agents.inspect_page_tool import (
     InspectPageRegion,
     _page_count,
+    _png_dimensions,
     _render_page,
     _resolve_paper_path,
     _resolve_poppler_executable,
     _sha256_file,
 )
-from paper_copilot.shared.errors import KnowledgeError
+from paper_copilot.shared.errors import KnowledgeError, PdfCacheError
 from paper_copilot.shared.pdf_cache import PdfTextCache
 
 __all__ = [
@@ -38,6 +39,12 @@ _COMPONENT_SCHEMA_VERSION = 2
 _TOOL_SCHEMA_VERSION = 1
 _HELPER_TIMEOUT_SECONDS = 120.0
 _MAX_HELPER_OUTPUT_BYTES = 64_000
+# Slot crops are rendered large enough for the recognizer to keep limits and
+# scripts; the cap bounds the intermediate full-page render.
+_FORMULA_BASE_RENDER_DIMENSION = 1_800
+_FORMULA_MAX_RENDER_DIMENSION = 3_600
+_FORMULA_MIN_CROP_WIDTH = 700
+_FORMULA_MIN_CROP_HEIGHT = 180
 _DEFAULT_COMPONENT_ROOT = (
     Path.home()
     / "Library"
@@ -75,14 +82,15 @@ class FormulaOCRInput(BaseModel):
         max_length=32,
         description=(
             "Printed equation label without parentheses, for example '3'. "
-            "Use this for numbered display equations when no region is known."
+            "Use this for numbered display equations that have no cache slot "
+            "and no known region."
         ),
     )
     region: InspectPageRegion | None = Field(
         default=None,
         description=(
-            "Optional normalized formula crop. Use this when exact page coordinates "
-            "are already known."
+            "Optional normalized formula crop. Only needed to override a stored "
+            "slot crop or for formulas without a cache slot."
         ),
     )
     purpose: str | None = Field(
@@ -96,21 +104,36 @@ class FormulaOCRInput(BaseModel):
         pattern=r"^page-[0-9]{4}-formula-[0-9]{4}$",
         description=(
             "Stable cache_slot shown beside a garbled formula in layout.txt. "
-            "Provide it during recognize so a later accept can replace that exact "
-            "location."
+            "Recognize with only the slot when possible: the Runtime crops the "
+            "stored formula coordinates automatically. Provide it during "
+            "recognize so a later accept can replace that exact location."
         ),
     )
     candidate_id: str | None = Field(
         default=None,
         pattern=r"^formula-candidate-[0-9a-f]{32}$",
-        description="Candidate ID returned by recognize and required by accept.",
+        description=(
+            "Candidate ID returned by recognize and required by accept. "
+            "Accept uses only this ID; any locator fields repeated alongside "
+            "it are ignored."
+        ),
     )
 
     @model_validator(mode="after")
     def _operation_arguments_match(self) -> FormulaOCRInput:
         if self.operation == "recognize":
-            if (self.equation_label is None) == (self.region is None):
-                raise ValueError("recognize requires exactly one of equation_label or region")
+            if self.equation_label is not None and self.region is not None:
+                raise ValueError(
+                    "recognize accepts at most one of equation_label or region"
+                )
+            if (
+                self.equation_label is None
+                and self.region is None
+                and self.cache_slot is None
+            ):
+                raise ValueError(
+                    "recognize requires equation_label, region, or cache_slot"
+                )
             if self.purpose is None:
                 raise ValueError("recognize requires purpose")
             if self.candidate_id is not None:
@@ -118,10 +141,9 @@ class FormulaOCRInput(BaseModel):
             return self
         if self.candidate_id is None:
             raise ValueError("accept requires candidate_id")
-        if self.equation_label is not None or self.region is not None:
-            raise ValueError("accept does not accept equation_label or region")
-        if self.cache_slot is not None or self.purpose is not None:
-            raise ValueError("accept uses the cache_slot and purpose frozen in the candidate")
+        # Accept silently ignores repeated locator fields: models commonly echo
+        # cache_slot/purpose/region back, and the frozen candidate remains the
+        # only trust anchor for what gets published.
         return self
 
 
@@ -157,8 +179,9 @@ def formula_ocr_tool_description() -> str:
         "specific formula, that formula is corrupted or flattened in extracted PDF "
         "text, and the configured language model cannot inspect images. Do not call "
         "this tool merely because unrelated garbled text or formula slots exist. Identify "
-        "the exact physical page first, then provide either a printed equation label "
-        "or a normalized formula region. recognize returns a candidate without "
+        "the exact physical page first, then provide the cache_slot shown beside "
+        "the garbled formula (preferred; the crop is automatic), or a printed "
+        "equation label, or a normalized formula region. recognize returns a candidate without "
         "changing the cache. Inspect its LaTeX; only when it is acceptable call this "
         "tool again with operation=accept and candidate_id. If layout.txt showed a "
         "cache_slot, accept atomically publishes the TXT cache with the LaTeX replacing "
@@ -196,16 +219,35 @@ async def run_formula_ocr(
             f"page {args.page} is outside the PDF page range 1-{page_count}"
         )
     pdf_sha256 = await asyncio.to_thread(_sha256_file, pdf_path)
-    region = args.region or await asyncio.to_thread(
-        _locate_numbered_formula,
-        pdf_path,
-        args.page,
-        args.equation_label,
-    )
+    region: InspectPageRegion | None = args.region
+    region_source = "provided"
+    if region is None and args.cache_slot is not None:
+        slot_bbox = await _lookup_slot_bbox(
+            pdf_sha256,
+            page=args.page,
+            cache_slot=args.cache_slot,
+            cache_root=cache_root,
+        )
+        if slot_bbox is not None:
+            region = InspectPageRegion(**slot_bbox)
+            region_source = "cache_slot_bbox"
+    if region is None:
+        if args.equation_label is None:
+            raise KnowledgeError(
+                f"cache slot {args.cache_slot} has no stored crop coordinates in "
+                "the text cache; pass region or equation_label instead"
+            )
+        region = await asyncio.to_thread(
+            _locate_numbered_formula,
+            pdf_path,
+            args.page,
+            args.equation_label,
+        )
+        region_source = "equation_label"
     started = time.monotonic()
     pdftoppm_path = _resolve_poppler_executable("pdftoppm")
     with tempfile.TemporaryDirectory(prefix="paper-copilot-formula-ocr-") as raw_dir:
-        render_path = await _render_page(
+        render_path = await _render_formula_crop(
             pdftoppm_path,
             pdf_path,
             page=args.page,
@@ -258,6 +300,7 @@ async def run_formula_ocr(
         "candidate_id": candidate_id,
         "paper_id": args.paper_id,
         "page": args.page,
+        "region_source": region_source,
         "purpose": args.purpose,
         "equation_label": args.equation_label,
         "region": region_payload,
@@ -282,6 +325,7 @@ async def run_formula_ocr(
             "pdf_sha256": pdf_sha256,
             "page": args.page,
             "region": region_payload,
+            "region_source": region_source,
             "equation_label": args.equation_label,
             "render_sha256": render_sha256,
             "formula_ocr_model": model_name,
@@ -401,6 +445,75 @@ def _resolve_library_root(library_root: Path | None) -> Path:
     if not root.is_dir():
         raise KnowledgeError("configured PDF library is not available")
     return root
+
+
+async def _lookup_slot_bbox(
+    pdf_sha256: str,
+    *,
+    page: int,
+    cache_slot: str,
+    cache_root: Path | None,
+) -> dict[str, float] | None:
+    """Return the stored slot crop, or None when unavailable.
+
+    A missing cache or unreadable revision degrades to the explicit-locator
+    path instead of failing recognition outright.
+    """
+    if cache_root is None:
+        return None
+    cache = PdfTextCache(cache_root.expanduser().resolve())
+    try:
+        return await cache.slot_bbox(pdf_sha256, page=page, cache_slot=cache_slot)
+    except PdfCacheError:
+        return None
+
+
+async def _render_formula_crop(
+    pdftoppm_path: Path,
+    pdf_path: Path,
+    *,
+    page: int,
+    region: InspectPageRegion,
+    render_dir: Path,
+) -> Path:
+    """Render the region, upscaling the page until the crop is OCR-friendly.
+
+    Display formulas occupy a thin band of a full-page render; at the base
+    scale their scripts and operator limits blur below the recognizer's
+    threshold, so the page is re-rendered larger when the crop is too small.
+    """
+    full_path = await _render_page(
+        pdftoppm_path,
+        pdf_path,
+        page=page,
+        region=None,
+        render_dir=render_dir,
+        scale_to=_FORMULA_BASE_RENDER_DIMENSION,
+    )
+    full_bytes = await asyncio.to_thread(full_path.read_bytes)
+    width, height = _png_dimensions(
+        full_bytes,
+        max_dimension=_FORMULA_BASE_RENDER_DIMENSION,
+    )
+    crop_width = (region.x2 - region.x1) * width
+    crop_height = (region.y2 - region.y1) * height
+    factor = max(
+        1.0,
+        _FORMULA_MIN_CROP_WIDTH / max(crop_width, 1.0),
+        _FORMULA_MIN_CROP_HEIGHT / max(crop_height, 1.0),
+    )
+    scale = min(
+        int(_FORMULA_BASE_RENDER_DIMENSION * factor + 0.5),
+        _FORMULA_MAX_RENDER_DIMENSION,
+    )
+    return await _render_page(
+        pdftoppm_path,
+        pdf_path,
+        page=page,
+        region=region,
+        render_dir=render_dir,
+        scale_to=scale,
+    )
 
 
 def _component_root() -> Path:

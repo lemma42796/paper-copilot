@@ -24,7 +24,11 @@ _EXTRACTION_PARAMETERS = {
     "encoding": "UTF-8",
     "eol": "unix",
     "page_breaks": "form_feed",
+    # Drives the garbled-slot bbox marker format; bumping it retires caches
+    # built before slot markers carried coordinates.
+    "slot_bbox_source": "pdftotext-bbox-v2",
 }
+_MAX_BBOX_OUTPUT_BYTES = 64 * 1024 * 1024
 
 
 def find_poppler_executable(name: str) -> Path | None:
@@ -133,6 +137,31 @@ class PopplerTextExtractor:
         if not output_path.is_file():
             raise PdfCacheError("pdftotext completed without producing its output artifact")
         return PopplerExtraction(page_count=page_count, identity=identity)
+
+    async def page_word_boxes(self, pdf_path: Path, page: int) -> str:
+        """Return raw `pdftotext -bbox` XHTML for one page.
+
+        The bbox pass shares the layout pass's text engine, so garbled glyphs
+        surface with the same code points plus per-word coordinates.
+        """
+        if page < 1:
+            raise PdfCacheError("page must be at least 1")
+        pdftotext_path = self._resolve_executable(self._pdftotext_path, "pdftotext")
+        stdout, _stderr = await self._run(
+            pdftotext_path,
+            "-bbox",
+            "-enc",
+            _EXTRACTION_PARAMETERS["encoding"],
+            "-f",
+            str(page),
+            "-l",
+            str(page),
+            str(pdf_path),
+            "-",
+        )
+        if len(stdout) > _MAX_BBOX_OUTPUT_BYTES:
+            raise PdfCacheError("pdftotext -bbox output exceeded the size limit")
+        return stdout
 
     @staticmethod
     def _resolve_executable(configured_path: Path | None, name: str) -> Path:

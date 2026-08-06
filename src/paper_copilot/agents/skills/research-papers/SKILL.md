@@ -5,37 +5,36 @@ description: Investigate local PDF papers with bounded command search and page-g
 
 # Research Papers
 
-Skill version: 22
+Skill version: 24
 
 ## Understand the paper inventory
 
 - `research-manifests/current.jsonl` is an index, not paper evidence. Its first record describes the
   inventory attempt; each following `paper` record maps an authorized PDF (`pdf`) to its page count
   (`pages`) and citation base (`citation_base`). Read it once and keep those mappings for the task.
-  Do not read extracted-text artifacts directly; always read through the paper commands below.
-- Reading a paper prepares its text automatically on first access; no manual preparation step is
-  needed. For a paper needed by the request, call `library_exec` with the whole command
-  `paper read <pdf> <page>` for a page, or `paper search <pdf> <query>` to locate evidence.
-  These commands handle freshness and consistency automatically; do not read papers that are not
-  needed.
-- Returned page text is delimited by `[[paper-copilot-page:N]]` markers. A garbled formula is
-  represented by a stable `cache_slot` inside a
-  `[公式 OCR 待识别；cache_slot=...]` marker. Call `recognize_formula` only when the current
-  request requires understanding or citing that specific formula, the slot is still marked 待识别,
-  and the garbled TXT cannot support the task; do not call OCR merely because unrelated garbled
-  text or formula slots exist. A slot already marked `paper-copilot-ocr:recognized` is a repaired
-  formula — do not re-recognize it; its marker includes `label=` when the equation label is known,
-  so use it to map the slot to the requested formula. Use `operation=recognize` with that slot, the
-  physical page, and an equation label or region. Inspect the candidate LaTeX; only if it is
-  acceptable call `recognize_formula` again with `operation=accept` and the returned
-  `candidate_id`. Accept atomically publishes the repaired current TXT and removes superseded TXT
-  revisions, so accepted formula repairs accumulate. After accept, use
-  `paper read <pdf> <page>` again to obtain the repaired page text.
-- `library_exec` provides shell utilities and controlled Python with the standard library. For work
-  spanning several papers or pages, prefer bounded `paper read`/`paper search` calls, one per
-  paper, page, or query, and keep each result labeled with its paper and PDF page so evidence
-  remains attributable. Use the manifest's raw `pdf` path with `pdfinfo` only when the returned
-  text is insufficient.
+- Read paper content only through `library_exec` with the whole command
+  `paper read <pdf> <page>` for a page or `paper search <pdf> <query>` to locate evidence. Text is
+  prepared automatically on first access. Never parse PDF bytes with shell utilities or Python
+  (`dd`, `sed`, `strings`, reading or grepping the PDF file itself): it cannot recover reliable
+  text and wastes the budget. Read only papers needed by the request.
+- Returned page text is delimited by `[[paper-copilot-page:N]]` markers. A garbled formula appears
+  as a stable `cache_slot` inside a `[公式 OCR 待识别；cache_slot=...]` marker. When the request
+  requires understanding or citing that specific formula, follow this pipeline exactly:
+  1. Call `recognize_formula` with `operation=recognize`, the slot, the physical page, and a short
+     purpose. The Runtime crops the formula automatically from stored slot coordinates; do not
+     guess a region. Only pass an explicit region when a previous recognize reported that the
+     stored crop missed the formula.
+  2. Inspect the candidate LaTeX against the requested formula.
+  3. Only if it is acceptable, call `recognize_formula` again with `operation=accept` and the
+     returned `candidate_id`; then `paper read <pdf> <page>` again for the repaired text.
+  Never reconstruct formula text by parsing PDF bytes. Do not call OCR merely because unrelated
+  garbled slots exist, and never re-recognize a slot already marked
+  `paper-copilot-ocr:recognized`; its `label=` maps the slot to the formula.
+- `library_exec` provides shell utilities and controlled Python for labeling and organizing
+  results, not for extracting paper text. For work spanning several papers or pages, prefer
+  bounded `paper read`/`paper search` calls, one per paper, page, or query, and keep each result
+  labeled with its paper and PDF page so evidence remains attributable. Use the manifest's raw
+  `pdf` path with `pdfinfo` only when the returned text is insufficient.
 
 ## Research the request
 

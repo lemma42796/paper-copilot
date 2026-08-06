@@ -287,6 +287,7 @@ async def _render_page(
     page: int,
     region: InspectPageRegion | None,
     render_dir: Path,
+    scale_to: int = _RENDER_MAX_DIMENSION,
 ) -> Path:
     full_prefix = render_dir / "full"
     await _run_process(
@@ -298,7 +299,7 @@ async def _render_page(
         "-singlefile",
         "-png",
         "-scale-to",
-        str(_RENDER_MAX_DIMENSION),
+        str(scale_to),
         str(pdf_path),
         str(full_prefix),
     )
@@ -310,7 +311,7 @@ async def _render_page(
     if full_path.stat().st_size > _INTERMEDIATE_MAX_BYTES:
         raise KnowledgeError("pdftoppm intermediate render exceeded the byte limit")
     full_bytes = await asyncio.to_thread(full_path.read_bytes)
-    width, height = _png_dimensions(full_bytes)
+    width, height = _png_dimensions(full_bytes, max_dimension=scale_to)
     x = int(region.x1 * width)
     y = int(region.y1 * height)
     crop_width = max(1, int(region.x2 * width) - x)
@@ -325,7 +326,7 @@ async def _render_page(
         "-singlefile",
         "-png",
         "-scale-to",
-        str(_RENDER_MAX_DIMENSION),
+        str(scale_to),
         "-x",
         str(x),
         "-y",
@@ -379,14 +380,14 @@ async def _run_process(executable: Path, *arguments: str) -> tuple[str, str]:
     return stdout, stderr
 
 
-def _png_dimensions(image_bytes: bytes) -> tuple[int, int]:
+def _png_dimensions(image_bytes: bytes, *, max_dimension: int = _RENDER_MAX_DIMENSION) -> tuple[int, int]:
     if len(image_bytes) < 24 or image_bytes[:8] != _PNG_SIGNATURE:
         raise KnowledgeError("pdftoppm output is not a valid PNG")
     width = int.from_bytes(image_bytes[16:20], "big")
     height = int.from_bytes(image_bytes[20:24], "big")
     if width < 1 or height < 1:
         raise KnowledgeError("pdftoppm output has invalid dimensions")
-    if width > _RENDER_MAX_DIMENSION or height > _RENDER_MAX_DIMENSION:
+    if width > max_dimension or height > max_dimension:
         raise KnowledgeError("pdftoppm output exceeded the render dimension limit")
     return width, height
 

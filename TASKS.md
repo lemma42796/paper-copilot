@@ -10,27 +10,6 @@
 
 ## 未完成任务
 
-### Agent 循环相似重复调用防护
-
-- 现状：`agents/loop.py` 只在连续 3 次 **完全相同** 的（工具名、输入）时触发
-  `ToolLoopError`；输入稍有变化即绕过。
-- 证据：2026-08-06/07 AlexNet 公式讲解运行（
-  `tmp/formula-fill-check/run-20260806T155312Z/`），模型用 50+ 轮相似但不同
-  的 shell/python 命令手工解析 PDF 字节，绕开 `paper read` 与
-  `recognize_formula`，防护一次未触发，被人工终止。
-- 目标：对相似/无效重复行为建立防护（如归一化输入相似度、同类命令模式、
-  无进展检测），及时打断浪费循环。不新增外部依赖。
-
-### 优化 research Skill：精简且指令准确
-
-- 问题：模型遇到乱码公式时绕开指定路径（`paper read` +
-  `recognize_formula`/`accept`），转而手写 PDF 解析脚本；现有 Skill 对
-  乱码处理与禁止手工解析 PDF 的约束不够明确。
-- 目标：精简 SKILL.md、指令准确：正文读取走 `paper read/search`，乱码公式
-  必须 `recognize_formula` → 核对 → `accept`，禁止手工解析 PDF 字节。
-- 验证：重跑 AlexNet 公式讲解任务，确认模型走 recognize/accept 管线并填满
-  缓存槽位。
-
 ### 按需论文缓存与可选本地公式 OCR
 
 - 主客户端不得包含任何 Paddle 组件或公式模型权重。
@@ -42,7 +21,9 @@
 - 模型只对当前任务需要的论文发起 `paper read/search`；缓存由 agent 按需自动生成，模型
   不接触缓存键、哈希或 revision。
 - TXT 中包含 Unicode 替换字符或私用区字形的行生成稳定公式 OCR
-  `cache_slot`。
+  `cache_slot`；建库时用 `pdftotext -bbox` 计算乱码公式的归一化 bbox 写入
+  槽位标记，`recognize_formula` 只传 `cache_slot` 即自动裁切（region/
+  equation_label 降级为兜底）。
 - 纯文本模型在悬浮提示中说明可选能力，但悬浮、选择模型和启动应用均不得联网。
 - 用户仅在设置中点击下载后解析 Formula OCR manifest；Helper Runtime 与权重按内容哈希
   分别复用或下载，全部校验通过后才激活组件。
@@ -50,6 +31,13 @@
 - 只有任务确实需要理解或引用某个乱码公式时才调用 `recognize_formula`，不得仅因发现乱码
   就识别；`recognize` 只返回候选，模型检查后调用 `accept` 才把 LaTeX 写入新 revision、
   原子发布为 current，并自动删除同一缓存键下的旧 revision。
+- 已完成：公式槽位 bbox 自动裁切（2026-08-07）——建库阶段算乱码公式 bbox
+  写入槽位标记（跨行公式按乱码行展开、吸收求和上下限行、fingerprint
+  `slot_bbox_source=pdftotext-bbox-v2` 自动失效旧缓存），recognize 自动裁切
+  + 自适应升采样（≥700×180px），accept 容忍重复定位字段，SKILL v24；
+  客户端真机验证：1 recognize + 1 accept 全成功，LRN 槽位填入完整正确
+  LaTeX，全程 1分02秒（会话 `conversation-20260806T185806-ac8182997d`）。
+  残留：同一公式的兄弟槽位不随 accept 联动修复。
 - 已完成：`paper read/search` 模型可见输出已去哈希化（`paper read` 只返回
   `page`/`text`，`paper search` 只返回 `query`/`matches`/`truncated`，不再含
   `cache_ref`、revision_id、paper_id 或 artifact_sha256）；客户端一致性四轮重跑

@@ -522,6 +522,197 @@ def test_different_tool_input_resets_consecutive_repeat_guard() -> None:
     assert events[-1].reason == "end_turn"
 
 
+def test_similar_tool_calls_with_varying_numbers_trigger_soft_intervention() -> None:
+    commands = [
+        {"command": f"dd if=paper.pdf skip={offset} count=1 bs=1024"}
+        for offset in (2, 5, 9, 13)
+    ]
+    llm = MockLLM(
+        [
+            *[
+                MockResponse(
+                    content=[
+                        ToolUseBlock(
+                            id=f"tool-{index}",
+                            name="library_exec",
+                            input=command,
+                        )
+                    ],
+                    stop_reason="tool_use",
+                )
+                for index, command in enumerate(commands, start=1)
+            ],
+            MockResponse(content=[TextBlock(text="done")], stop_reason="end_turn"),
+        ]
+    )
+    dispatched: list[str] = []
+
+    async def dispatch_tool(req: ToolUseRequest) -> ToolResultData:
+        dispatched.append(req.id)
+        return ToolResultData(output="ok")
+
+    async def run() -> list[Event]:
+        events: list[Event] = []
+        async for event in run_agent_loop(
+            messages=[{"role": "user", "content": "similar safely"}],
+            tools=[],
+            config=LoopConfig(max_budget_cny=10.0),
+            llm=llm,
+            dispatch_tool=dispatch_tool,
+        ):
+            events.append(event)
+        return events
+
+    events = asyncio.run(run())
+
+    assert dispatched == ["tool-1", "tool-2", "tool-3"]
+    blocked = [e for e in events if isinstance(e, ToolResult) and e.is_error]
+    assert len(blocked) == 1
+    assert "Blocked" in blocked[0].output
+    assert isinstance(events[-1], Terminated)
+    assert events[-1].reason == "end_turn"
+
+
+def test_similar_guard_escalates_to_tool_loop_error_after_interventions() -> None:
+    commands = [
+        {"command": f"sed -n '{start},120p' layout.txt"}
+        for start in (1, 20, 40, 60, 80, 100)
+    ]
+    llm = MockLLM(
+        [
+            MockResponse(
+                content=[
+                    ToolUseBlock(
+                        id=f"tool-{index}",
+                        name="library_exec",
+                        input=command,
+                    )
+                ],
+                stop_reason="tool_use",
+            )
+            for index, command in enumerate(commands, start=1)
+        ]
+    )
+    dispatched: list[str] = []
+
+    async def dispatch_tool(req: ToolUseRequest) -> ToolResultData:
+        dispatched.append(req.id)
+        return ToolResultData(output="ok")
+
+    async def run() -> None:
+        async for _ in run_agent_loop(
+            messages=[{"role": "user", "content": "similar escalation"}],
+            tools=[],
+            config=LoopConfig(max_budget_cny=10.0),
+            llm=llm,
+            dispatch_tool=dispatch_tool,
+        ):
+            pass
+
+    with pytest.raises(
+        ToolLoopError,
+        match="repeated similar calls after 2 interventions",
+    ):
+        asyncio.run(run())
+
+    assert dispatched == ["tool-1", "tool-2", "tool-3"]
+
+
+def test_similar_guard_keeps_bare_trailing_numbers_distinct() -> None:
+    commands = [
+        {"cmd": f'paper read "library/A.pdf" {page}'} for page in range(1, 7)
+    ]
+    llm = MockLLM(
+        [
+            *[
+                MockResponse(
+                    content=[
+                        ToolUseBlock(
+                            id=f"tool-{index}",
+                            name="library_exec",
+                            input=command,
+                        )
+                    ],
+                    stop_reason="tool_use",
+                )
+                for index, command in enumerate(commands, start=1)
+            ],
+            MockResponse(content=[TextBlock(text="done")], stop_reason="end_turn"),
+        ]
+    )
+    dispatched: list[str] = []
+
+    async def dispatch_tool(req: ToolUseRequest) -> ToolResultData:
+        dispatched.append(req.id)
+        return ToolResultData(output="ok")
+
+    async def run() -> list[Event]:
+        events: list[Event] = []
+        async for event in run_agent_loop(
+            messages=[{"role": "user", "content": "batched page reads"}],
+            tools=[],
+            config=LoopConfig(max_budget_cny=10.0),
+            llm=llm,
+            dispatch_tool=dispatch_tool,
+        ):
+            events.append(event)
+        return events
+
+    events = asyncio.run(run())
+
+    assert dispatched == [f"tool-{index}" for index in range(1, 7)]
+    assert isinstance(events[-1], Terminated)
+    assert events[-1].reason == "end_turn"
+
+
+def test_similar_guard_can_be_disabled() -> None:
+    commands = [
+        {"command": f"head -c {size} paper.pdf"}
+        for size in (512, 1024, 2048, 4096)
+    ]
+    llm = MockLLM(
+        [
+            *[
+                MockResponse(
+                    content=[
+                        ToolUseBlock(
+                            id=f"tool-{index}",
+                            name="library_exec",
+                            input=command,
+                        )
+                    ],
+                    stop_reason="tool_use",
+                )
+                for index, command in enumerate(commands, start=1)
+            ],
+            MockResponse(content=[TextBlock(text="done")], stop_reason="end_turn"),
+        ]
+    )
+    dispatched: list[str] = []
+
+    async def dispatch_tool(req: ToolUseRequest) -> ToolResultData:
+        dispatched.append(req.id)
+        return ToolResultData(output="ok")
+
+    async def run() -> list[Event]:
+        events: list[Event] = []
+        async for event in run_agent_loop(
+            messages=[{"role": "user", "content": "guard disabled"}],
+            tools=[],
+            config=LoopConfig(max_budget_cny=10.0, similar_tool_call_window=None),
+            llm=llm,
+            dispatch_tool=dispatch_tool,
+        ):
+            events.append(event)
+        return events
+
+    events = asyncio.run(run())
+
+    assert dispatched == ["tool-1", "tool-2", "tool-3", "tool-4"]
+    assert isinstance(events[-1], Terminated)
+    assert events[-1].reason == "end_turn"
+
+
 def test_tool_timeout_records_failed_tool_trace(tmp_path: Path) -> None:
     llm = MockLLM(
         [

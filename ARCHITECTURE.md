@@ -105,7 +105,7 @@ rollout deadline。
 | `library_exec` | 在 conversation 级逻辑 workspace 中执行有界命令；`library/`、`cache/`、`papers/`、`research-manifests/` 只读，持久 `scratch/` 可写；长命令可 yield |
 | `library_write_stdin` | 以不透明 session ID 写入或轮询已 yield 的 `library_exec` 进程；继承原命令 sandbox |
 | `inspect_page` | 按授权 PDF SHA-256、页码和可选 region 渲染单页图像；不做 OCR、批量处理或文本回退 |
-| `recognize_formula` | 仅在纯文本模型且可选 Formula OCR 组件已安装时，按授权 PDF、物理页与公式编号或 region 返回未验证 LaTeX；与 `inspect_page` 互斥暴露 |
+| `recognize_formula` | 仅在纯文本模型且可选 Formula OCR 组件已安装时，按授权 PDF、物理页与公式定位符（乱码槽位优先，其次公式编号或 region）返回未验证 LaTeX；与 `inspect_page` 互斥暴露 |
 | `library_edit` | 授权论文库内的用户可见写操作；禁止静默覆盖和永久删除，需要时持久审批 |
 
 ### 5.1 研究上下文与缓存
@@ -134,15 +134,18 @@ Runtime 在模型循环前只准备授权论文清单、页数、哈希和应用
 
 纯文本（text-only）模型不能使用该视觉回退。未安装可选 Formula OCR 组件时，Runtime
 仍不暴露公式识别工具，遇到公式、符号表格或明显提取损坏时只能明确报告证据限制。组件
-安装后，纯文本模型可调用 `recognize_formula`；Runtime 使用 PDF 自带坐标定位带编号独立
-公式，或使用调用方提供的规范化 region，随后只接收本地 OCR helper 返回的 LaTeX。
+安装后，纯文本模型可调用 `recognize_formula`；乱码公式优先用 `cache_slot` 定位：建库时
+`pdftotext -bbox` 已算出公式归一化 bbox 写入槽位标记，Runtime 据此自动裁切；无槽位时
+回退到 PDF 自带坐标定位带编号独立公式，或调用方提供的规范化 region，随后只接收本地
+OCR helper 返回的 LaTeX。
 公式 OCR 不提供数学正确性保证，结果必须携带原 PDF 页、region、render hash、模型身份和
 未验证警告。`layout.txt` 中的乱码行包含稳定 `cache_slot`。只有当前任务确实需要理解或引用
 某个具体公式、且该公式的 TXT 乱码阻碍任务时，模型才调用 OCR；不得仅因发现无关乱码或
 其他公式 slot 就识别。首次 `recognize` 只返回候选 LaTeX 和 `candidate_id`，不修改缓存；
-模型判断候选可接受后再次调用 `accept`，Runtime 才把 LaTeX 写入新 revision、原子发布为
+模型判断候选可接受后再次调用 `accept`（candidate_id 是唯一信任锚点，重复回传的定位
+字段被忽略），Runtime 才把 LaTeX 写入新 revision、原子发布为
 current，随后自动删除同一缓存键下的旧 revision。模型后续只读取累积修复后的 current TXT。
-无编号行内公式没有可靠定位时不得对整页强行识别；复杂表格恢复仍属于待设计能力。
+无编号行内公式既无槽位又无可靠定位时不得对整页强行识别；复杂表格恢复仍属于待设计能力。
 
 成功 `inspect_page` 后，Runtime 只追加不含图像正文的页面观察事件。文本读取不另设
 登记工具；权威命令、模型可见输出和完整会话历史构成审计依据。默认 Agent loop 不按
