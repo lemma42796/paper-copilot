@@ -99,6 +99,13 @@ class FormulaOCRRecord(BaseModel):
     model: str = Field(min_length=1)
     render_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     latex_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # Set only when the published LaTeX was model-refined before caching; the
+    # raw OCR output hash keeps the audit chain intact (full OCR text remains
+    # in the append-only session history).
+    refined: bool = False
+    ocr_latex_sha256: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{64}$"
+    )
     created_at: datetime
 
 
@@ -334,6 +341,7 @@ class PdfTextCache:
         page: int,
         cache_slot: str,
         latex: str,
+        ocr_latex: str,
         region: dict[str, float],
         model: str,
         render_sha256: str,
@@ -350,6 +358,7 @@ class PdfTextCache:
                 page,
                 cache_slot,
                 latex,
+                ocr_latex,
                 region,
                 model,
                 render_sha256,
@@ -546,6 +555,7 @@ class PdfTextCache:
         page: int,
         cache_slot: str,
         latex: str,
+        ocr_latex: str,
         region: dict[str, float],
         model: str,
         render_sha256: str,
@@ -559,6 +569,7 @@ class PdfTextCache:
                 page,
                 cache_slot,
                 latex,
+                ocr_latex,
                 region,
                 model,
                 render_sha256,
@@ -572,6 +583,7 @@ class PdfTextCache:
         page: int,
         cache_slot: str,
         latex: str,
+        ocr_latex: str,
         region: dict[str, float],
         model: str,
         render_sha256: str,
@@ -600,10 +612,14 @@ class PdfTextCache:
                 f"formula OCR cache slot is unavailable on page {page}: {cache_slot}"
             )
         normalized_latex = latex.strip()
+        normalized_ocr_latex = ocr_latex.strip()
+        refined = normalized_latex != normalized_ocr_latex
         label_token = _marker_label_token(equation_label)
+        refined_token = " refined=true" if refined else ""
         marker = (
             f"[[paper-copilot-ocr:recognized slot={cache_slot} page={page}"
-            f"{label_token} model={model} render_sha256={render_sha256} verified=false]]"
+            f"{label_token} model={model} render_sha256={render_sha256}"
+            f"{refined_token} verified=false]]"
         )
         replacement = (
             f"{marker}\n"
@@ -627,6 +643,12 @@ class PdfTextCache:
                 model=model,
                 render_sha256=render_sha256,
                 latex_sha256=hashlib.sha256(normalized_latex.encode("utf-8")).hexdigest(),
+                refined=refined,
+                ocr_latex_sha256=(
+                    hashlib.sha256(normalized_ocr_latex.encode("utf-8")).hexdigest()
+                    if refined
+                    else None
+                ),
                 created_at=datetime.now(UTC),
             )
             derived = manifest.model_copy(

@@ -118,6 +118,16 @@ class FormulaOCRInput(BaseModel):
             "it are ignored."
         ),
     )
+    refined_latex: str | None = Field(
+        default=None,
+        max_length=6000,
+        description=(
+            "Accept only. Optional cleaned copy of the candidate LaTeX: fix "
+            "OCR artifacts such as stray prose from an overwide crop or broken "
+            "spacing, without changing the mathematics. Omit it to publish the "
+            "OCR output unchanged."
+        ),
+    )
 
     @model_validator(mode="after")
     def _operation_arguments_match(self) -> FormulaOCRInput:
@@ -138,9 +148,13 @@ class FormulaOCRInput(BaseModel):
                 raise ValueError("recognize requires purpose")
             if self.candidate_id is not None:
                 raise ValueError("recognize does not accept candidate_id")
+            if self.refined_latex is not None:
+                raise ValueError("recognize does not accept refined_latex")
             return self
         if self.candidate_id is None:
             raise ValueError("accept requires candidate_id")
+        if self.refined_latex is not None:
+            _validate_refined_latex(self.refined_latex)
         # Accept silently ignores repeated locator fields: models commonly echo
         # cache_slot/purpose/region back, and the frozen candidate remains the
         # only trust anchor for what gets published.
@@ -151,6 +165,20 @@ class FormulaOCRInput(BaseModel):
 class FormulaOCRRun:
     output: dict[str, Any]
     trace_attributes: dict[str, Any]
+
+
+def _validate_refined_latex(value: str) -> None:
+    """Reject refined LaTeX that could corrupt the text cache.
+
+    The published text is spliced into layout.txt, so marker-like sequences
+    and control characters are forbidden regardless of prompt wording.
+    """
+    if not value.strip():
+        raise ValueError("refined_latex must not be empty")
+    if "[[" in value:
+        raise ValueError("refined_latex must not contain marker sequences")
+    if any(ord(char) < 32 and char not in "\n\t" for char in value):
+        raise ValueError("refined_latex must not contain control characters")
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +211,9 @@ def formula_ocr_tool_description() -> str:
         "the garbled formula (preferred; the crop is automatic), or a printed "
         "equation label, or a normalized formula region. recognize returns a candidate without "
         "changing the cache. Inspect its LaTeX; only when it is acceptable call this "
-        "tool again with operation=accept and candidate_id. If layout.txt showed a "
+        "tool again with operation=accept and candidate_id, optionally passing a "
+        "cleaned copy of the LaTeX as refined_latex when OCR artifacts pollute it. "
+        "If layout.txt showed a "
         "cache_slot, accept atomically publishes the TXT cache with the LaTeX replacing "
         "that garbled slot, then automatically deletes superseded TXT revisions. The "
         "optional local Formula OCR component "
@@ -369,6 +399,10 @@ async def _accept_formula_candidate(
     cache_revision_id: str | None = None
     cache_artifact_sha256: str | None = None
     cache_path: str | None = None
+    published_latex = (
+        args.refined_latex.strip() if args.refined_latex else candidate.latex
+    )
+    refined = published_latex != candidate.latex
     if candidate.cache_slot is not None:
         if cache_root is None:
             raise KnowledgeError("formula OCR acceptance requires a configured cache root")
@@ -377,7 +411,8 @@ async def _accept_formula_candidate(
             candidate.pdf_sha256,
             page=candidate.page,
             cache_slot=candidate.cache_slot,
-            latex=candidate.latex,
+            latex=published_latex,
+            ocr_latex=candidate.latex,
             region=candidate.region,
             model=candidate.model,
             render_sha256=candidate.render_sha256,
@@ -403,7 +438,9 @@ async def _accept_formula_candidate(
         "purpose": candidate.purpose,
         "equation_label": candidate.equation_label,
         "region": candidate.region,
-        "latex": candidate.latex,
+        "latex": published_latex,
+        "ocr_latex": candidate.latex,
+        "refined": refined,
         "model": candidate.model,
         "cache_slot": candidate.cache_slot,
         "cache_revision_id": cache_revision_id,
@@ -430,6 +467,10 @@ async def _accept_formula_candidate(
             "formula_ocr_model": candidate.model,
             "formula_ocr_output_sha256": hashlib.sha256(
                 candidate.latex.encode("utf-8")
+            ).hexdigest(),
+            "refined": refined,
+            "published_latex_sha256": hashlib.sha256(
+                published_latex.encode("utf-8")
             ).hexdigest(),
             "cache_slot": candidate.cache_slot,
             "cache_revision_id": cache_revision_id,

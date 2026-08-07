@@ -129,7 +129,8 @@ async def run_locate_page_text(
             "query": args.query,
             "match_count": len(matches),
             "wall_time_seconds": round(time.monotonic() - started, 3),
-            "page_evidence": evidence,
+            # Text-layer searches register no page evidence fact: evidence
+            # facts stay reserved for rendered or OCR'd visual artifacts.
         },
     )
 

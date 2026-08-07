@@ -5,7 +5,7 @@ description: Investigate local PDF papers with bounded command search and page-g
 
 # Research Papers
 
-Skill version: 25
+Skill version: 27
 
 ## Understand the paper inventory
 
@@ -20,35 +20,29 @@ Skill version: 25
 - Returned page text is delimited by `[[paper-copilot-page:N]]` markers. Formula extraction is
   unreliable: a damaged formula may appear as a `[公式 OCR 待识别；cache_slot=...]` marker, as
   visible control pictures (␀…␟) inside formula text, or as formula text that is merely
-  flattened, truncated, or missing symbols with no marker at all. When the request requires
-  understanding or citing a specific formula, first decide: a textbook-standard formula whose
-  extracted text is consistent with it may be quoted directly; every other formula must be
-  verified through this pipeline:
-  1. Anchor the formula with surrounding prose: call `locate_page_text` with the exact prose
-     line directly above and the exact prose line directly below the formula (two calls, same
-     page, quoting short distinctive fragments from the page text).
-  2. Derive a crop region from the returned line rectangles: y from the upper line's bottom edge
-     to the lower line's top edge, x from their line spans slightly widened. Call
-     `recognize_formula` with `operation=recognize`, that region, the physical page, and a short
-     purpose.
-  3. Inspect the candidate LaTeX against the requested formula. Only if it is acceptable, call
-     `recognize_formula` again with `operation=accept` and the returned `candidate_id`; then
-     `paper read <pdf> <page>` again for the repaired text.
-  Fallbacks only when anchoring is impossible (for example the formula touches a page edge):
-  for a garbled slot pass just the `cache_slot` so the Runtime crops the stored coordinates; for
-  a numbered equation pass `equation_label`. Never guess a region from semantics, and never
-  reconstruct formula text by parsing PDF bytes. Do not call OCR merely because unrelated
-  garbled slots exist, and never re-recognize a slot already marked
+  flattened, truncated, or missing symbols with no marker at all. Quote a textbook-standard
+  formula directly when its extracted text is consistent with it; otherwise verify it visually
+  before use.
+- To verify a formula, call `recognize_formula` with `operation=recognize`, preferring the
+  `cache_slot` shown beside a garbled slot (the Runtime crops it automatically); without a slot,
+  anchor the formula by calling `locate_page_text` for the prose line directly above and below it
+  (quote short distinctive fragments; when a phrase matches several times, use the match adjacent
+  to the formula) and pass the gap between the two line rectangles as the region;
+  `equation_label` works for numbered equations. Read the returned candidate LaTeX as you read
+  the paper: if it is right, publish it in the same task by calling `recognize_formula` with
+  `operation=accept` and the `candidate_id`, passing a cleaned copy as `refined_latex` when OCR
+  artifacts (stray prose, broken spacing) pollute it, then `paper read <pdf> <page>` again for
+  the repaired text. Never guess a region from semantics or reconstruct formula text from PDF
+  bytes, do not run OCR for unrelated garbled slots, and never re-recognize a slot already marked
   `paper-copilot-ocr:recognized`; its `label=` maps the slot to the formula.
-- `library_exec` provides shell utilities and controlled Python for labeling and organizing
-  results, not for extracting paper text. For work spanning several papers or pages, prefer
+- `library_exec` also provides shell utilities and controlled Python for labeling and organizing
+  results. For work spanning several papers or pages, prefer
   bounded `paper read`/`paper search` calls, one per paper, page, or query, and keep each result
   labeled with its paper and PDF page so evidence remains attributable. Use the manifest's raw
   `pdf` path with `pdfinfo` only when the returned text is insufficient.
 
 ## Research the request
 
-- Read `research-manifests/current.jsonl` as the authoritative inventory for the attempt.
 - Use judgment to inspect the sources relevant to the requested outcome. Prefer one labeled batch
   command for independent papers, searches, or page reads when attribution will remain clear and the
   output will fit within the requested budget.
