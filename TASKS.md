@@ -20,10 +20,10 @@
   相对路径，并在读取前由 agent 自动校验当前 PDF SHA-256。
 - 模型只对当前任务需要的论文发起 `paper read/search`；缓存由 agent 按需自动生成，模型
   不接触缓存键、哈希或 revision。
-- TXT 中包含 Unicode 替换字符或私用区字形的行生成稳定公式 OCR
-  `cache_slot`；建库时用 `pdftotext -bbox` 计算乱码公式的归一化 bbox 写入
-  槽位标记，`recognize_formula` 只传 `cache_slot` 即自动裁切（region/
-  equation_label 降级为兜底）。
+- TXT 中包含损坏字形（FFFD/私用区/C0 控制字符/DEL）的行生成稳定公式 OCR
+  `cache_slot`，控制字符渲染为可见控制符图；公式核实第一手段是新工具
+  `locate_page_text`（引用公式上下正文行→文本层搜索返回归一化行框→推导
+  裁切带），`cache_slot` 自动裁切与 `equation_label` 降级为兜底（SKILL v25）。
 - 纯文本模型在悬浮提示中说明可选能力，但悬浮、选择模型和启动应用均不得联网。
 - 用户仅在设置中点击下载后解析 Formula OCR manifest；Helper Runtime 与权重按内容哈希
   分别复用或下载，全部校验通过后才激活组件。
@@ -31,13 +31,18 @@
 - 只有任务确实需要理解或引用某个乱码公式时才调用 `recognize_formula`，不得仅因发现乱码
   就识别；`recognize` 只返回候选，模型检查后调用 `accept` 才把 LaTeX 写入新 revision、
   原子发布为 current，并自动删除同一缓存键下的旧 revision。
+- 已完成：锚点定位 + C0 损坏检测（2026-08-07，待真机验证）——新工具
+  `locate_page_text` 单一职责（文本层搜索返回短语框+整行框），C0 控制字符
+  纳入损坏检测并显式化为控制符图（SGD 型静默丢失现有槽位），SKILL v25
+  锚点流程为第一手段；fingerprint `slot_bbox_source=pdftotext-bbox-v5`。
+- 已完成：跨行公式源头单槽位（2026-08-07，提交 569cce8）——一个物理公式
+  一个槽位，乱码段夹 <=2 行干净内容桥接合并，双闸门对齐；兄弟槽位问题
+  从源头消除。
 - 已完成：公式槽位 bbox 自动裁切（2026-08-07）——建库阶段算乱码公式 bbox
-  写入槽位标记（跨行公式按乱码行展开、吸收求和上下限行、fingerprint
-  `slot_bbox_source=pdftotext-bbox-v2` 自动失效旧缓存），recognize 自动裁切
-  + 自适应升采样（≥700×180px），accept 容忍重复定位字段，SKILL v24；
-  客户端真机验证：1 recognize + 1 accept 全成功，LRN 槽位填入完整正确
-  LaTeX，全程 1分02秒（会话 `conversation-20260806T185806-ac8182997d`）。
-  残留：同一公式的兄弟槽位不随 accept 联动修复。
+  写入槽位标记，recognize 自动裁切 + 自适应升采样（≥700×180px），accept
+  容忍重复定位字段；客户端真机验证 1 recognize + 1 accept 全成功，LRN 槽位
+  填入完整正确 LaTeX，全程 1分02秒（会话
+  `conversation-20260806T185806-ac8182997d`）。现已降级为兜底路径。
 - 已完成：`paper read/search` 模型可见输出已去哈希化（`paper read` 只返回
   `page`/`text`，`paper search` 只返回 `query`/`matches`/`truncated`，不再含
   `cache_ref`、revision_id、paper_id 或 artifact_sha256）；客户端一致性四轮重跑

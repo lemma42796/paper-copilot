@@ -59,6 +59,11 @@ from paper_copilot.agents.llm_client import (
     WORKING_CONTEXT_LIMIT_TOKENS,
     LLMClient,
 )
+from paper_copilot.agents.locate_page_text_tool import (
+    LocatePageTextInput,
+    locate_page_text_tool_description,
+    run_locate_page_text,
+)
 from paper_copilot.agents.loop import (
     AssistantMessage,
     Event,
@@ -992,6 +997,11 @@ def _tool_schema_templates() -> list[dict[str, Any]]:
         ),
         _tool_schema("inspect_page", inspect_page_tool_description(), InspectPageInput),
         _tool_schema(
+            "locate_page_text",
+            locate_page_text_tool_description(),
+            LocatePageTextInput,
+        ),
+        _tool_schema(
             "recognize_formula", formula_ocr_tool_description(), FormulaOCRInput
         ),
         _tool_schema("paper_set", paper_set_tool_description(), PaperSetInput),
@@ -1008,6 +1018,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "library_exec": LibraryExecInput,
         "library_write_stdin": LibraryWriteStdinInput,
         "inspect_page": InspectPageInput,
+        "locate_page_text": LocatePageTextInput,
         "recognize_formula": FormulaOCRInput,
         "paper_set": PaperSetInput,
         "library_edit": LibraryEditInput,
@@ -1019,6 +1030,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "library_exec": frozenset({"read_library", "execute_command"}),
         "library_write_stdin": frozenset({"read_library", "execute_command"}),
         "inspect_page": frozenset({"read_library"}),
+        "locate_page_text": frozenset({"read_library"}),
         "recognize_formula": frozenset({"read_library"}),
         "paper_set": frozenset({"read_library", "update_job_state"}),
         "library_edit": frozenset({"read_library", "write_library"}),
@@ -1030,6 +1042,7 @@ def _tool_definitions() -> dict[str, ToolDefinition]:
         "library_exec": 1_100_000,
         "library_write_stdin": 1_100_000,
         "inspect_page": 16_000,
+        "locate_page_text": 16_000,
         "recognize_formula": 16_000,
         "paper_set": 40_000,
         "library_edit": 40_000,
@@ -1123,6 +1136,11 @@ def _public_tool_registry() -> ToolRegistry:
                     exposure.library_available
                     and exposure.image_input_available
                 ),
+            ),
+            registered(
+                "locate_page_text",
+                _handle_public_locate_page_text,
+                library_required,
             ),
             registered(
                 "recognize_formula",
@@ -1264,6 +1282,24 @@ async def _handle_public_inspect_page(
     )
 
 
+async def _handle_public_locate_page_text(
+    parsed_input: BaseModel,
+    raw_execution_context: Any,
+) -> ToolResultData:
+    execution_context = cast(
+        _PublicToolExecutionContext,
+        raw_execution_context,
+    )
+    locate_run = await run_locate_page_text(
+        cast(LocatePageTextInput, parsed_input),
+        execution_context.context.pdf_dir,
+    )
+    return _ok(
+        locate_run.output,
+        trace_attributes=locate_run.trace_attributes,
+    )
+
+
 async def _handle_public_formula_ocr(
     parsed_input: BaseModel,
     raw_execution_context: Any,
@@ -1345,6 +1381,8 @@ def _dispatch_parsed_tool(
             return _err(f"{tool_name} requires the asynchronous tool dispatcher")
         case "inspect_page":
             return _err("inspect_page requires the asynchronous tool dispatcher")
+        case "locate_page_text":
+            return _err("locate_page_text requires the asynchronous tool dispatcher")
         case "recognize_formula":
             return _err("recognize_formula requires the asynchronous tool dispatcher")
         case "paper_set":

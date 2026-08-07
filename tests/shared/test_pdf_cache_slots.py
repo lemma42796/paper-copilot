@@ -7,6 +7,7 @@ import pytest
 from paper_copilot.agents.formula_ocr_tool import FormulaOCRInput
 from paper_copilot.shared.pdf_cache import (
     _SLOT_BBOX_PATTERN,
+    _contains_extraction_garble,
     _formula_aware_text,
     _garbled_line_bboxes,
     _ocr_start_marker,
@@ -185,6 +186,27 @@ def test_render_text_page_splits_slots_at_long_clean_gaps() -> None:
     # The unbridged clean gap stays outside both slots as plain text.
     assert "原始提取：clean line" not in rendered  # noqa: RUF001
     assert "clean line\nclean line two\nclean line three" in rendered
+
+
+def test_garble_detection_covers_control_characters() -> None:
+    # C0 codes (math glyphs mapped to raw glyph indices) are damage signals.
+    assert _contains_extraction_garble("0.9 \u000f wi")
+    assert _contains_extraction_garble("\x7f")
+    # Layout whitespace is not damage.
+    assert not _contains_extraction_garble("a\tb")
+    assert not _contains_extraction_garble("clean prose line")
+
+
+def test_render_text_page_visualizes_control_characters_in_slot() -> None:
+    text = "the update rule for weight w was\nvi+1 := 0.9 \x0f wi\nwhere i is the index"
+    rendered = _render_text_page(text, 6)
+    # The C0 line opens a slot and its residue becomes a visible control picture.
+    assert "formula-0001" in rendered
+    assert "\u240f" in rendered
+    assert "\x0f" not in rendered
+    # Clean anchors stay outside the slot body.
+    assert "原始提取：the update rule" not in rendered  # noqa: RUF001
+    assert "原始提取：where i is the index" not in rendered  # noqa: RUF001
 
 
 def test_slot_block_count_matches_slot_grouping() -> None:

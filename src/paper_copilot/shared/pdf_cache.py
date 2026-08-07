@@ -875,6 +875,13 @@ def _render_text_page(
     page: int,
     slot_bboxes: Sequence[tuple[float, float, float, float]] = (),
 ) -> str:
+    # Garble detection must run on the raw text: control pictures produced by
+    # the visualization step below are not garble markers themselves.
+    raw_flags = _garbled_flags(text)
+    # Control characters are invisible to models; render them as Unicode
+    # control pictures so extraction damage like math glyphs mapped to C0
+    # codes becomes visible in the cached text.
+    text = _visualize_control_characters(text)
     lines: list[str] = [f"[[paper-copilot-page:{page}]]", ""]
     slot_index = 0
     pending: list[str] = []
@@ -908,8 +915,8 @@ def _render_text_page(
         pending_has_garble = False
         pending_clean_tail = 0
 
-    for line in text.splitlines():
-        if _contains_extraction_garble(line):
+    for line, garbled in zip(text.splitlines(), raw_flags, strict=True):
+        if garbled:
             pending.append(line)
             pending_has_garble = True
             pending_clean_tail = 0
@@ -1111,10 +1118,38 @@ def _marker_label_token(equation_label: str | None) -> str:
 
 
 def _contains_extraction_garble(text: str) -> bool:
-    return any(
-        character == "\ufffd" or "\ue000" <= character <= "\uf8ff"
-        for character in text
-    )
+    return any(_is_extraction_garble_character(character) for character in text)
+
+
+def _is_extraction_garble_character(character: str) -> bool:
+    # Three damage signatures seen from incomplete ToUnicode mappings: FFFD,
+    # private-use-area codes, and C0 control codes (math glyphs mapped to raw
+    # glyph indices, for example U+000F). Legitimate layout whitespace
+    # (tab/newline/CR) is not damage.
+    if character == "\ufffd" or "\ue000" <= character <= "\uf8ff":
+        return True
+    return (
+        "\x00" <= character <= "\x1f"
+        and character not in "\t\n\r"
+    ) or character == "\x7f"
+
+
+def _visualize_control_characters(text: str) -> str:
+    # Characters str.splitlines() treats as line breaks must survive the
+    # substitution, otherwise raw-text and rendered-text line counts diverge.
+    line_break_like = "\t\n\r\x0b\x0c\x1c\x1d\x1e"
+
+    def visualize(character: str) -> str:
+        if character in line_break_like:
+            return character
+        code = ord(character)
+        if code <= 0x1F:
+            return chr(0x2400 + code)
+        if code == 0x7F:
+            return "\u2421"
+        return character
+
+    return "".join(visualize(character) for character in text)
 
 
 def _sha256_file(path: Path) -> str:

@@ -5,7 +5,7 @@ description: Investigate local PDF papers with bounded command search and page-g
 
 # Research Papers
 
-Skill version: 24
+Skill version: 25
 
 ## Understand the paper inventory
 
@@ -17,17 +17,27 @@ Skill version: 24
   prepared automatically on first access. Never parse PDF bytes with shell utilities or Python
   (`dd`, `sed`, `strings`, reading or grepping the PDF file itself): it cannot recover reliable
   text and wastes the budget. Read only papers needed by the request.
-- Returned page text is delimited by `[[paper-copilot-page:N]]` markers. A garbled formula appears
-  as a stable `cache_slot` inside a `[公式 OCR 待识别；cache_slot=...]` marker. When the request
-  requires understanding or citing that specific formula, follow this pipeline exactly:
-  1. Call `recognize_formula` with `operation=recognize`, the slot, the physical page, and a short
-     purpose. The Runtime crops the formula automatically from stored slot coordinates; do not
-     guess a region. Only pass an explicit region when a previous recognize reported that the
-     stored crop missed the formula.
-  2. Inspect the candidate LaTeX against the requested formula.
-  3. Only if it is acceptable, call `recognize_formula` again with `operation=accept` and the
-     returned `candidate_id`; then `paper read <pdf> <page>` again for the repaired text.
-  Never reconstruct formula text by parsing PDF bytes. Do not call OCR merely because unrelated
+- Returned page text is delimited by `[[paper-copilot-page:N]]` markers. Formula extraction is
+  unreliable: a damaged formula may appear as a `[公式 OCR 待识别；cache_slot=...]` marker, as
+  visible control pictures (␀…␟) inside formula text, or as formula text that is merely
+  flattened, truncated, or missing symbols with no marker at all. When the request requires
+  understanding or citing a specific formula, first decide: a textbook-standard formula whose
+  extracted text is consistent with it may be quoted directly; every other formula must be
+  verified through this pipeline:
+  1. Anchor the formula with surrounding prose: call `locate_page_text` with the exact prose
+     line directly above and the exact prose line directly below the formula (two calls, same
+     page, quoting short distinctive fragments from the page text).
+  2. Derive a crop region from the returned line rectangles: y from the upper line's bottom edge
+     to the lower line's top edge, x from their line spans slightly widened. Call
+     `recognize_formula` with `operation=recognize`, that region, the physical page, and a short
+     purpose.
+  3. Inspect the candidate LaTeX against the requested formula. Only if it is acceptable, call
+     `recognize_formula` again with `operation=accept` and the returned `candidate_id`; then
+     `paper read <pdf> <page>` again for the repaired text.
+  Fallbacks only when anchoring is impossible (for example the formula touches a page edge):
+  for a garbled slot pass just the `cache_slot` so the Runtime crops the stored coordinates; for
+  a numbered equation pass `equation_label`. Never guess a region from semantics, and never
+  reconstruct formula text by parsing PDF bytes. Do not call OCR merely because unrelated
   garbled slots exist, and never re-recognize a slot already marked
   `paper-copilot-ocr:recognized`; its `label=` maps the slot to the formula.
 - `library_exec` provides shell utilities and controlled Python for labeling and organizing
