@@ -64,6 +64,12 @@ _BBOX_ABSORB_PADDING_POINTS = 2.0
 # Word boxes hug glyph edges exactly; anti-aliasing at the render boundary
 # shaves edge strokes, so pad the normalized crop on all sides.
 _BBOX_MARGIN_POINTS = 4.0
+# One display formula can interleave clean extraction lines between its
+# garbled rows (summation limits, fraction numerators). Garbled runs or
+# clusters bridged by at most this many clean lines/clusters stay one
+# formula; longer clean gaps mean separate formulas or prose. The same bound
+# applies on both extraction passes so their group counts can align.
+_MAX_INTRA_FORMULA_CLEAN_LINES = 2
 _log = get_logger(__name__)
 
 
@@ -445,10 +451,8 @@ class PdfTextCache:
             if raw_page == b"":
                 continue
             text = raw_page.decode("utf-8", errors="replace")
-            garbled_line_count = sum(
-                1 for line in text.splitlines() if _contains_extraction_garble(line)
-            )
-            if garbled_line_count == 0:
+            slot_count = _slot_block_count(text)
+            if slot_count == 0:
                 continue
             try:
                 bbox_html = await self._extractor.page_word_boxes(pdf_path, page_number)
@@ -459,11 +463,21 @@ class PdfTextCache:
                     error_type=type(error).__name__,
                 )
                 continue
-            bboxes = _garbled_line_bboxes(bbox_html)
-            # Slots map to garbled lines positionally; a count mismatch means
-            # the two pdftotext passes disagree about line structure, so
-            # coordinates would be unreliable and are dropped for the page.
-            if bboxes is not None and len(bboxes) == garbled_line_count:
+            result = _garbled_line_bboxes(bbox_html)
+            if result is None:
+                continue
+            bboxes, garbled_cluster_count = result
+            garbled_line_count = sum(
+                1 for line in text.splitlines() if _contains_extraction_garble(line)
+            )
+            # Slots map to formula groups positionally, so both passes must
+            # agree line by line (garbled totals) and group by group (block
+            # totals); any disagreement makes the coordinates unreliable, so
+            # they are dropped for the page.
+            if (
+                garbled_line_count == garbled_cluster_count
+                and len(bboxes) == slot_count
+            ):
                 slot_bboxes[page_number] = bboxes
         return slot_bboxes
 
@@ -819,6 +833,43 @@ def _formula_aware_text(
     return text_bytes, _page_boundaries(text_bytes, page_count)
 
 
+def _garbled_flags(text: str) -> list[bool]:
+    return [_contains_extraction_garble(line) for line in text.splitlines()]
+
+
+def _slot_block_count(text: str) -> int:
+    """Count slot blocks: garbled runs bridged by short clean gaps.
+
+    Mirrors the bbox side's grouping so the two passes produce the same
+    formula count and coordinates can attach positionally.
+    """
+    return len(_group_garbled_runs(_garbled_flags(text)))
+
+
+def _group_garbled_runs(flags: Sequence[bool]) -> list[tuple[int, int]]:
+    """Group garbled runs separated by at most the bridging gap of clean items.
+
+    Returns half-open line ranges covering each block, including bridged
+    clean lines. Trailing clean lines without a following garbled run stay
+    outside any block.
+    """
+    blocks: list[tuple[int, int]] = []
+    block_start: int | None = None
+    last_garbled = -1
+    for index, garbled in enumerate(flags):
+        if not garbled:
+            continue
+        if block_start is None:
+            block_start = index
+        elif index - last_garbled - 1 > _MAX_INTRA_FORMULA_CLEAN_LINES:
+            blocks.append((block_start, last_garbled + 1))
+            block_start = index
+        last_garbled = index
+    if block_start is not None:
+        blocks.append((block_start, last_garbled + 1))
+    return blocks
+
+
 def _render_text_page(
     text: str,
     page: int,
@@ -826,21 +877,52 @@ def _render_text_page(
 ) -> str:
     lines: list[str] = [f"[[paper-copilot-page:{page}]]", ""]
     slot_index = 0
-    for line in text.splitlines():
-        if _contains_extraction_garble(line):
+    pending: list[str] = []
+    pending_has_garble = False
+    pending_clean_tail = 0
+
+    def flush_pending() -> None:
+        # One slot per formula block: a display formula spanning several
+        # extraction lines (including interleaved clean limit rows) is one
+        # physical formula, so its lines share one slot and one crop. Clean
+        # lines held at the tail that never bridged to another garbled run
+        # stay outside the slot.
+        nonlocal slot_index, pending_has_garble, pending_clean_tail
+        if not pending:
+            return
+        if not pending_has_garble:
+            lines.extend(pending)
+        else:
+            body_end = len(pending) - pending_clean_tail
             slot_index += 1
             slot = f"page-{page:04d}-formula-{slot_index:04d}"
-            bbox = slot_bboxes[slot_index - 1] if slot_index - 1 < len(slot_bboxes) else None
-            lines.extend(
-                [
-                    _ocr_start_marker(slot, page, bbox),
-                    f"[公式 OCR 待识别；cache_slot={slot}]",
-                    f"原始提取：{line}",
-                    _OCR_END_TEMPLATE.format(slot=slot),
-                ]
+            bbox = (
+                slot_bboxes[slot_index - 1] if slot_index - 1 < len(slot_bboxes) else None
             )
-        else:
-            lines.append(line)
+            lines.append(_ocr_start_marker(slot, page, bbox))
+            lines.append(f"[公式 OCR 待识别；cache_slot={slot}]")
+            lines.extend(f"原始提取：{line}" for line in pending[:body_end])
+            lines.append(_OCR_END_TEMPLATE.format(slot=slot))
+            lines.extend(pending[body_end:])
+        pending.clear()
+        pending_has_garble = False
+        pending_clean_tail = 0
+
+    for line in text.splitlines():
+        if _contains_extraction_garble(line):
+            pending.append(line)
+            pending_has_garble = True
+            pending_clean_tail = 0
+            continue
+        if pending_has_garble and pending_clean_tail < _MAX_INTRA_FORMULA_CLEAN_LINES:
+            # Hold a short clean tail: a garbled line right after keeps it
+            # inside the formula block; otherwise it is flushed as prose.
+            pending.append(line)
+            pending_clean_tail += 1
+            continue
+        flush_pending()
+        lines.append(line)
+    flush_pending()
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -859,14 +941,15 @@ def _ocr_start_marker(
 
 def _garbled_line_bboxes(
     bbox_html: str,
-) -> tuple[tuple[float, float, float, float], ...] | None:
-    """Compute normalized bboxes for garbled formula lines in reading order.
+) -> tuple[tuple[tuple[float, float, float, float], ...], int] | None:
+    """Compute one normalized bbox per formula group in reading order.
 
-    One display formula can occupy several garbled text lines; every line of
-    the same formula receives that formula's full box so slots map to lines
-    positionally. Returns None when the bbox page cannot be parsed, so
-    callers keep plain coordinate-less slots instead of writing misleading
-    coordinates.
+    Returns the boxes together with the garbled cluster total so callers can
+    gate on both passes agreeing line by line and group by group. A display
+    formula occupying several garbled text lines (with interleaved clean
+    limit rows) yields a single box. Returns None when the bbox page cannot
+    be parsed, so callers keep plain coordinate-less slots instead of
+    writing misleading coordinates.
     """
     page_match = _BBOX_PAGE_PATTERN.search(bbox_html)
     if page_match is None:
@@ -892,11 +975,12 @@ def _garbled_line_bboxes(
     if not words:
         return None
     clusters = _cluster_words_into_lines(words)
+    garbled_cluster_count = sum(1 for cluster in clusters if cluster.garbled)
     groups = _formula_groups(clusters)
     if not groups:
-        return ()
+        return ((), garbled_cluster_count)
     boxes: list[tuple[float, float, float, float]] = []
-    for group, members in groups:
+    for group in groups:
         box = _absorb_formula_neighbors(group, clusters)
         x1 = max(0.0, min(1.0, (box[0] - _BBOX_MARGIN_POINTS) / page_width))
         y1 = max(0.0, min(1.0, (box[1] - _BBOX_MARGIN_POINTS) / page_height))
@@ -904,9 +988,8 @@ def _garbled_line_bboxes(
         y2 = max(0.0, min(1.0, (box[3] + _BBOX_MARGIN_POINTS) / page_height))
         if x2 <= x1 or y2 <= y1:
             return None
-        # One box per garbled member line keeps the slot mapping positional.
-        boxes.extend((x1, y1, x2, y2) for _ in members)
-    return tuple(boxes)
+        boxes.append((x1, y1, x2, y2))
+    return (tuple(boxes), garbled_cluster_count)
 
 
 def _cluster_words_into_lines(words: list[_WordBox]) -> list[_FormulaCluster]:
@@ -931,40 +1014,54 @@ def _cluster_words_into_lines(words: list[_WordBox]) -> list[_FormulaCluster]:
 
 def _formula_groups(
     clusters: list[_FormulaCluster],
-) -> list[tuple[_FormulaCluster, tuple[_FormulaCluster, ...]]]:
-    """Merge garbled clusters with vertically adjacent ones into one group.
+) -> list[_FormulaCluster]:
+    """Merge garbled clusters into one group per display formula.
 
-    Large operators split their glyphs across several word lines (upper and
-    lower delimiter halves, scripts); a gap below the group's own height
-    still belongs to the same display formula. Each group carries its merged
-    member clusters so boxes can later expand back to one per garbled line.
+    Two merge rules mirror the text-side slot blocks: garbled clusters with
+    at most the bridging gap of clean clusters between them stay one formula
+    (summation limits and fraction rows extract clean between garbled rows),
+    and consecutive garbled clusters merge when geometrically adjacent (a
+    gap below their own height), which keeps far-apart formulas separated
+    even when no clean clusters sit between them.
     """
-    groups: list[tuple[_FormulaCluster, list[_FormulaCluster]]] = []
+    group_members: list[list[_FormulaCluster]] = []
+    pending_clean: list[_FormulaCluster] = []
     for cluster in clusters:
         if not cluster.garbled:
+            if group_members:
+                pending_clean.append(cluster)
             continue
-        if groups:
-            previous, members = groups[-1]
-            gap = cluster.y_min - previous.y_max
-            tolerance = _BBOX_CLUSTER_GAP_FACTOR * min(
-                previous.y_max - previous.y_min,
-                cluster.y_max - cluster.y_min,
-            )
-            if gap <= tolerance:
-                members.append(cluster)
-                groups[-1] = (
-                    _FormulaCluster(
-                        x_min=min(previous.x_min, cluster.x_min),
-                        y_min=min(previous.y_min, cluster.y_min),
-                        x_max=max(previous.x_max, cluster.x_max),
-                        y_max=max(previous.y_max, cluster.y_max),
-                        garbled=True,
-                    ),
-                    members,
+        bridged = False
+        if group_members:
+            previous = group_members[-1]
+            if pending_clean:
+                bridged = len(pending_clean) <= _MAX_INTRA_FORMULA_CLEAN_LINES
+            else:
+                last = previous[-1]
+                gap = cluster.y_min - last.y_max
+                tolerance = _BBOX_CLUSTER_GAP_FACTOR * min(
+                    last.y_max - last.y_min,
+                    cluster.y_max - cluster.y_min,
                 )
+                bridged = gap <= tolerance
+            if bridged:
+                previous.extend(pending_clean)
+                previous.append(cluster)
+                pending_clean = []
                 continue
-        groups.append((cluster, [cluster]))
-    return [(group, tuple(members)) for group, members in groups]
+        pending_clean = []
+        group_members.append([cluster])
+    return [_merge_cluster_boxes(members) for members in group_members]
+
+
+def _merge_cluster_boxes(members: list[_FormulaCluster]) -> _FormulaCluster:
+    return _FormulaCluster(
+        x_min=min(member.x_min for member in members),
+        y_min=min(member.y_min for member in members),
+        x_max=max(member.x_max for member in members),
+        y_max=max(member.y_max for member in members),
+        garbled=True,
+    )
 
 
 def _absorb_formula_neighbors(

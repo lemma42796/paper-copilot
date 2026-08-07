@@ -11,6 +11,7 @@ from paper_copilot.shared.pdf_cache import (
     _garbled_line_bboxes,
     _ocr_start_marker,
     _render_text_page,
+    _slot_block_count,
 )
 
 _GARBLE = "\uf8eb"
@@ -46,11 +47,12 @@ def _alexnet_like_page() -> str:
 
 
 def test_garbled_line_bboxes_merges_clusters_and_absorbs_limits() -> None:
-    boxes = _garbled_line_bboxes(_alexnet_like_page())
-    assert boxes is not None
-    # Both garbled lines belong to one formula: each gets the full box.
-    assert len(boxes) == 2
-    assert boxes[0] == boxes[1]
+    result = _garbled_line_bboxes(_alexnet_like_page())
+    assert result is not None
+    boxes, garbled_cluster_count = result
+    # Both garbled lines belong to one formula: one box for the whole group.
+    assert len(boxes) == 1
+    assert garbled_cluster_count == 2
     x1, y1, x2, y2 = boxes[0]
     # The crop must span the formula body plus the absorbed limit row.
     assert x1 < 298.0 / 612.0
@@ -62,11 +64,52 @@ def test_garbled_line_bboxes_merges_clusters_and_absorbs_limits() -> None:
     assert y2 < 225.3 / 792.0
 
 
+def test_garbled_line_bboxes_bridges_interleaved_clean_limit_rows() -> None:
+    # LRN shape: garbled delimiter rows with clean summation rows between.
+    words = [
+        _word(108.0, 149.8, 504.0, 162.1, "prose line above the formula"),
+        _word(300.0, 172.4, 396.0, 183.2, _GARBLE),
+        _word(262.2, 190.0, 357.0, 196.2, "min(N-1,i+n/2)"),
+        _word(298.0, 202.7, 310.0, 208.9, "X"),
+        _word(211.0, 215.3, 396.0, 226.1, f"bix,y = aix,y / k {_GARBLE}"),
+        _word(298.0, 232.0, 357.0, 238.9, "j=max(0,i-n/2)"),
+        _word(108.0, 260.3, 504.0, 268.2, "prose line below the formula"),
+    ]
+    result = _garbled_line_bboxes(_BBOX_PAGE_TEMPLATE.format(words="".join(words)))
+    assert result is not None
+    boxes, garbled_cluster_count = result
+    assert garbled_cluster_count == 2
+    assert len(boxes) == 1
+    _x1, y1, _x2, y2 = boxes[0]
+    # The crop must span both garbled rows including the clean rows between.
+    assert y1 < 172.4 / 792.0
+    assert y2 > 226.1 / 792.0
+    # Surrounding prose stays outside the crop.
+    assert y1 > 162.1 / 792.0
+    assert y2 < 260.3 / 792.0
+
+
+def test_garbled_line_bboxes_keeps_distant_formulas_separate() -> None:
+    words = [
+        _word(262.2, 172.4, 396.0, 183.2, _GARBLE),
+        _word(108.0, 300.0, 504.0, 308.9, "prose line between the formulas"),
+        _word(108.0, 320.0, 504.0, 328.9, "second prose line separator"),
+        _word(108.0, 340.0, 504.0, 348.9, "third prose line separator"),
+        _word(262.2, 420.5, 396.0, 431.7, _GARBLE),
+    ]
+    result = _garbled_line_bboxes(_BBOX_PAGE_TEMPLATE.format(words="".join(words)))
+    assert result is not None
+    boxes, garbled_cluster_count = result
+    assert garbled_cluster_count == 2
+    assert len(boxes) == 2
+    assert boxes[0] != boxes[1]
+
+
 def test_garbled_line_bboxes_returns_empty_when_nothing_is_garbled() -> None:
     html = _BBOX_PAGE_TEMPLATE.format(
         words=_word(108.0, 149.8, 504.0, 162.1, "clean prose only")
     )
-    assert _garbled_line_bboxes(html) == ()
+    assert _garbled_line_bboxes(html) == ((), 0)
 
 
 @pytest.mark.parametrize("html", ["", "<doc>no page</doc>"])
@@ -90,6 +133,77 @@ def test_render_text_page_keeps_plain_marker_without_coordinates() -> None:
         "[[paper-copilot-ocr:start slot=page-0004-formula-0001 page=4]]"
     ) in rendered
     assert "bbox=" not in rendered
+
+
+def test_render_text_page_groups_consecutive_garbled_lines_into_one_slot() -> None:
+    text = f"garbled {_GARBLE} one\ngarbled {_GARBLE} two\nclean line\n"
+    rendered = _render_text_page(text, 4, ((0.2, 0.3, 0.8, 0.4),))
+    assert rendered.count("[[paper-copilot-ocr:start") == 1
+    assert "slot=page-0004-formula-0001 page=4 bbox=0.2000,0.3000,0.8000,0.4000" in rendered
+    assert f"原始提取：garbled {_GARBLE} one" in rendered  # noqa: RUF001
+    assert f"原始提取：garbled {_GARBLE} two" in rendered  # noqa: RUF001
+    assert "formula-0002" not in rendered
+
+
+def test_render_text_page_bridges_interleaved_clean_lines_into_one_slot() -> None:
+    # LRN shape: clean summation rows between two garbled rows.
+    text = (
+        f"garbled {_GARBLE} delimiter\n"
+        "min(N-1,i+n/2)\n"
+        "X\n"
+        f"bix,y garbled {_GARBLE} body\n"
+        "j=max(0,i-n/2)\n"
+        "prose after the formula\n"
+    )
+    rendered = _render_text_page(text, 4, ((0.2, 0.3, 0.8, 0.4),))
+    assert rendered.count("[[paper-copilot-ocr:start") == 1
+    assert f"原始提取：garbled {_GARBLE} delimiter" in rendered  # noqa: RUF001
+    assert "原始提取：min(N-1,i+n/2)" in rendered  # noqa: RUF001
+    assert f"原始提取：bix,y garbled {_GARBLE} body" in rendered  # noqa: RUF001
+    # The trailing clean row after the last garbled line stays outside.
+    assert "原始提取：j=max(0,i-n/2)" not in rendered  # noqa: RUF001
+    assert "j=max(0,i-n/2)" in rendered
+    assert "prose after the formula" in rendered
+
+
+def test_render_text_page_splits_slots_at_long_clean_gaps() -> None:
+    text = (
+        f"garbled {_GARBLE} one\n"
+        "clean line\n"
+        "clean line two\n"
+        "clean line three\n"
+        f"garbled {_GARBLE} two\n"
+    )
+    rendered = _render_text_page(
+        text,
+        4,
+        ((0.2, 0.3, 0.8, 0.4), (0.2, 0.6, 0.8, 0.7)),
+    )
+    assert rendered.count("[[paper-copilot-ocr:start") == 2
+    assert "slot=page-0004-formula-0001" in rendered
+    assert "slot=page-0004-formula-0002" in rendered
+    # The unbridged clean gap stays outside both slots as plain text.
+    assert "原始提取：clean line" not in rendered  # noqa: RUF001
+    assert "clean line\nclean line two\nclean line three" in rendered
+
+
+def test_slot_block_count_matches_slot_grouping() -> None:
+    interleaved = (
+        f"garbled {_GARBLE} one\n"
+        "clean line\n"
+        "clean line two\n"
+        f"garbled {_GARBLE} two\n"
+    )
+    assert _slot_block_count(interleaved) == 1
+    separated = (
+        f"garbled {_GARBLE} one\n"
+        "clean line\n"
+        "clean line two\n"
+        "clean line three\n"
+        f"garbled {_GARBLE} two\n"
+    )
+    assert _slot_block_count(separated) == 2
+    assert _slot_block_count("clean only\n") == 0
 
 
 def test_formula_aware_text_aligns_bboxes_to_garbled_lines() -> None:

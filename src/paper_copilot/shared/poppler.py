@@ -25,8 +25,9 @@ _EXTRACTION_PARAMETERS = {
     "eol": "unix",
     "page_breaks": "form_feed",
     # Drives the garbled-slot bbox marker format; bumping it retires caches
-    # built before slot markers carried coordinates.
-    "slot_bbox_source": "pdftotext-bbox-v2",
+    # built before slot blocks bridged interleaved clean formula rows (one
+    # slot per display formula including its limit rows).
+    "slot_bbox_source": "pdftotext-bbox-v4",
 }
 _MAX_BBOX_OUTPUT_BYTES = 64 * 1024 * 1024
 
