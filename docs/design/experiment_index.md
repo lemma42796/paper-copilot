@@ -10,6 +10,7 @@
 - [Codex vs Paper Copilot with DeepSeek V4 Flash](../../eval/experiments/codex-vs-pc-v4flash/experiment.md)
 - [Paper Copilot V4 Flash component ablation](../../eval/experiments/pc-v4flash-component-ablation/experiment.md)
 - [Codex PDF formula-reading diagnostic](../../eval/experiments/codex-pdf-formula-reading/experiment.md)
+- [Codex CLI + DeepSeek vs Paper Copilot + DeepSeek formula OCR](../../eval/experiments/codex-vs-pc-deepseek-formula-ocr/experiment.md)
 
 ## Shared plans and source mappings
 
@@ -29,3 +30,9 @@
 - Codex vs Paper Copilot with DeepSeek V4 Flash — 2026-08-06 PC 当前 Query 1–4 非盲
   单系统运行审计入口：
   `/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-vs-pc-v4flash/_audit/query1-4-pc-v4flash-current-max-v1/experiment.md`
+- Codex vs Paper Copilot with DeepSeek V4 Flash — 2026-08-08 PC 重跑 Query 1–4 非盲
+  诊断评分审计入口：
+  `/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-vs-pc-v4flash/_audit/pc-rerun-q1-4-20260808-v1/experiment.md`
+- Codex CLI + DeepSeek vs Paper Copilot + DeepSeek formula OCR — 2026-08-08 手动 Q1/Q2
+  诊断评分审计入口（Q1 未 accept，缓存条件未建立）：
+  `/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-vs-pc-deepseek-formula-ocr/_audit/manual-runs-20260808-v1/experiment.md`
