@@ -134,10 +134,14 @@ Runtime 在模型循环前只准备授权论文清单、页数、哈希和应用
 
 纯文本（text-only）模型不能使用该视觉回退。未安装可选 Formula OCR 组件时，Runtime
 仍不暴露公式识别工具，遇到公式、符号表格或明显提取损坏时只能明确报告证据限制。组件
-安装后，纯文本模型可调用 `recognize_formula`；乱码公式优先用 `cache_slot` 定位：建库时
+安装后，纯文本模型可调用 `recognize_formula`；当前组件使用准确率优先的
+`PP-FormulaNet_plus-M`。乱码公式优先用 `cache_slot` 定位：建库时
 `pdftotext -bbox` 已算出公式归一化 bbox 写入槽位标记，Runtime 据此自动裁切；无槽位时
 回退到 PDF 自带坐标定位带编号独立公式，或调用方提供的规范化 region，随后只接收本地
 OCR helper 返回的 LaTeX。
+Runtime 在首次公式识别时按需启动 Helper，并通过串行请求复用同一已加载模型；连续一小时
+没有公式请求时 Helper 自行退出并释放模型内存，之后的请求会自动重启。Helper 路径切换、
+协议失步、超时或 Runtime 退出也会丢弃对应子进程，不跨版本复用模型状态。
 公式 OCR 不提供数学正确性保证，结果必须携带原 PDF 页、region、render hash、模型身份和
 未验证警告。`layout.txt` 中的乱码行包含稳定 `cache_slot`。只有当前任务确实需要理解或引用
 某个具体公式、且该公式的 TXT 乱码阻碍任务时，模型才调用 OCR；不得仅因发现无关乱码或

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import atexit
 import asyncio
 import hashlib
 import json
 import os
+import select
+import subprocess
 import tempfile
 import threading
 import time
@@ -38,7 +41,11 @@ __all__ = [
 _COMPONENT_SCHEMA_VERSION = 2
 _TOOL_SCHEMA_VERSION = 1
 _HELPER_TIMEOUT_SECONDS = 120.0
+_HELPER_IDLE_TIMEOUT_SECONDS = 60.0 * 60.0
+_HELPER_TERMINATION_GRACE_SECONDS = 2.0
 _MAX_HELPER_OUTPUT_BYTES = 64_000
+_MAX_HELPER_DIAGNOSTIC_BYTES = 4_000
+_HELPER_READ_CHUNK_BYTES = 8_192
 # Slot crops are rendered large enough for the recognizer to keep limits and
 # scripts; the cap bounds the intermediate full-page render.
 _FORMULA_BASE_RENDER_DIMENSION = 1_800
@@ -198,6 +205,295 @@ class _FormulaOCRCandidate:
 
 _CANDIDATES: dict[str, _FormulaOCRCandidate] = {}
 _CANDIDATES_LOCK = threading.Lock()
+
+
+class _FormulaOCRHelperFailure(Exception):
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool,
+        discard_process: bool,
+    ) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+        self.discard_process = discard_process
+
+
+class _FormulaOCRRequestCancelled(Exception):
+    pass
+
+
+class _FormulaOCRHelperProcess:
+    def __init__(self, helper_path: Path) -> None:
+        self.helper_path = helper_path
+        try:
+            self.process = subprocess.Popen(
+                [
+                    str(helper_path),
+                    "--serve",
+                    "--idle-timeout-seconds",
+                    str(_HELPER_IDLE_TIMEOUT_SECONDS),
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env={
+                    **os.environ,
+                    "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True",
+                },
+                start_new_session=True,
+            )
+        except OSError as error:
+            raise _FormulaOCRHelperFailure(
+                "could not start the Formula OCR helper",
+                retryable=False,
+                discard_process=True,
+            ) from error
+        if (
+            self.process.stdin is None
+            or self.process.stdout is None
+            or self.process.stderr is None
+        ):
+            self.terminate()
+            raise _FormulaOCRHelperFailure(
+                "Formula OCR helper did not expose its protocol streams",
+                retryable=False,
+                discard_process=True,
+            )
+        self._stderr_lock = threading.Lock()
+        self._stderr_tail = bytearray()
+        self._stderr_reader = threading.Thread(
+            target=self._drain_stderr,
+            name="paper-copilot-formula-ocr-stderr",
+            daemon=True,
+        )
+        self._stderr_reader.start()
+
+    def request(self, image_path: Path) -> dict[str, Any]:
+        if self.process.poll() is not None:
+            raise _FormulaOCRHelperFailure(
+                "Formula OCR helper exited before the request",
+                retryable=True,
+                discard_process=True,
+            )
+        request_id = uuid4().hex
+        request = json.dumps(
+            {
+                "schema_version": 1,
+                "request_id": request_id,
+                "image": str(image_path),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8") + b"\n"
+        stdin = self.process.stdin
+        assert stdin is not None
+        try:
+            stdin.write(request)
+            stdin.flush()
+        except (BrokenPipeError, OSError) as error:
+            raise _FormulaOCRHelperFailure(
+                "Formula OCR helper closed stdin",
+                retryable=True,
+                discard_process=True,
+            ) from error
+        response_bytes = self._read_response()
+        try:
+            response = json.loads(response_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise _FormulaOCRHelperFailure(
+                "Formula OCR helper returned invalid JSON",
+                retryable=True,
+                discard_process=True,
+            ) from error
+        if not isinstance(response, dict) or response.get("schema_version") != 1:
+            raise _FormulaOCRHelperFailure(
+                "Formula OCR helper returned an unsupported schema",
+                retryable=True,
+                discard_process=True,
+            )
+        if response.get("request_id") != request_id:
+            raise _FormulaOCRHelperFailure(
+                "Formula OCR helper response did not match its request",
+                retryable=True,
+                discard_process=True,
+            )
+        error_message = response.get("error")
+        if error_message is not None:
+            diagnostic = (
+                error_message
+                if isinstance(error_message, str) and error_message
+                else "no diagnostic output"
+            )
+            raise _FormulaOCRHelperFailure(
+                "Formula OCR helper failed: " + diagnostic[:500],
+                retryable=False,
+                discard_process=False,
+            )
+        return response
+
+    def diagnostic(self) -> str:
+        with self._stderr_lock:
+            return self._stderr_tail.decode("utf-8", errors="replace").strip()
+
+    def terminate(self) -> None:
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=_HELPER_TERMINATION_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
+        for stream in (self.process.stdin, self.process.stdout, self.process.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+
+    def _read_response(self) -> bytes:
+        stdout = self.process.stdout
+        assert stdout is not None
+        deadline = time.monotonic() + _HELPER_TIMEOUT_SECONDS
+        response = bytearray()
+        while True:
+            newline_at = response.find(b"\n")
+            if newline_at >= 0:
+                if response[newline_at + 1 :]:
+                    raise _FormulaOCRHelperFailure(
+                        "Formula OCR helper returned multiple protocol records",
+                        retryable=True,
+                        discard_process=True,
+                    )
+                return bytes(response[:newline_at])
+            if len(response) > _MAX_HELPER_OUTPUT_BYTES:
+                raise _FormulaOCRHelperFailure(
+                    "Formula OCR helper returned oversized output",
+                    retryable=False,
+                    discard_process=True,
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _FormulaOCRHelperFailure(
+                    "Formula OCR helper exceeded its deadline",
+                    retryable=False,
+                    discard_process=True,
+                )
+            readable, _, _ = select.select([stdout.fileno()], [], [], remaining)
+            if not readable:
+                raise _FormulaOCRHelperFailure(
+                    "Formula OCR helper exceeded its deadline",
+                    retryable=False,
+                    discard_process=True,
+                )
+            chunk = os.read(stdout.fileno(), _HELPER_READ_CHUNK_BYTES)
+            if not chunk:
+                self._stderr_reader.join(timeout=0.2)
+                raise _FormulaOCRHelperFailure(
+                    "Formula OCR helper closed stdout",
+                    retryable=True,
+                    discard_process=True,
+                )
+            response.extend(chunk)
+
+    def _drain_stderr(self) -> None:
+        stderr = self.process.stderr
+        assert stderr is not None
+        while chunk := stderr.read(_HELPER_READ_CHUNK_BYTES):
+            with self._stderr_lock:
+                self._stderr_tail.extend(chunk)
+                excess = len(self._stderr_tail) - _MAX_HELPER_DIAGNOSTIC_BYTES
+                if excess > 0:
+                    del self._stderr_tail[:excess]
+
+
+class _FormulaOCRHelperPool:
+    def __init__(self) -> None:
+        self._request_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._process: _FormulaOCRHelperProcess | None = None
+        self._active_cancellation: threading.Event | None = None
+
+    def request(
+        self,
+        helper_path: Path,
+        image_path: Path,
+        cancellation: threading.Event,
+    ) -> dict[str, Any]:
+        with self._request_lock:
+            if cancellation.is_set():
+                raise _FormulaOCRRequestCancelled
+            for attempt in range(2):
+                try:
+                    process = self._get_or_start(helper_path)
+                except _FormulaOCRHelperFailure as error:
+                    raise KnowledgeError(str(error)) from error
+                with self._state_lock:
+                    if cancellation.is_set():
+                        raise _FormulaOCRRequestCancelled
+                    self._active_cancellation = cancellation
+                try:
+                    return process.request(image_path)
+                except _FormulaOCRHelperFailure as error:
+                    if cancellation.is_set():
+                        raise _FormulaOCRRequestCancelled from error
+                    diagnostic = process.diagnostic()
+                    if error.discard_process:
+                        self._discard(process)
+                    if error.retryable and attempt == 0:
+                        continue
+                    message = str(error)
+                    if diagnostic and "failed:" not in message:
+                        message += ": " + diagnostic[-500:]
+                    raise KnowledgeError(message) from error
+                finally:
+                    with self._state_lock:
+                        if self._active_cancellation is cancellation:
+                            self._active_cancellation = None
+        raise AssertionError("formula OCR helper retry loop did not return")
+
+    def cancel(self, cancellation: threading.Event) -> None:
+        cancellation.set()
+        with self._state_lock:
+            if self._active_cancellation is not cancellation:
+                return
+            process = self._process
+            self._process = None
+        if process is not None:
+            process.terminate()
+
+    def terminate(self) -> None:
+        with self._state_lock:
+            process = self._process
+            self._process = None
+        if process is not None:
+            process.terminate()
+
+    def _get_or_start(self, helper_path: Path) -> _FormulaOCRHelperProcess:
+        with self._state_lock:
+            process = self._process
+            if (
+                process is not None
+                and process.helper_path == helper_path
+                and process.process.poll() is None
+            ):
+                return process
+            if process is not None:
+                self._process = None
+                process.terminate()
+            process = _FormulaOCRHelperProcess(helper_path)
+            self._process = process
+            return process
+
+    def _discard(self, process: _FormulaOCRHelperProcess) -> None:
+        with self._state_lock:
+            if self._process is process:
+                self._process = None
+        process.terminate()
+
+
+_FORMULA_OCR_HELPERS = _FormulaOCRHelperPool()
+atexit.register(_FORMULA_OCR_HELPERS.terminate)
+_LEGACY_HELPER_SIGNATURES: set[tuple[Path, int, int, int]] = set()
+_LEGACY_HELPER_SIGNATURES_LOCK = threading.Lock()
 
 
 def formula_ocr_tool_description() -> str:
@@ -770,6 +1066,50 @@ def _legacy_label_region(
 
 
 async def _run_helper(helper_path: Path, image_path: Path) -> dict[str, Any]:
+    try:
+        helper_signature = _helper_binary_signature(helper_path)
+    except OSError as error:
+        raise KnowledgeError("could not inspect the Formula OCR helper") from error
+    with _LEGACY_HELPER_SIGNATURES_LOCK:
+        use_one_shot = helper_signature in _LEGACY_HELPER_SIGNATURES
+    if use_one_shot:
+        return await _run_helper_once(helper_path, image_path)
+    cancellation = threading.Event()
+    try:
+        try:
+            result = await asyncio.to_thread(
+                _FORMULA_OCR_HELPERS.request,
+                helper_path,
+                image_path,
+                cancellation,
+            )
+        except KnowledgeError as error:
+            if not _helper_server_is_unsupported(str(error)):
+                raise
+            with _LEGACY_HELPER_SIGNATURES_LOCK:
+                _LEGACY_HELPER_SIGNATURES.add(helper_signature)
+            result = await _run_helper_once(helper_path, image_path)
+    except asyncio.CancelledError:
+        _FORMULA_OCR_HELPERS.cancel(cancellation)
+        raise
+    if not isinstance(result, dict) or result.get("schema_version") != 1:
+        raise KnowledgeError("Formula OCR helper returned an unsupported schema")
+    return result
+
+
+def _helper_binary_signature(helper_path: Path) -> tuple[Path, int, int, int]:
+    stat = helper_path.stat()
+    return (helper_path, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
+def _helper_server_is_unsupported(diagnostic: str) -> bool:
+    return "--serve" in diagnostic and (
+        "unrecognized arguments" in diagnostic
+        or "the following arguments are required" in diagnostic
+    )
+
+
+async def _run_helper_once(helper_path: Path, image_path: Path) -> dict[str, Any]:
     try:
         process = await asyncio.create_subprocess_exec(
             str(helper_path),

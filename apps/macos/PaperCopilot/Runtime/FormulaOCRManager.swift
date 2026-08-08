@@ -88,10 +88,10 @@ final class FormulaOCRManager: @unchecked Sendable {
 
     private static let componentSchemaVersion = 2
     private static let helperRootDirectory = "FormulaOCRHelper"
-    private static let modelRootDirectory = "PP-FormulaNet_plus-S"
+    private static let modelRootDirectory = "PP-FormulaNet_plus-M"
     private static let helperRelativePath = "FormulaOCRHelper/FormulaOCRHelper"
     private static let modelRelativePath =
-        "FormulaOCRHelper/models/PP-FormulaNet_plus-S"
+        "FormulaOCRHelper/models/PP-FormulaNet_plus-M"
     private static let manifestURL = URL(
         string:
             "https://github.com/lemma42796/paper-copilot/releases/download/formula-ocr-v1/formula-ocr-macos-arm64-manifest.json"

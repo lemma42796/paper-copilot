@@ -3,14 +3,19 @@
 ## Decision
 
 Paper Copilot does not bundle PaddlePaddle, PaddleOCR, PaddleX, OpenCV, or
-`PP-FormulaNet_plus-S` in the main macOS application. The complete formula OCR
+`PP-FormulaNet_plus-M` in the main macOS application. The complete formula OCR
 helper is a separately built, signed, versioned download. Merely starting the
 app, selecting a model, or hovering over a text-only model performs no network
 request.
 
+The optional component uses the medium model rather than the speed-oriented
+small model because formula fidelity is the product boundary; inference is
+on-demand, and the persistent Helper amortizes model initialization across nearby
+requests. OCR output remains unverified regardless of model size.
+
 The user starts the first network request by clicking the download button in
 Settings. The client downloads a fixed HTTPS manifest. Schema v2 describes the
-Helper Runtime and `PP-FormulaNet_plus-S` weights as separate content-addressed
+Helper Runtime and `PP-FormulaNet_plus-M` weights as separate content-addressed
 archives, including archive byte length and SHA-256 plus a deterministic digest
 of each installed directory tree. The client writes `active.json` atomically
 only after all reused or downloaded artifacts pass validation.
@@ -25,7 +30,7 @@ order:
 2. a matching Runtime or model from another installed version;
 3. Paper Copilot's content-addressed extracted-artifact and archive caches;
 4. for model weights only, the known PaddleX cache path
-   `~/.paddlex/official_models/PP-FormulaNet_plus-S`, after its complete tree
+   `~/.paddlex/official_models/PP-FormulaNet_plus-M`, after its complete tree
    digest matches the manifest;
 5. the artifact's fixed HTTPS archive.
 
@@ -36,6 +41,11 @@ boundary. A matching complete Runtime can be reused; loose Paddle packages
 cannot. Reused sources are copied into a staging version, revalidated together,
 and activated atomically. Cached archives remain keyed by archive SHA-256 so a
 later reinstall does not download identical bytes again.
+
+Settings keeps an explicit user-initiated update action after installation. A
+Runtime-only release can therefore activate a new Helper while reusing the
+unchanged model tree from the installed component; it does not silently check the
+network or redownload matching weights.
 
 ## Runtime boundary
 
@@ -66,8 +76,23 @@ exactly one of:
 
 For a printed label, the main Runtime uses the PDF text geometry to construct a
 bounded crop. It renders that crop with Poppler and gives only the temporary PNG
-path to the helper. The helper performs CPU inference with the packaged
-`PP-FormulaNet_plus-S` weights and writes one bounded JSON response to stdout.
+path to the helper. On the first request, Runtime starts the Helper in server mode;
+the Helper loads the packaged `PP-FormulaNet_plus-M` weights on demand and then
+serves a serialized, bounded JSON-lines request/response protocol over stdin/stdout.
+Repeated formula requests reuse that model process. After one hour without a
+request, the Helper exits and releases its model memory; the next request starts a
+fresh process. Runtime also discards the process when the selected Helper path
+changes, a request times out, the protocol becomes desynchronized, the calling task
+is cancelled, or Runtime exits. The original one-shot `--image` entry point remains
+available for component build checks and diagnostics.
+
+The process-reuse pattern follows the pinned Codex implementation at
+`codex-rs/shell-command/src/command_safety/powershell_parser.rs`: one cached child
+behind a mutex, a request ID on every JSON-line exchange, strict response matching,
+and one fresh-child retry after a broken or desynchronized stream. Formula OCR adds
+one domain-specific lifecycle rule that Codex's parser does not need: the signed
+Helper owns a one-hour idle timeout so its substantially larger model memory is
+released even while the main Runtime remains open.
 
 The `recognize` result contains candidate LaTeX, a `candidate_id`, page, region,
 PDF and render hashes, model identity,

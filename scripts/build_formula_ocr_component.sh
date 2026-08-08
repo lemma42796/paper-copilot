@@ -3,22 +3,23 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
-VERSION=${FORMULA_OCR_COMPONENT_VERSION:-1.0.0}
+VERSION=${FORMULA_OCR_COMPONENT_VERSION:-1.1.0}
+MODEL_VERSION=${FORMULA_OCR_MODEL_VERSION:-1.0.0}
 MODEL_DIR=${FORMULA_OCR_MODEL_DIR:-}
 RELEASE_BASE_URL=${FORMULA_OCR_RELEASE_BASE_URL:-https://github.com/lemma42796/paper-copilot/releases/download/formula-ocr-v1}
 BUILD_ROOT="$REPO_ROOT/build/formula-ocr-component"
 DIST_ROOT="$BUILD_ROOT/dist"
 HELPER_DIST="$DIST_ROOT/FormulaOCRHelper"
-MODEL_DIST="$BUILD_ROOT/model-dist/PP-FormulaNet_plus-S"
+MODEL_DIST="$BUILD_ROOT/model-dist/PP-FormulaNet_plus-M"
 RUNTIME_ARCHIVE_NAME="formula-ocr-runtime-macos-arm64-$VERSION.zip"
-MODEL_ARCHIVE_NAME="formula-ocr-model-PP-FormulaNet_plus-S-$VERSION.zip"
+MODEL_ARCHIVE_NAME="formula-ocr-model-PP-FormulaNet_plus-M-$MODEL_VERSION.zip"
 RUNTIME_ARCHIVE_PATH="$BUILD_ROOT/$RUNTIME_ARCHIVE_NAME"
 MODEL_ARCHIVE_PATH="$BUILD_ROOT/$MODEL_ARCHIVE_NAME"
 MANIFEST_PATH="$BUILD_ROOT/formula-ocr-macos-arm64-manifest.json"
 LIBOMP_SOURCE=${FORMULA_OCR_LIBOMP:-}
 
 if [ -z "$MODEL_DIR" ] || [ ! -d "$MODEL_DIR" ]; then
-    echo "FORMULA_OCR_MODEL_DIR must point to PP-FormulaNet_plus-S" >&2
+    echo "FORMULA_OCR_MODEL_DIR must point to PP-FormulaNet_plus-M" >&2
     exit 2
 fi
 
@@ -136,7 +137,7 @@ MODEL_TREE_SHA256=$(printf '%s\n' "$TREE_HASHES" | sed -n '2p')
 # Keep a complete development Helper in dist while release installation remains
 # split into independently reusable runtime and model archives.
 mkdir -p "$HELPER_DIST/models"
-ditto "$MODEL_DIST" "$HELPER_DIST/models/PP-FormulaNet_plus-S"
+ditto "$MODEL_DIST" "$HELPER_DIST/models/PP-FormulaNet_plus-M"
 
 uv run python -c '
 import json
@@ -162,10 +163,10 @@ payload = {
         "archive_bytes": int(sys.argv[10]),
         "installed_bytes": int(sys.argv[11]),
         "tree_sha256": sys.argv[12],
-        "root_directory": "PP-FormulaNet_plus-S",
+        "root_directory": "PP-FormulaNet_plus-M",
     },
     "helper_relative_path": "FormulaOCRHelper/FormulaOCRHelper",
-    "model_relative_path": "FormulaOCRHelper/models/PP-FormulaNet_plus-S",
+    "model_relative_path": "FormulaOCRHelper/models/PP-FormulaNet_plus-M",
 }
 path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 ' \

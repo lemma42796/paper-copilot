@@ -62,11 +62,14 @@ struct SettingsView: View {
                     ProgressView()
                         .controlSize(.small)
                 case .installed(_):
-                    EmptyView()
+                    Button("检查并更新本地公式 OCR…") {
+                        appModel.downloadFormulaOCR()
+                    }
+                    .disabled(appModel.hasActiveJobs || appModel.isSubmitting)
                 }
 
                 Text(
-                    "仅在点击下载后校验并复用本机已有组件；缺失时才获取 PaddlePaddle、PaddleOCR、运行依赖和 PP-FormulaNet_plus-S 权重。选择或指向模型不会联网。"
+                    "仅在点击下载后校验并复用本机已有组件；缺失时才获取 PaddlePaddle、PaddleOCR、运行依赖和 PP-FormulaNet_plus-M 权重。选择或指向模型不会联网。"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
