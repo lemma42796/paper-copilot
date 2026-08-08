@@ -6,10 +6,15 @@ import json
 import os
 import shutil
 import sys
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
 from paper_copilot.shared.errors import PdfCacheError
+from paper_copilot.shared.pdf_font_repair import (
+    PDF_CONTROL_MARKER,
+    repair_pdf_font_unicode_maps,
+)
 
 __all__ = [
     "PopplerExtraction",
@@ -28,6 +33,10 @@ _EXTRACTION_PARAMETERS = {
     # built before C0 control characters became garble signals rendered as
     # visible control pictures (silent math-glyph loss now opens slots).
     "slot_bbox_source": "pdftotext-bbox-v5",
+    # Repair only deterministic embedded-font Unicode maps in a temporary PDF
+    # copy before Poppler sees it. This changes cache content and therefore the
+    # extractor fingerprint, without changing the public cache schema.
+    "font_unicode_repair": "embedded-cmap-math-symbol-readerex-v2",
 }
 _MAX_BBOX_OUTPUT_BYTES = 64 * 1024 * 1024
 
@@ -125,16 +134,31 @@ class PopplerTextExtractor:
         pdfinfo_path = self._resolve_executable(self._pdfinfo_path, "pdfinfo")
         pdftotext_path = self._resolve_executable(self._pdftotext_path, "pdftotext")
         page_count = await self._page_count(pdfinfo_path, pdf_path)
-        await self._run(
-            pdftotext_path,
-            "-layout",
-            "-enc",
-            _EXTRACTION_PARAMETERS["encoding"],
-            "-eol",
-            _EXTRACTION_PARAMETERS["eol"],
-            str(pdf_path),
-            str(output_path),
+        repaired_pdf_path = output_path.with_name(
+            f".{output_path.name}.unicode-repaired.pdf"
         )
+        try:
+            repair = await asyncio.to_thread(
+                repair_pdf_font_unicode_maps,
+                pdf_path,
+                repaired_pdf_path,
+            )
+            extraction_pdf_path = repaired_pdf_path if repair.modified else pdf_path
+            await self._run(
+                pdftotext_path,
+                "-layout",
+                "-enc",
+                _EXTRACTION_PARAMETERS["encoding"],
+                "-eol",
+                _EXTRACTION_PARAMETERS["eol"],
+                str(extraction_pdf_path),
+                str(output_path),
+            )
+            if repair.removed_control_mapping_count > 0:
+                await asyncio.to_thread(_strip_pdf_control_markers, output_path)
+        finally:
+            with suppress(FileNotFoundError):
+                repaired_pdf_path.unlink()
         if not output_path.is_file():
             raise PdfCacheError("pdftotext completed without producing its output artifact")
         return PopplerExtraction(page_count=page_count, identity=identity)
@@ -236,3 +260,10 @@ class PopplerTextExtractor:
                 f"{executable.name} failed with exit code {process.returncode}: {message[:500]}"
             )
         return stdout, stderr
+
+
+def _strip_pdf_control_markers(output_path: Path) -> None:
+    marker = PDF_CONTROL_MARKER.encode("utf-8")
+    output_bytes = output_path.read_bytes()
+    if marker in output_bytes:
+        output_path.write_bytes(output_bytes.replace(marker, b""))

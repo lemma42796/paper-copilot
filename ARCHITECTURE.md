@@ -127,6 +127,15 @@ Runtime 在模型循环前只准备授权论文清单、页数、哈希和应用
 原始 PDF 始终是权威来源。未经视觉或结构化证据复核，模型不得从乱码缓存精确转写公式，
 也不得把符号列不完整的表格作为完整证据。
 
+在 `pdftotext -layout` 前，Runtime 只处理 Type0、Identity-H 且 `CIDToGIDMap` 为 Identity
+的确定性字体损坏，并且只写临时 PDF 副本：Cambria Math 用内嵌字体自身的 Unicode
+`cmap` 和 OpenType `MATH` 变体表重建损坏的 `ToUnicode`；Symbol MT 用预置的 Adobe
+Symbol 标准编码恢复数学字符；`B3+SimSun` 仅在私用区映射对应的内嵌 GID 确认没有字形
+轮廓时删除 ReaderEx 控制符。完整字符恢复为 Unicode，公式拼装件和未知字形继续输出替换
+字符，交给现有损坏证据路径处理。该修复不读取或分发本机 Word/WPS 字体，不做 OCR，也
+不改变公式定位、槽位或缓存 schema；修复版本进入 extractor fingerprint，确保旧缓存不会
+冒充新结果。
+
 ### 5.2 页面证据与引用展示
 
 `inspect_page` 只在模型支持图像输入时渲染 PNG。结果绑定 PDF SHA-256、页码、region

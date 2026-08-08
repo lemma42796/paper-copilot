@@ -23,6 +23,7 @@ uv run pyinstaller \
     --paths "$REPO_ROOT/src" \
     --add-data "$REPO_ROOT/src/paper_copilot/agents/skills:paper_copilot/agents/skills" \
     --collect-all sqlite_vec \
+    --collect-all fontTools \
     --exclude-module pandas \
     --exclude-module pytest \
     --exclude-module scipy \

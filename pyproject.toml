@@ -9,6 +9,7 @@ description = "Personal paper reading copilot (local-first)."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "fonttools>=4.0",
     "pydantic>=2.0",
     "structlog>=24.4.0",
     "pymupdf>=1.24.0",

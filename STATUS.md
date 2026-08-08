@@ -3,89 +3,104 @@
 > 当前任务的跨会话接力快照。每次更新覆盖旧内容，不追加历史流水；详细设计与实验结果
 > 保存在各自产物中。
 
-更新于 2026-08-08。
+更新于 2026-08-09。
 
 ## 新会话从这里继续
 
-下一任务是重新讨论公式定位方法，先不要写代码。用户对现有三级链
-`cache_slot` bbox → `locate_page_text` 双锚点 → `equation_label` 很不满意；此前“公式核实
-管线已收官”的判断作废。下一轮应先把公式发现、区域定位、OCR、核实和 accept 拆开，
-比较建库期 bbox、运行期文本锚点、编号定位、整页版面/公式检测等方案，再由用户确认
-最小可维护路径。
+PDF 字体乱码恢复已完成源码实现，但尚未做产品级运行验证。当前提取链会在
+`pdftotext -layout` 前检查 PDF 内嵌字体，只为满足确定性条件的字体生成临时修复副本；
+原 PDF 不修改。公式定位算法、槽位结构和缓存 schema 均未改动。
 
-Formula OCR 的另一条工程线已完成源码修改：生产默认从
-`PP-FormulaNet_plus-S` 切换为准确率优先的 `PP-FormulaNet_plus-M`，并把每次冷启动改为
-常驻 Helper。首次公式请求才加载模型；后续请求串行复用同一进程；连续一小时无请求时
-Helper 自动退出；路径变化、协议失步、超时、取消或 Runtime 退出会丢弃进程；旧组件不支持
-`--serve` 时回退到原单次 `--image` 调用。
+下一步应使用三类真实论文分别验证 Cambria Math、Symbol MT 和 ReaderEx 路径，再检查
+生成的 `layout.txt` 与原 PDF。没有完成这些验证前，只能称为“实现完成”，不能宣称乱码
+恢复已在 App 中验收通过。
 
-这只是源码状态。当前已安装的 macOS Formula OCR 组件仍是 Plus-S；没有构建、签名、发布
-或安装 Plus-M 组件，因此现在运行的 App 还没有真正切到 M。
+公式定位方法由用户明确延期，后续将重新设计。不要继续给现有三级定位链打补丁，也不要
+把本轮字体恢复与公式定位重构混在一起。
 
-## 本轮源码变更（尚未做运行验证）
+## PDF 字体乱码恢复实现
 
-- `src/paper_copilot/formula_ocr_helper.py`
-  - 模型身份改为 `PP-FormulaNet_plus-M`；
-  - 新增 `--serve` JSON-lines 协议、惰性模型加载与一小时空闲退出；
-  - 保留 `--image` 单次诊断入口。
-- `src/paper_copilot/agents/formula_ocr_tool.py`
-  - 新增长寿命 Helper 管理器、全局串行请求、request ID 校验、stdout/stderr 边界；
-  - 超时、崩溃或协议失步后丢弃子进程，对可恢复的断流只重试一次；
-  - 支持取消、Runtime 退出清理和旧 Helper 兼容降级。
-- `apps/macos/PaperCopilot/Runtime/FormulaOCRManager.swift`
-  - 安装 manifest 的预期模型目录改为 Plus-M。
-- `apps/macos/PaperCopilot/Views/SettingsView.swift`
-  - 设置文案改为 Plus-M；已安装状态提供用户主动触发的“检查并更新”按钮。
-- `scripts/build_formula_ocr_component.sh`
-  - 构建目标改为 Plus-M；Runtime 默认版本为 `1.1.0`，模型版本独立为 `1.0.0`。
-- `ARCHITECTURE.md` 与 `docs/design/formula_ocr_optional_component.md`
-  - 同步 Plus-M、常驻进程、空闲释放与兼容边界。
+新增 `src/paper_copilot/shared/pdf_font_repair.py`，入口为
+`repair_pdf_font_unicode_maps`。所有修复同时要求 Type0、Identity-H 且
+`CIDToGIDMap` 为 Identity，因此 PDF 字符码可确定地沿 CID 找到同号 GID。
 
-静态检查 `git diff --check` 通过。按仓库规则没有主动运行 Ruff、mypy、pytest、App 构建、
-组件构建或真实 OCR。本轮行为仍未验证。
+当前支持三条窄路径：
 
-## Plus-M 本地权重
+- Cambria Math：验证 PDF 字体名与内嵌字体身份后，从内嵌字体自身的 Unicode `cmap`
+  恢复普通字形，并用 OpenType `MATH` 变体表恢复完整的伸缩字形；拼装括号、拼装积分号
+  和未知字形保留为 `U+FFFD`，不把局部轮廓冒充完整字符。
+- Symbol MT：把内嵌字体的 `uniF0XX` 字形名还原为 Adobe Symbol 字节码，再通过预置的
+  Adobe Symbol 标准编码和 fontTools Adobe Glyph List 恢复 α、β、∑、≠、∈ 等 Unicode
+  字符；未定义编码和公式拼装件保留为 `U+FFFD`。
+- ReaderEx：不根据下载来源判断，只处理基字体名精确为 `B3+SimSun`、`ToUnicode` 目标
+  位于私用区且对应内嵌 GID 没有任何字形轮廓的映射。命中的空控制字形先映射到内部
+  非字符标记，`pdftotext` 完成后再从文本产物删除。普通汉字、非空私用区字形和其他字体
+  不处理。
 
-此前已下载并解压：
+`src/paper_copilot/shared/poppler.py` 已接入上述修复：
+
+1. 在输出目录创建临时 Unicode 修复 PDF；
+2. 有确定性修复时让现有 `pdftotext -layout` 读取临时副本，否则读取原 PDF；
+3. 清理 ReaderEx 内部标记；
+4. 无论成功或失败都删除临时 PDF。
+
+提取器 fingerprint 已加入
+`font_unicode_repair=embedded-cmap-math-symbol-readerex-v2`，旧缓存不会冒充新结果。
+`pyproject.toml` 和 `uv.lock` 已加入 fontTools，当前锁定解析版本为 `4.63.0`；macOS
+PyInstaller 构建脚本已加入 `--collect-all fontTools`。
+
+## 本轮文件边界
+
+- `src/paper_copilot/shared/pdf_font_repair.py`：确定性字体识别、内嵌字体读取及
+  `ToUnicode` 重建。
+- `src/paper_copilot/shared/adobe_symbol_encoding.py`：Adobe Symbol 标准编码表。
+- `src/paper_copilot/shared/poppler.py`：临时修复副本接入和 ReaderEx 标记清理。
+- `pyproject.toml`、`uv.lock`：fontTools 依赖。
+- `scripts/build_macos_app.sh`：macOS Helper 打包收集 fontTools。
+- `ARCHITECTURE.md`：同步字体恢复边界。
+- `TASKS.md`：公式定位任务标记为用户延期。
+
+本轮没有修改公式检测、bbox、`cache_slot`、`locate_page_text`、`equation_label`、Formula
+OCR Skill 或 accept 流程。
+
+## 尚未验证
+
+按仓库规则，本轮没有主动运行 Ruff、mypy、pytest、macOS App 构建或正式缓存生成，也没有
+执行三份真实 PDF 的端到端对照。以下事项仍待完成：
+
+1. 用 Cambria Math 论文验证数学字母、运算符和 `MATH` 变体恢复；
+2. 用 Symbol MT 论文验证希腊字母和标准数学符号，同时确认拼装件仍保持未解析；
+3. 用含 `B3+SimSun` ReaderEx 空控制字形的知网论文验证控制字符被删除而正文汉字不变；
+4. 用普通期刊或会议 PDF 验证不符合条件的字体完全不修改；
+5. 生成真实 `layout.txt`，比较修复前后文本、分页和缓存 fingerprint 失效行为；
+6. 构建 macOS App，确认 PyInstaller 包含 fontTools 所需模块。
+
+## 其他未完成工程线
+
+Plus-M Formula OCR 源码已在提交 `16522a8` 完成，但当前安装的 macOS 可选组件仍是
+Plus-S。尚未构建、签名、发布或安装 Plus-M `1.1.0` Runtime/模型组件，也未验证冷启动、
+连续复用、超时或崩溃重启、一小时空闲退出和真实公式识别。
+
+本地 Plus-M 权重仍位于：
 
 - 目录：`/Users/a123/Downloads/formula-ocr-m/PP-FormulaNet_plus-M_infer/`
 - 归档：`/Users/a123/Downloads/formula-ocr-m/PP-FormulaNet_plus-M_infer.tar`
-- 归档大小：592 MiB
-- SHA-256：`f208430a7ec1079fce53a447b340e0183bf6c5c14e32915886635c37ec4c5fd9`
+- 归档 SHA-256：`f208430a7ec1079fce53a447b340e0183bf6c5c14e32915886635c37ec4c5fd9`
 
-构建时显式设置
-`FORMULA_OCR_MODEL_DIR=/Users/a123/Downloads/formula-ocr-m/PP-FormulaNet_plus-M_infer`；不要覆盖
-当前已安装组件，也不要在未验证前发布 manifest。
+构建时显式设置上述模型目录；不要覆盖当前已安装组件，也不要在真实验证前发布 manifest。
 
-## 定位方案现状与问题
+## 公式定位任务
 
-当前实现仍是三级定位：
+当前实现仍是 `cache_slot` bbox → `locate_page_text` 双锚点 → `equation_label` 三级链，但
+用户认为多个定位方法会干扰模型，而且论文公式不一定带编号。该任务状态为
+`deferred_by_user`：后续应重新拆分公式发现、区域定位、OCR、核实和 accept，再选择唯一或
+最小定位方法；方案确认前不修改现有实现。
 
-1. 建库期通过 `pdftotext -bbox` 为 `cache_slot` 预计算归一化 bbox；
-2. 槽位无 bbox 时由 `locate_page_text` 使用正文双锚点推导区域；
-3. 有稳定编号的独立公式可使用 `equation_label`。
+## Git 与下一步
 
-已知问题：
+- 分支：`main`。
+- 本轮提交只包含上面列出的字体恢复、依赖、架构、任务和本状态文档。
+- 不提交 PDF、临时修复副本、生成缓存、权重、凭据、构建产物或私有实验产物。
 
-- C0 残骸型槽位可能没有 bbox，只能绕到锚点路径；
-- 完全丢弃型损坏没有文本层信号，当前检测层看不见；
-- 定位、OCR 与 Agent 降级策略耦合，路径和错误引导偏复杂；
-- 公式编号并不总是存在，文本锚点也会受栏布局、跨页和提取损坏影响。
-
-下一轮只讨论方案与决策指标，不默认延续三级结构，也不先给现有路径打补丁。
-
-## 工作树与提交边界
-
-- 分支：`main`；本轮开始时 `HEAD` 与 `origin/main` 都是 `aa55bc3`。
-- 本次工程提交应包含：`TASKS.md`、`STATUS.md`、Formula OCR Helper/Runtime/Swift/构建脚本、
-  `ARCHITECTURE.md` 和 Formula OCR 设计文档。
-- 以下实验改动先前已存在，不属于本次 M/常驻 Helper 工程提交，必须保持原样且不要混入：
-  - `docs/design/experiment_index.md`；
-  - `eval/experiments/codex-vs-pc-deepseek-formula-ocr/`。
-- 不提交或推送本地 Plus-M 权重、构建产物、用户缓存、凭据或私有评分产物。
-
-## 下一步
-
-1. 与用户讨论并选定公式定位方法；方案确认前不实现。
-2. 定位方案确定后，再单独构建和真机验证 Plus-M `1.1.0` 可选组件。
-3. 只有真实安装与推理验证通过后，才发布组件或宣称 App 已切到 M。
+建议下一步：用户明确要求验证时，先做三份目标 PDF 加一份普通期刊/会议 PDF 的窄范围
+运行验证；验证结果不通过时只修字体恢复，不顺带调整公式定位。

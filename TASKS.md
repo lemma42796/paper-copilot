@@ -6,13 +6,13 @@
 > 当前接力状态见 [STATUS.md](STATUS.md)，当前架构见
 > [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-更新于 2026-08-08。
+更新于 2026-08-09。
 
 ## 未完成任务
 
 ### 1. 重新讨论并设计公式定位方法
 
-状态：`discussion_pending`，下一任务，不开始实现。
+状态：`deferred_by_user`，用户后续将大改，本轮不修改实现。
 
 用户对当前三级定位链不满意：`cache_slot` bbox → `locate_page_text` 双锚点推导 →
 `equation_label`。下一轮先重新定义定位问题和产品边界，再决定是否保留、替换或简化
