@@ -10,7 +10,27 @@
 
 ## 未完成任务
 
-### 1. 重新讨论并设计公式定位方法
+### 1. 完成 PDF 字体乱码恢复产品级验证
+
+状态：`source_cache_validation_partial`，Cambria Math 源码缓存路径已通过一篇真实学位论文
+验证，打包 App 与其余字体路径仍未验证。
+
+已完成：
+
+- 对 65 页学位论文《基于低秩融合与动态增强的多模态行人重识别研究》执行隔离缓存重建；
+- 命中 1 个 Cambria Math 字体并重建 7,613 条 Unicode 映射，原始文本中的 851 个
+  `U+FFFD` 在修复后降为 0；
+- 变化只出现在物理页 21、22、24，已与原 PDF 逐页核对数学字母、希腊字母和公式结构；
+- 首次 `PdfTextCache.ensure` 生成 65 页缓存，第二次命中同一 revision，临时修复 PDF 已清理。
+
+尚未完成：
+
+- 用真实 Symbol MT 论文验证标准数学符号，并确认不完整拼装件仍保持未解析；
+- 用含 `B3+SimSun` ReaderEx 空控制字形的论文验证控制字符删除且正文汉字不变；
+- 用不符合修复条件的普通 PDF 验证完全不修改；
+- 构建并运行 macOS App，确认 PyInstaller 打包 fontTools 且产品缓存路径结果一致。
+
+### 2. 重新讨论并设计公式定位方法
 
 状态：`deferred_by_user`，用户后续将大改，本轮不修改实现。
 
@@ -27,7 +47,7 @@
 - 以可靠性、可解释性、工具调用复杂度、延迟和缓存复用为决策指标，选出最小可维护方案；
 - 方案确认前不修改定位实现、Skill 或缓存格式。
 
-### 2. 构建并验证 Plus-M Formula OCR 可选组件
+### 3. 构建并验证 Plus-M Formula OCR 可选组件
 
 状态：`implementation_complete_packaging_pending`，排在定位方案讨论之后。
 
