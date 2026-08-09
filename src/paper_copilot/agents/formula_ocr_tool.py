@@ -40,6 +40,7 @@ __all__ = [
 
 _COMPONENT_SCHEMA_VERSION = 2
 _TOOL_SCHEMA_VERSION = 2
+_PAGE_EVIDENCE_SCHEMA_VERSION = 1
 _HELPER_TIMEOUT_SECONDS = 120.0
 _HELPER_IDLE_TIMEOUT_SECONDS = 60.0 * 60.0
 _HELPER_TERMINATION_GRACE_SECONDS = 2.0
@@ -622,7 +623,7 @@ async def run_formula_ocr(
     with _CANDIDATES_LOCK:
         _CANDIDATES[candidate_id] = candidate
     evidence = {
-        "schema_version": _TOOL_SCHEMA_VERSION,
+        "schema_version": _PAGE_EVIDENCE_SCHEMA_VERSION,
         "source_kind": "pdf_formula_ocr",
         "pdf_sha256": pdf_sha256,
         "page": args.page,

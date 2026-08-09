@@ -51,9 +51,9 @@ Symbol MT 和 ReaderEx 三条源码缓存路径均已用代表性真实学位论
 
 ### 2. 验证主动坐标探索式公式 OCR
 
-状态：`implementation_complete_validation_pending`。旧三级定位代码已经删除，新协议和
-独立 Skill 已实现；代表公式和自然用户提示词已经冻结。客户端性能修复已通过本地合成
-压测，公式 OCR 长链路本身仍待验证。
+状态：`real_recognize_complete_accept_validation_pending`。旧三级定位代码已经删除，新协议
+和独立 Skill 已实现；新 fingerprint 缓存、逐字符坐标查询、模型主动选框和 Plus-M 真实
+recognize 长链路已经用三篇代表论文验证，写回与失败恢复仍待验证。
 
 已完成：
 
@@ -71,30 +71,52 @@ Symbol MT 和 ReaderEx 三条源码缓存路径均已用代表性真实学位论
 - 已在 `docs/design/formula_ocr_validation_prompt.md` 保存后续验证提示词，覆盖有编号乱码
   公式、无编号行内公式和疑似静默丢结构的分段公式；提示词不向执行模型泄露评测目的、
   预期页码或正确结构，首轮只 recognize、不 accept，并要求报告每次 region、候选与哈希。
+- 已用新 fingerprint 缓存执行真实任务 `job-20260809T092725-b68b814a53`：模型通过
+  `query_page_geometry` 定位物理页 28、39、46；无编号 Rank-3 内联式直接使用字符几何，
+  没有不必要地调用 OCR；
+- 公式 (2-9) 与 (4.10) 均由模型明确给出 region，并在第一次 recognize 中恢复完整数学
+  结构；分别用时 8.7 秒和 3.126 秒，模型均为 `PP-FormulaNet_plus-M`，没有重裁剪；
+- 首次运行暴露并修复两个真实协议边界：公式 OCR tool schema 2 不能直接充当
+  `PageEvidence` schema 版本；PyMuPDF 可能返回孤立 UTF-16 surrogate，现已在几何提取
+  边界替换为 `U+FFFD`，保证工具结果可序列化；
+- 已在 [主动公式定位案例](docs/stories/active_formula_localization.md) 保存两组缓存文本、
+  实际模型裁图、原始 OCR LaTeX、可读渲染、region、candidate 与渲染哈希；两张裁图文件
+  SHA-256 与 trace 中 `render_sha256` 完全一致。
 
 尚未完成：
 
 - 未运行 Python 测试、Ruff 或 mypy；
-- 未用代表性真实论文重建新 fingerprint 缓存，核对弱提示、逐字符坐标和
-  `repair_span_id` 的对应关系；
 - 未核对旧 v2 accepted OCR revision 在 v3 中不自动迁移时的产品提示和重新识别体验；
-- 未执行安装 Plus-M 后的真实三次重裁剪、次数拒绝、乱码公式 accept、非乱码整段替换和
-  缓存回读验证。
+- 未验证同一公式三次重裁剪后的次数拒绝、Helper 失败计数和重试恢复；
+- 本次按提示只 recognize、未 accept：尚未验证 (2-9) 的 `repair_span_id` 整段写回和缓存
+  回读；(4.10) 本次没有冻结唯一 `replacement_text`，不能直接安全写回，仍需重新识别并
+  冻结完整替换目标后验证非乱码整段替换。
 
 ### 3. 构建并验证 Plus-M Formula OCR 可选组件
 
-状态：`implementation_complete_packaging_pending`，排在新定位协议验证之后。
+状态：`local_adhoc_install_and_real_ocr_complete_release_validation_pending`。
 
 生产源码默认模型已从 `PP-FormulaNet_plus-S` 切换为
 `PP-FormulaNet_plus-M`。Runtime 已改为首次请求按需启动 Helper、串行复用同一已加载模型，
 连续一小时无请求后由 Helper 退出释放内存；旧版单次调用 Helper 保留兼容降级。
 
+已完成：
+
+- 使用本地 Plus-M 权重构建 `1.1.0` Runtime 与模型组件归档及 schema-v2 manifest；ARM64
+  Helper 已 ad-hoc 签名，并通过 `codesign --verify --deep --strict`；
+- 已安装到 macOS 可选组件目录，`active.json` 当前明确指向
+  `versions/1.1.0/FormulaOCRHelper/FormulaOCRHelper`；旧 `1.0.0` 只作为本机回滚版本保留；
+- 同一真实任务连续调用两次 Plus-M Helper，公式 (2-9) 与 (4.10) 均首次识别成功，证明
+  当前本机安装与主动 region OCR 主链路可用；
+- 当前没有 Developer ID，不把 Developer ID 签名或 Apple 公证列为本地验收前提；正式
+  对外分发如需绕过 Gatekeeper，必须另行设计可承担的签名或用户自构建方案。
+
 尚未完成：
 
-- 用已下载的 Plus-M 权重构建 `1.1.0` Runtime/模型组件；
-- 签名并生成/发布新的 manifest 与归档；
-- 真机安装更新，验证冷启动、连续复用、超时/崩溃重启、一小时空闲释放和真实公式识别；
-- 有验证结果后再决定是否清理旧 Plus-S 安装或保留回滚版本。
+- 未把 `1.1.0` manifest 与归档发布到公开下载端；
+- 未专项验证 Helper 超时、崩溃重启和一小时空闲释放；本次两次连续真实调用只覆盖正常
+  启动、复用与识别路径；
+- 尚未决定何时删除旧 Plus-S 兼容代码；本机旧 `1.0.0` 暂时保留为可恢复版本。
 
 ### 4. 渲染报告中的 LaTeX 数学公式
 

@@ -193,7 +193,9 @@ def _page_lines(page: pymupdf.Page) -> tuple[_GeometryLine, ...]:
                     bbox = character.get("bbox")
                     if not isinstance(text, str) or not text or not _valid_bbox(bbox):
                         continue
-                    characters.append((text, pymupdf.Rect(bbox)))
+                    characters.append(
+                        (_sanitize_extracted_text(text), pymupdf.Rect(bbox))
+                    )
             if not characters:
                 continue
             line_bbox = pymupdf.Rect(characters[0][1])
@@ -347,6 +349,15 @@ def _normalized_rect(rect: pymupdf.Rect, page_rect: pymupdf.Rect) -> dict[str, f
 def _has_prose(text: str) -> bool:
     return any("\u3400" <= character <= "\u9fff" for character in text) or bool(
         _ENGLISH_WORD_PATTERN.search(text)
+    )
+
+
+def _sanitize_extracted_text(text: str) -> str:
+    # PDF text is untrusted and PyMuPDF can expose isolated UTF-16 surrogates.
+    # Replace them at the extraction boundary so every tool result is valid UTF-8.
+    return "".join(
+        "\ufffd" if "\ud800" <= character <= "\udfff" else character
+        for character in text
     )
 
 
