@@ -4,12 +4,12 @@
 > [TASKS.md](TASKS.md)，工程规则见 [AGENTS.md](AGENTS.md)，详细决策见
 > [docs/design/](docs/design/)；具体接口以代码为准。
 
-更新于 2026-08-03。
+更新于 2026-08-10。
 
 ## 1. 原则
 
 - **Single Agent：**只有一个 Paper Copilot bounded tool loop，不做多 Agent 编排。
-- **Local first：**PDF、索引、session、报告和 trace 默认保存在本地；仅将完成本地
+- **Local first：**PDF、派生缓存、session、报告和 trace 默认保存在本地；仅将完成本地
   选择后的必要上下文发送给用户配置的模型。
 - **One Core：**macOS 客户端和 MCP 复用 Python Core，不复制论文处理、检索、job 或
   恢复逻辑。
@@ -30,12 +30,16 @@ Local MCP Server ──────► bounded MCP services ──────�
 
 | 表面 | 所有权 |
 |---|---|
-| `apps/macos/` | UI、security-scoped 目录、凭据、模型设置、审批和 Runtime 生命周期 |
+| `apps/macos/` | UI、security-scoped 目录、凭据、模型设置、审批、可选组件安装、完成报告渲染和 Runtime 生命周期 |
 | `api/` | 本地 JSON/HTTP、SSE 和 diagnostics transport |
 | `mcp/` | 本地 stdio 查询及长任务协议 |
-| Python Core | Agent、PDF、检索、索引、job、session、恢复、eval 和 observability |
+| Python Core | Agent、PDF、按需缓存与读取、job、session、恢复、eval 和 observability |
 
 SwiftUI 与 MCP 是协议边界。MCP 工具不是内部 Agent 工具；长任务复用 `chat.jobs`。
+完成报告由 macOS 客户端的 `MarkdownReportView` 在本地解析 Markdown，并用 SwiftMath
+渲染行内与展示 LaTeX；不使用 WebView 或运行时网络。为避免长流中反复解析完整报告，
+模型生成中的活动文本继续使用轻量纯文本，只在任务完成后进入正式 Markdown/数学渲染路径。
+单个公式解析失败时保留原始 LaTeX，不使整份报告失败。
 
 ## 3. 模块所有权
 
@@ -48,7 +52,7 @@ src/paper_copilot/
 ├── schemas/        # 跨 LLM、文件和模块边界的 Pydantic 契约
 ├── session/        # append-only model/session history
 ├── retrieval/      # 单篇论文章节切分
-├── knowledge/      # 字段、chunks、embedding、图关系和跨论文检索
+├── knowledge/      # 未接入当前产品路径的旧 append-only 跨论文关系原语
 ├── observability/  # attempt rollout trace
 ├── eval/           # 回归、检索 gate 和趋势评估
 └── shared/         # 无上层依赖的错误、日志、成本、环境和纯函数
@@ -59,21 +63,22 @@ src/paper_copilot/
 - `api/` 只翻译本地协议；`chat/` 负责业务编排和持久 job 生命周期。
 - `agents/` 拥有唯一自主循环、模型工具、工具策略和论文读取编排。
 - `session/` 不理解 Agent 或论文 schema；`observability/` 不决定业务状态。
-- `retrieval/` 只负责单篇切分；`knowledge/` 负责持久跨论文知识。
+- `retrieval/` 只负责单篇切分；`knowledge/` 当前只保留旧的跨论文关系 JSONL helper，
+  未接入 Agent 或 MCP 活跃路径，也不提供 fields、chunks、embedding 或向量检索。
 - `eval/` 通过公开 Agent 入口评测，不成为产品运行依赖。
 
 ## 4. 依赖边界
 
 ```text
 apps/macos ─► api ─► chat ─► agents ◄── schemas
-MCP server ─────────► chat / knowledge / session
-                                │
-                     ┌──────────┼──────────┐
-                     ▼          ▼          ▼
-                  session   retrieval   knowledge
-                     └──────────┬──────────┘
-                                ▼
-                              shared
+MCP server ─────────► chat / session
+                            │
+                     ┌──────┴──────┐
+                     ▼             ▼
+                  session      retrieval
+                     └──────┬──────┘
+                            ▼
+                          shared
 
 chat / agents ─► observability
 eval ─► public Agent entrypoint + explicit suite exceptions
@@ -106,7 +111,7 @@ rollout deadline。
 | `library_write_stdin` | 以不透明 session ID 写入或轮询已 yield 的 `library_exec` 进程；继承原命令 sandbox |
 | `inspect_page` | 按授权 PDF SHA-256、页码和可选 region 渲染单页图像；不做 OCR、批量处理或文本回退 |
 | `query_page_geometry` | 仅在纯文本模型且 Formula OCR 可用时，搜索页面文字或枚举限定 region 的行与逐字符坐标；只返回弱几何证据，不自动构造 crop |
-| `recognize_formula` | 仅在纯文本模型且可选 Formula OCR 组件已安装时，接收模型明确给出的 region，返回未验证 LaTeX；同一公式最多三次 recognize，与 `inspect_page` 互斥暴露 |
+| `recognize_formula` | 仅在纯文本模型且可选 Formula OCR 组件已安装时暴露；`recognize` 接收模型明确给出的 region 并返回未验证 LaTeX，`accept` 用 candidate ID 发布已接受公式；同一公式最多三次 recognize，与 `inspect_page` 互斥暴露 |
 | `library_edit` | 授权论文库内的用户可见写操作；禁止静默覆盖和永久删除，需要时持久审批 |
 
 ### 5.1 研究上下文与缓存
@@ -171,13 +176,15 @@ Runtime 在首次公式识别时按需启动 Helper，并通过串行请求复�
 `formula-ocr` Skill，Runtime 会拒绝未加载 Skill 的调用。同一任务内同一公式最多三次
 `recognize`，次数以 session application event 持久计数，`accept` 不计次数。
 
-首次 `recognize` 只返回候选 LaTeX 和 `candidate_id`，不修改缓存。模型判断候选完整后调用
-`accept`，可用 `refined_latex` 清洗 OCR 杂质。Runtime 重新验证 PDF 哈希，把页码、明确
-`region`、`formula_ref` 和 LaTeX 追加到 `formulas.jsonl`，写入新 revision 并原子发布
-current；原始 `layout.txt` 保持不变。公式编号存在时优先作为辅助 `formula_ref`；无编号公式
-使用附近短语作为引用，持久身份仍绑定 PDF 哈希、物理页和 region。读取或搜索该页时，
-Runtime 在原文本之后展示已接受公式并保留 `verified=false`。无法可靠确定 region 时不得整页
-强行识别，复杂表格恢复仍属于待设计能力。
+首次 `recognize` 只返回候选 LaTeX 和 `candidate_id`，不修改缓存。模型判断原始候选的完整
+数学结构得到裁图支持后调用 `accept`。工具 schema 仍保留受校验的可选
+`refined_latex`，但内建生产 `formula-ocr` Skill 要求模型省略该字段，不得为清理空格、命令
+风格、定界符、杂散文本或记号而重写完整公式；原始候选不忠实时应调整 region 重试，仍不
+可靠则不接受。Runtime 重新验证 PDF 哈希，把页码、明确 `region`、`formula_ref` 和 LaTeX
+追加到 `formulas.jsonl`，写入新 revision 并原子发布 current；原始 `layout.txt` 保持不变。
+公式编号存在时优先作为辅助 `formula_ref`；无编号公式使用附近短语作为引用，持久身份仍绑定
+PDF 哈希、物理页和 region。读取或搜索该页时，Runtime 在原文本之后展示已接受公式并保留
+`verified=false`。无法可靠确定 region 时不得整页强行识别，复杂表格恢复仍属于待设计能力。
 
 成功 `inspect_page` 后，Runtime 只追加不含图像正文的页面观察事件。文本读取不另设
 登记工具；权威命令、模型可见输出和完整会话历史构成审计依据。默认 Agent loop 不按
@@ -238,8 +245,14 @@ papers/<conversation_id>/session.jsonl
 papers/<standalone_session_id>/session.jsonl
 jobs/<job_id>/{job.json,events.jsonl,attempts/<n>/{manifest.json,trace.jsonl,state.json,payloads/}}
 cache/<pdf_sha256>/<extractor_fingerprint>/revisions/<revision_id>/{layout.txt,formulas.jsonl,manifest.json}
-optional-components/formula-ocr/{active.json,downloads/,artifacts/,versions/<version>/}
 stress-tests/<run_id>/{run.json,summary.json,samples.json}
+```
+
+macOS 客户端拥有的 Formula OCR 可选组件不位于 `~/.paper-copilot/`，而位于：
+
+```text
+~/Library/Application Support/Paper Copilot/optional-components/formula-ocr/
+  {active.json,downloads/,artifacts/,versions/<version>/}
 ```
 
 论文目录本身是论文清单的唯一事实源。Core 不保存论文结构化字段、全文索引、向量索引或
@@ -254,7 +267,7 @@ PaddlePaddle、PaddleOCR、PaddleX、OpenCV 或公式模型权重；模型悬浮
 哈希匹配且签名有效的已安装 Runtime、自有下载/解包缓存，以及哈希匹配的 PaddleX 官方模型
 缓存；只下载缺失产物。任意 Python 环境中的零散依赖不得拼装为可信 Runtime。全部校验通过后
 才原子激活 `active.json`。Runtime 工具调用本身禁止下载，只执行当前 `active.json` 指向且位于
-应用数据根内的 helper。
+上述 macOS 可选组件根内的 helper。
 
 客户端压测是 macOS 设置中的本地诊断入口。它只在 Swift 进程内确定性生成 job 事件、回答
 文本和公式，并复用现有事件归约、conversation timeline 与完成报告渲染路径；不调用

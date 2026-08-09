@@ -1,208 +1,164 @@
 # Paper Copilot
 
-> 本地优先的论文研究助手：阅读 PDF、检索个人论文库，并基于证据生成研究笔记与
-> 可验证的模型框架草案。
+Paper Copilot 是一款面向 macOS 的本地论文研究工具。它能够检索指定目录中的论文、定位原文
+证据，并处理 PDF 中难以提取的数学公式。生成的研究报告可将每项结论追溯到对应论文页面。
 
-![Python](https://img.shields.io/badge/python-3.12+-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Code style](https://img.shields.io/badge/code_style-ruff-purple)
-![Package manager](https://img.shields.io/badge/package-uv-orange)
+Paper Copilot 的优势之一，是让低成本纯文本模型也能完成精确的论文研究。在冻结的同模型实验
+中，同一个 `deepseek-v4-flash` 在 Paper Copilot 中的答案正确性得分为 **100%**，高于
+Codex Agent 的 **88.89%**，同时耗时、词元（Token）和模型成本更低。结果仅适用于本次论文、
+任务和配置。
 
-简体中文 | [English](README.en.md)
+Paper Copilot 为此构建了两层适配。论文处理层将 PDF 转换为可搜索、可按页引用的证据，修复
+字体映射，并以坐标弱提示和技能（Skill）帮助 Agent 定位仍然损坏的公式，再交给本地 OCR。
+Agent 运行框架（harness）让模型决定下一步行动，由运行时（Runtime）管理工具权限、超时、
+返回大小、循环控制和上下文，并负责长任务的停止、恢复与追踪。
 
-Paper Copilot 面向个人论文库。Agent 直接浏览用户授权的 PDF 目录，并为当前任务按需生成
-内容寻址的 `layout.txt`；不建立论文数据库、向量索引或 embeddings。
+![Python](https://img.shields.io/badge/Python-3.12+-blue)
+![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-black)
+![License](https://img.shields.io/badge/License-MIT-green)
 
-PDF、索引、session、报告和 trace 默认保存在本地。本地检索选出的文本片段可能发送给
-用户配置的云端模型；“PDF 未上传”不表示任何论文内容都不会离开设备。
+![Paper Copilot 主界面](screenshot/截屏2026-08-09%2023.22.52.png)
 
-## Status
+## 技术重点
 
-当前产品入口：
+### 面向长任务的 Agent harness
 
-- **SwiftUI macOS 客户端**：论文目录、模型配置、持久任务、对话、报告、停止/恢复和
-  diagnostics。
-- **Local MCP Server**：持久任务状态工具。
-- **Python Core**：Agent、按需 PDF 文本缓存、session、job recovery 和 observability。
+模型决定下一步行动，并通过工具完成论文检索、页面读取、坐标查询和公式识别。运行时在调用前
+校验参数与文件权限，并限制执行时间和返回大小。研究流程由 Skill 规定，包括证据引用方式和
+工具调用条件。
 
-M20–M24 已完成，包括自包含 Apple Silicon `.app`、开发预览 DMG 和旧 Next.js Web UI
-退役。Developer ID 与 Apple 公证留到正式发布阶段。完整状态见
-[TASKS.md](TASKS.md)。
+系统会阻止重复或高度相似的工具调用。上下文工程（context engineering）控制进入模型的信息：
+论文正文按需读取，工具返回限制在设定大小内；历史过长时自动压缩为结构化摘要，保留论文 ID、
+页码证据和关键决策。被压缩的历史细节不再占用模型上下文，论文内容仍可按需重新读取；完整会话
+和调用记录继续保留，用于任务恢复与审计。较高风险的操作在执行前由独立审批模型按风险和授权
+进行判定。
 
-## Capabilities
+conversation、job、attempt、session 和 trace 分层保存，支持任务恢复、失败重试和调用追踪。
+macOS 客户端与 MCP Server 共享 Python 核心（Python Core），论文处理逻辑只维护一份。
 
-- 通过受限 shell、PDF 页图和按需 `layout.txt` 读取论文。
-- 每次受控缓存读取前校验当前 PDF 哈希；替换 PDF 后自动切换到新缓存键。
-- 使用 append-only session、持久 job/attempt、rollout replay 和本地 trace 保留
-  恢复与诊断证据。
-- 使用字段 golden、retrieval suite、成本和延迟趋势约束模型变更。
+### 缓存按需建立，旧版本自动失效
 
-输出是研究草案，不是论文成稿，也不证明建议的组合一定有效。
+研究同一篇论文时，搜索、翻页和回看反复用到相同内容。每次重新解析 PDF 既慢，又会让模型
+重复读取大段正文。所以 Paper Copilot 只缓存当前任务实际用到的论文，不在启动时扫描整个
+论文库。
 
-## Quick Start
+缓存不只是性能优化，也是修复后文本的持久化层。字体映射恢复出的字符写入缓存，不修改原
+PDF；后续任务直接读取同一修复版本。
 
-开发环境需要 Python 3.12+、[`uv`](https://docs.astral.sh/uv/) 和可用的模型 API Key。
+缓存绑定 PDF SHA-256 和提取器指纹（extractor fingerprint）。论文被替换或文本提取逻辑升级
+后，系统生成新的缓存版本（revision），旧结果随之作废。新缓存完整写入并通过校验后才替换当前
+版本，文件锁用于避免并发写入破坏数据。
+
+### 修复 PDF 文本层里的数学乱码
+
+部分论文在阅读器中显示正常，但文本提取后会出现数学符号乱码，或丢失根号、向量、上下标、
+求和范围和分段括号。即使正文仍然可读，公式语义也可能已经损坏。
+
+PDF 阅读器可以直接使用内嵌字体的字形绘制页面，而文本提取器需要依靠 ToUnicode 将 PDF
+字符码转换为 Unicode。因此，缺少映射的公式可能显示正常，提取后却变成私用区字符、控制字符
+或替换字符。
+
+Paper Copilot 只修复可以证明的映射。系统先验证 PDF 字符码、字符标识符（CID）与内嵌字形
+标识符（GID）之间的关系，再利用字体的 cmap、MATH 表或 Adobe Symbol 编码恢复字形对应的
+Unicode，并为可证明的映射临时补全 ToUnicode。控制字符仅在确认对应空字形时移除；无法确定
+的字符不会被猜测。整个过程不修改原 PDF，修复后的文本写入版本化缓存。
+
+在 7 篇代表性学位论文中，显式乱码率从约 **0.4124%** 降至 **0.0069%**：
+
+| 指标 | 修复前 | 修复后 | 变化 |
+| --- | ---: | ---: | ---: |
+| 显式乱码字符 | 12,035 个 | 202 个 | 减少 11,833 个 |
+| 文本字符 | 2,918,226 个 | 2,908,673 个 | — |
+| 显式乱码率 | 0.4124% | 0.0069% | **相对减少 98.32%** |
+
+这里的“显式乱码”包括私用区字符、替换字符和异常控制字符。这个指标反映的是文本层的明显
+损坏，不是公式准确率；有些公式没有乱码，二维结构却可能已经丢了。
+
+[查看字体恢复验证](docs/design/pdf_font_unicode_repair_validation.md)
+
+### Agent 定位公式并执行局部 OCR
+
+Paper Copilot 不依赖单独训练的公式检测或文本定位模型，也不预埋完整公式框。字体映射修复
+先尽量恢复可搜索的编号与上下文；对于仍包含损坏字符的非正文行，缓存仅记录首尾损坏字符的
+坐标作为弱提示。公式 OCR 技能（Formula OCR Skill）再指导通用研究模型结合文本锚点和原
+PDF 的逐字符几何信息，自主选择裁剪区域。系统仅渲染选定区域，并交给本地公式 OCR
+（Formula OCR）转写，不预先扫描整篇论文。
+
+下面是两次真实运行的结果。第一处公式丢失了向量、根号和求和结构，第二处丢失了分段括号和
+二维排版。Agent 首次选择的区域均完整覆盖目标公式，本地 OCR 分别耗时约 **8.7 秒**和
+**3.1 秒**。这证明该路径在这两个案例中有效，但样本不足以说明它在任意论文和版式中都具有
+同样的定位表现。
+
+| 文本缓存里的乱码 | Agent 选出的原 PDF 区域 | Formula OCR 结果 |
+| --- | --- | --- |
+| ![缓存文本中的乱码公式](docs/assets/formula-ocr-active-localization/equation-2-9-text-cache.png) | ![向量、根号和求和结构丢失后的原图区域](docs/assets/formula-ocr-active-localization/equation-2-9-model-crop.png) | ![恢复后的公式](docs/assets/formula-ocr-active-localization/equation-2-9-ocr-result.png) |
+| ![缓存文本中的乱码分段公式](docs/assets/formula-ocr-active-localization/equation-4-10-text-cache.png) | ![分段结构丢失后的原图区域](docs/assets/formula-ocr-active-localization/equation-4-10-model-crop.png) | ![恢复后的分段公式](docs/assets/formula-ocr-active-localization/equation-4-10-ocr-result.png) |
+
+识别结果经 Agent 检查后才写入缓存。若裁图不完整或结果不可靠，Agent 可以调整区域重试；
+无法确认时，则在报告中明确说明。已确认的公式可在后续会话中复用。
+
+[查看完整案例](docs/stories/active_formula_localization.md) ·
+[了解 Formula OCR 组件](docs/design/formula_ocr_optional_component.md)
+
+## 与 Codex CLI 的同模型实验
+
+这不是模型之间的比较。Paper Copilot 和 Codex CLI 使用同一个
+`deepseek-v4-flash`（DS V4 Flash），读取同一份 PDF，回答同一组问题，联网限制和运行预算
+保持一致。每个任务都从新会话开始；标准答案、评分规则和原子事实标签在查看回答前已经固定。
+
+正确性按原子事实计分：正确为 `1` 分，部分正确为 `0.5` 分，错误或缺失为 `0` 分。耗时、
+词元（Token）和成本从运行记录中统计，不参与正确性评分。
+
+| 指标 | 单位 | Paper Copilot | Codex CLI | 相比 Codex CLI |
+| --- | --- | ---: | ---: | ---: |
+| 答案正确性得分（部分正确计 0.5 分） | % | **100.00** | 88.89 | **提高 11.11 个百分点** |
+| 正式任务总耗时 | 秒 | **388** | 1,947 | **减少 80.1%** |
+| 总词元 | Token | **736,319** | 19,271,592 | **减少 18,535,273（96.2%）** |
+| 可归属模型成本 | 元 | **0.170** | 1.044 | **减少 83.8%** |
+
+结果只代表本次论文、模型和完整 Agent 配置，不能直接外推到其他场景，也不能将差异单独归因
+于某个组件。
+
+[查看实验设置和评分规则](eval/experiments/codex-vs-pc-deepseek-font-repair-ocr-v2/experiment.md)
+
+## macOS 客户端
+
+客户端使用 SwiftUI 开发，提供论文目录授权、模型设置、任务时间线、停止与恢复、诊断信息和
+研究报告展示。App 设计为通过内嵌的 Python 运行时（Python Runtime）调用 Python 核心
+（Python Core）。
+
+![Paper Copilot 研究报告](screenshot/截屏2026-08-09%2023.25.23.png)
+
+| 模型切换 | 设置与本地 Formula OCR |
+| --- | --- |
+| ![模型菜单](screenshot/截屏2026-08-09%2023.27.05.png) | ![设置界面](screenshot/截屏2026-08-09%2023.28.28.png) |
+
+## 安装状态
+
+当前尚未提供经过完整发布验证的 DMG，Formula OCR v1.1.0 也尚未发布到公开下载端。面向
+Apple Silicon 的本机构建使用 ad-hoc 签名，公开分发方式仍待确定。现阶段请从源码运行。
+
+## 从源码运行
 
 ```bash
 git clone https://github.com/lemma42796/paper-copilot.git
 cd paper-copilot
 uv sync --dev
-cp .env.example .env
-```
-
-编辑 `.env`：
-
-```bash
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_API_KEY=sk-your-key-here
-LLM_MODEL=qwen3.6-flash
-DASHSCOPE_API_KEY=sk-your-key-here
-PAPER_COPILOT_PDF_DIR=/path/to/your/papers
-```
-
-源码开发可在 Xcode 打开：
-
-```bash
 open apps/macos/PaperCopilot.xcodeproj
 ```
 
-客户端在动态端口启动本地 Python Runtime。发布构建内嵌 Runtime，终端用户无需安装
-Python、uv 或 Node.js。
+PDF、缓存、任务记录和报告默认保存在本地。使用云端模型时，当前任务选中的论文文本和工具结果
+会进入模型上下文。
 
-## Build the macOS Preview
+## 技术栈
 
-```bash
-./scripts/build_macos_dmg.sh
-open dist/macos/PaperCopilot-arm64.dmg
-```
+SwiftUI · Python 3.12 · Pydantic · asyncio · Poppler · PyMuPDF · fontTools · SwiftMath ·
+PaddleX · PP-FormulaNet_plus-M
 
-默认输出使用 ad-hoc 签名，macOS 会拦截来自未知开发者的下载包。确认来源可信后，先
-尝试打开，再到“系统设置 → 隐私与安全性”选择“仍要打开”；不要关闭整个 Gatekeeper。
+## 文档
 
-正式签名与公证：
-
-```bash
-PAPER_COPILOT_SIGN_IDENTITY="Developer ID Application: Example (TEAMID)" \
-PAPER_COPILOT_NOTARY_PROFILE="paper-copilot-notary" \
-./scripts/build_macos_dmg.sh
-```
-
-notarytool profile 必须预先保存到 Keychain；仓库不保存证书或 Apple 凭据。
-
-## Configuration
-
-| 变量 | 用途 |
-| --- | --- |
-| `LLM_BASE_URL` | OpenAI-compatible LLM endpoint |
-| `LLM_API_KEY` | LLM API Key |
-| `LLM_MODEL` | 模型 ID，默认 `qwen3.6-flash` |
-| `DASHSCOPE_API_KEY` | DashScope LLM Key（兼容旧配置） |
-| `PAPER_COPILOT_HOME` | 数据根目录，默认 `~/.paper-copilot` |
-| `PAPER_COPILOT_PDF_DIR` | 本地 PDF 目录 |
-
-macOS 客户端将 LLM Key 保存到
-`~/Library/Application Support/PaperCopilot/auth.json`，文件权限为 `0600`。
-旧版 Keychain 密钥不会自动迁移，升级后需在模型设置中重新输入一次 API Key。
-
-使用 DeepSeek 官方 API 时只需替换前三个 LLM 变量；embedding 仍使用独立的
-`DASHSCOPE_API_KEY`。
-
-## Local MCP Server
-
-将开发 checkout 加入 Codex：
-
-```bash
-codex mcp add paper-copilot -- \
-  uv --directory /absolute/path/to/paper-copilot run paper-copilot-mcp
-```
-
-只读工具：
-
-```text
-library_status  list_papers  search_papers
-get_paper       inspect_evidence  compare_papers
-```
-
-长任务工具：
-
-```text
-start_read_paper  get_job_status  get_job_result  cancel_job
-```
-
-有 embedding Key 时搜索使用 hybrid retrieval，否则使用本地 FTS5/BM25。普通只读
-工具不进入 Agent loop；`start_read_paper` 会使用 LLM budget，并写入本地 job、
-session、report 和索引状态。
-
-MCP 不返回完整 PDF、session 或本机结果路径，但云端 MCP Host 通常会接收返回的摘要、
-evidence 和报告。应把这些内容视为可能离开设备的数据。
-
-## Local HTTP API
-
-本地 HTTP API 是 macOS Runtime 的内部边界：
-
-| Method | Path | 用途 |
-| --- | --- | --- |
-| `GET` | `/health` | 健康检查 |
-| `POST/GET` | `/jobs` | 创建或列出 job |
-| `GET` | `/jobs/<id>` | 状态和结果 |
-| `GET` | `/jobs/<id>/events?after=N` | 增量事件 |
-| `GET` | `/jobs/<id>/stream?after=N` | SSE |
-| `GET` | `/jobs/<id>/diagnostics` | attempt 诊断 |
-| `POST` | `/jobs/<id>/interrupt` | 停止 |
-| `POST` | `/jobs/<id>/resume` | 创建恢复 attempt |
-| `POST` | `/jobs/<id>/approval` | 工具审批 |
-
-客户端断线不影响 job。恢复使用持久 rollout 重建历史，不会从上一次网络流或模型 token
-原地续跑。
-
-## Architecture
-
-```text
-SwiftUI macOS Client ──► local HTTP/job API ──┐
-Local MCP Server ──────► MCP services ─────────┤
-                                               ▼
-                                       Python Paper Core
-```
-
-Core 包含单一 Paper Copilot loop、持久 job、JSONL session、按需 PDF 文本缓存和
-rollout trace。模块职责、依赖规则、模型策略及数据流见
-[ARCHITECTURE.md](ARCHITECTURE.md)。
-
-## Data
-
-运行时数据默认位于 `~/.paper-copilot/`：
-
-```text
-papers/<conversation_id>/   # session、report
-jobs/<job_id>/              # job、events、attempt traces
-cache/<pdf_sha256>/         # 按需 layout.txt revisions
-```
-
-## Development
-
-```bash
-uv sync --dev
-make lint
-make typecheck
-make test
-```
-
-执行验证应遵守 [AGENTS.md](AGENTS.md) 的工作约定。修改默认模型前必须运行 smoke eval，
-并同时比较质量、成本和延迟。
-
-## Limitations
-
-- 当前开发预览仅支持 Apple Silicon，使用 ad-hoc 签名且尚未公证。
-- 不支持账号、云同步、多用户 ACL 或托管部署。
-- Core 不联网发现论文，只处理本地 PDF 和索引。
-- active retrieval path 没有 cross-encoder 或 LLM reranker。
-- evidence grounding 仍可能不完整，生成内容需要人工核验。
-- 部分 eval 依赖仓库不分发的本地 PDF。
-
-## Contributing
-
-提交改动前请阅读 [AGENTS.md](AGENTS.md)：保持范围小，不未经讨论新增依赖，并优先
-改进可追溯、可评测的 harness。
+[架构](ARCHITECTURE.md) · [实验](docs/design/experiment_index.md) ·
+[Formula OCR](docs/design/formula_ocr_optional_component.md) · [当前任务](TASKS.md)
 
 ## License
 
