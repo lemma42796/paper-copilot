@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import hashlib
-import html as html_module
 import json
 import os
 import re
@@ -12,11 +11,12 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from contextlib import contextmanager
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
+import pymupdf
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from paper_copilot.shared.errors import PdfCacheError
@@ -25,6 +25,7 @@ from paper_copilot.shared.poppler import PopplerIdentity, PopplerTextExtractor
 
 __all__ = [
     "PageBoundary",
+    "FormulaTargetSnapshot",
     "PdfCacheLookup",
     "PdfCacheManifest",
     "PdfCachePage",
@@ -33,43 +34,25 @@ __all__ = [
     "TextArtifact",
 ]
 
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 _LAYOUT_FILENAME = "layout.txt"
 _MANIFEST_FILENAME = "manifest.json"
 _CURRENT_FILENAME = "current.json"
 _READ_CHUNK_BYTES = 1024 * 1024
-_OCR_START_TEMPLATE = "[[paper-copilot-ocr:start slot={slot} page={page}]]"
-_OCR_END_TEMPLATE = "[[paper-copilot-ocr:end slot={slot}]]"
+_REPAIR_START_TEMPLATE = (
+    "[[paper-copilot-formula:repair-start id={repair_span_id} page={page}]]"
+)
+_REPAIR_END_TEMPLATE = (
+    "[[paper-copilot-formula:repair-end id={repair_span_id}]]"
+)
 _REVISION_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
-_SAFE_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
-_BBOX_WORD_PATTERN = re.compile(
-    r'<word xMin="([0-9.]+)" yMin="([0-9.]+)" xMax="([0-9.]+)" yMax="([0-9.]+)">'
-    r"(.*?)</word>",
-    re.DOTALL,
-)
-_BBOX_PAGE_PATTERN = re.compile(
-    r'<page width="([0-9.]+)" height="([0-9.]+)">'
-)
-_SLOT_BBOX_PATTERN = re.compile(
-    r"\[\[paper-copilot-ocr:start slot=(page-[0-9]{4}-formula-[0-9]{4}) "
-    r"page=([0-9]+) "
-    r"bbox=([0-9.]+),([0-9.]+),([0-9.]+),([0-9.]+)\]\]"
-)
-# Display-formula glyphs split into several adjacent word clusters (operator
-# halves, scripts, limits). Clusters closer than this multiple of their own
-# height are merged into one formula group; vertically adjacent words inside
-# the group's horizontal span (summation bounds, fraction rows) are absorbed.
-_BBOX_CLUSTER_GAP_FACTOR = 1.5
-_BBOX_ABSORB_PADDING_POINTS = 2.0
-# Word boxes hug glyph edges exactly; anti-aliasing at the render boundary
-# shaves edge strokes, so pad the normalized crop on all sides.
-_BBOX_MARGIN_POINTS = 4.0
 # One display formula can interleave clean extraction lines between its
 # garbled rows (summation limits, fraction numerators). Garbled runs or
 # clusters bridged by at most this many clean lines/clusters stay one
 # formula; longer clean gaps mean separate formulas or prose. The same bound
 # applies on both extraction passes so their group counts can align.
 _MAX_INTRA_FORMULA_CLEAN_LINES = 2
+_ENGLISH_PROSE_WORD_PATTERN = re.compile(r"[A-Za-z]{2,}")
 _log = get_logger(__name__)
 
 
@@ -93,7 +76,12 @@ class TextArtifact(BaseModel):
 class FormulaOCRRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    slot: str = Field(pattern=r"^page-[0-9]{4}-formula-[0-9]{4}$")
+    target_kind: Literal["repair_span", "replacement_text"]
+    repair_span_id: str | None = Field(
+        default=None,
+        pattern=r"^page-[0-9]{4}-repair-[0-9]{4}$",
+    )
+    target_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     page: int = Field(ge=1)
     region: dict[str, float]
     model: str = Field(min_length=1)
@@ -112,7 +100,7 @@ class FormulaOCRRecord(BaseModel):
 class PdfCacheManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[2] = _SCHEMA_VERSION
+    schema_version: Literal[3] = _SCHEMA_VERSION
     revision_id: str
     pdf_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_locator: str
@@ -177,21 +165,18 @@ class _CurrentRevision(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
-class _WordBox:
-    x_min: float
-    y_min: float
-    x_max: float
-    y_max: float
-    text: str
+class FormulaTargetSnapshot:
+    target_kind: Literal["repair_span", "replacement_text"]
+    target_sha256: str
+    cache_revision_id: str
+    cache_artifact_sha256: str
 
 
 @dataclass(frozen=True, slots=True)
-class _FormulaCluster:
-    x_min: float
-    y_min: float
-    x_max: float
-    y_max: float
-    garbled: bool
+class _FormulaHint:
+    start_bbox: tuple[float, float, float, float]
+    end_bbox: tuple[float, float, float, float]
+    line_count: int
 
 
 class PdfTextCache:
@@ -334,35 +319,55 @@ class PdfTextCache:
         """Remove content-addressed caches that no current library PDF references."""
         return await asyncio.to_thread(self._prune_orphans, live_pdf_sha256)
 
-    async def record_formula_ocr(
+    async def snapshot_formula_target(
         self,
         pdf_sha256: str,
         *,
         page: int,
-        cache_slot: str,
+        repair_span_id: str | None,
+        replacement_text: str | None,
+    ) -> FormulaTargetSnapshot:
+        identity = await self._extractor.identity()
+        return await asyncio.to_thread(
+            self._snapshot_formula_target,
+            pdf_sha256,
+            identity,
+            page,
+            repair_span_id,
+            replacement_text,
+        )
+
+    async def record_formula_latex(
+        self,
+        pdf_sha256: str,
+        *,
+        page: int,
+        repair_span_id: str | None,
+        replacement_text: str | None,
+        expected_target_sha256: str,
         latex: str,
         ocr_latex: str,
         region: dict[str, float],
         model: str,
         render_sha256: str,
-        equation_label: str | None,
     ) -> PdfCacheLookup:
         identity = await self._extractor.identity()
         cache_key = f"{pdf_sha256}:{identity.fingerprint}"
         lock = await self._lock_for(cache_key)
         async with lock:
             return await asyncio.to_thread(
-                self._record_formula_ocr,
+                self._record_formula_latex,
                 pdf_sha256,
                 identity,
                 page,
-                cache_slot,
+                repair_span_id,
+                replacement_text,
+                expected_target_sha256,
                 latex,
                 ocr_latex,
                 region,
                 model,
                 render_sha256,
-                equation_label,
             )
 
     async def _build(
@@ -393,11 +398,11 @@ class PdfTextCache:
             if current_pdf_sha256 != pdf_sha256:
                 raise PdfCacheError("PDF content changed during cache generation")
             raw_bytes = await asyncio.to_thread(raw_path.read_bytes)
-            slot_bboxes = await self._collect_slot_bboxes(pdf_path, raw_bytes)
+            formula_hints = await self._collect_formula_hints(pdf_path, raw_bytes)
             text_bytes, page_boundaries = _formula_aware_text(
                 raw_bytes,
                 extraction.page_count,
-                slot_bboxes,
+                formula_hints,
             )
             await asyncio.to_thread(raw_path.unlink)
             text_path = staging_path / _LAYOUT_FILENAME
@@ -444,150 +449,125 @@ class PdfTextCache:
             if staging_path.exists():
                 await asyncio.to_thread(shutil.rmtree, staging_path)
 
-    async def _collect_slot_bboxes(
+    async def _collect_formula_hints(
         self,
         pdf_path: Path,
         raw_bytes: bytes,
-    ) -> dict[int, tuple[tuple[float, float, float, float], ...]]:
-        """Compute normalized formula bboxes for pages with garbled lines.
-
-        A bbox failure degrades to a coordinate-less slot instead of failing
-        the build: recognition keeps working through region/label inputs.
-        """
+    ) -> dict[int, tuple[_FormulaHint, ...]]:
+        """Pre-embed advisory endpoints only for damaged non-prose line runs."""
         raw_pages = raw_bytes.split(b"\f")
-        slot_bboxes: dict[int, tuple[tuple[float, float, float, float], ...]] = {}
+        formula_hints: dict[int, tuple[_FormulaHint, ...]] = {}
         for page_number, raw_page in enumerate(raw_pages, start=1):
             if raw_page == b"":
                 continue
             text = raw_page.decode("utf-8", errors="replace")
-            slot_count = _slot_block_count(text)
-            if slot_count == 0:
+            if not any(
+                _contains_extraction_garble(line) and not _line_has_prose(line)
+                for line in text.splitlines()
+            ):
                 continue
             try:
-                bbox_html = await self._extractor.page_word_boxes(pdf_path, page_number)
-            except PdfCacheError as error:
+                hints = await asyncio.to_thread(
+                    _page_formula_hints,
+                    pdf_path,
+                    page_number,
+                )
+            except (OSError, RuntimeError, ValueError) as error:
                 _log.warning(
-                    "pdf_cache.slot_bbox_extraction_failed",
+                    "pdf_cache.formula_hint_extraction_failed",
                     page=page_number,
                     error_type=type(error).__name__,
                 )
                 continue
-            result = _garbled_line_bboxes(bbox_html)
-            if result is None:
-                continue
-            bboxes, garbled_cluster_count = result
-            garbled_line_count = sum(
-                1 for line in text.splitlines() if _contains_extraction_garble(line)
-            )
-            # Slots map to formula groups positionally, so both passes must
-            # agree line by line (garbled totals) and group by group (block
-            # totals); any disagreement makes the coordinates unreliable, so
-            # they are dropped for the page.
-            if (
-                garbled_line_count == garbled_cluster_count
-                and len(bboxes) == slot_count
-            ):
-                slot_bboxes[page_number] = bboxes
-        return slot_bboxes
+            if hints:
+                formula_hints[page_number] = hints
+        return formula_hints
 
-    async def slot_bbox(
-        self,
-        pdf_sha256: str,
-        *,
-        page: int,
-        cache_slot: str,
-    ) -> dict[str, float] | None:
-        """Return the stored normalized crop for a garbled formula slot.
-
-        None means the cache misses, the slot exists without coordinates, or
-        the slot is unknown; callers fall back to explicit locators.
-        """
-        if page < 1:
-            raise PdfCacheError("page must be at least 1")
-        if re.fullmatch(r"page-[0-9]{4}-formula-[0-9]{4}", cache_slot) is None:
-            raise PdfCacheError("cache_slot has an invalid slot identifier format")
-        identity = await self._extractor.identity()
-        return await asyncio.to_thread(
-            self._slot_bbox,
-            pdf_sha256,
-            identity,
-            page,
-            cache_slot,
-        )
-
-    def _slot_bbox(
+    def _snapshot_formula_target(
         self,
         pdf_sha256: str,
         identity: PopplerIdentity,
         page: int,
-        cache_slot: str,
-    ) -> dict[str, float] | None:
+        repair_span_id: str | None,
+        replacement_text: str | None,
+    ) -> FormulaTargetSnapshot:
         key_dir = self._key_dir(pdf_sha256, identity.fingerprint)
         with _paper_file_lock(key_dir, exclusive=False):
             lookup = self._lookup_unlocked(pdf_sha256, identity)
-            if lookup.status != "hit" or lookup.cache_ref is None or lookup.manifest is None:
-                return None
+            if (
+                lookup.status != "hit"
+                or lookup.cache_ref is None
+                or lookup.manifest is None
+            ):
+                raise PdfCacheError(
+                    "formula-aware text cache is unavailable for formula targeting"
+                )
             manifest = lookup.manifest
             if page > manifest.page_count:
-                return None
+                raise PdfCacheError("formula target page exceeds the cached page count")
             revision_dir = self._revision_dir(lookup.cache_ref)
-            if not _artifact_is_valid(revision_dir, manifest):
-                return None
             boundary = manifest.page_boundaries[page - 1]
-            text = _read_text_range(
+            page_text = _read_text_range(
                 revision_dir / manifest.artifact.filename,
                 boundary.start_offset,
                 boundary.end_offset,
             )
-        for match in _SLOT_BBOX_PATTERN.finditer(text):
-            if match.group(1) != cache_slot or int(match.group(2)) != page:
-                continue
-            x1, y1, x2, y2 = (float(match.group(index)) for index in range(3, 7))
-            if not (0.0 <= x1 < x2 <= 1.0 and 0.0 <= y1 < y2 <= 1.0):
-                return None
-            return {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
-        return None
+            target_kind, target_text, _start, _end = _resolve_formula_target(
+                page_text,
+                page=page,
+                repair_span_id=repair_span_id,
+                replacement_text=replacement_text,
+            )
+            return FormulaTargetSnapshot(
+                target_kind=target_kind,
+                target_sha256=hashlib.sha256(target_text.encode("utf-8")).hexdigest(),
+                cache_revision_id=manifest.revision_id,
+                cache_artifact_sha256=manifest.artifact.sha256,
+            )
 
-    def _record_formula_ocr(
+    def _record_formula_latex(
         self,
         pdf_sha256: str,
         identity: PopplerIdentity,
         page: int,
-        cache_slot: str,
+        repair_span_id: str | None,
+        replacement_text: str | None,
+        expected_target_sha256: str,
         latex: str,
         ocr_latex: str,
         region: dict[str, float],
         model: str,
         render_sha256: str,
-        equation_label: str | None,
     ) -> PdfCacheLookup:
         key_dir = self._key_dir(pdf_sha256, identity.fingerprint)
         with _paper_file_lock(key_dir, exclusive=True):
-            return self._record_formula_ocr_locked(
+            return self._record_formula_latex_locked(
                 pdf_sha256,
                 identity,
                 page,
-                cache_slot,
+                repair_span_id,
+                replacement_text,
+                expected_target_sha256,
                 latex,
                 ocr_latex,
                 region,
                 model,
                 render_sha256,
-                equation_label,
             )
 
-    def _record_formula_ocr_locked(
+    def _record_formula_latex_locked(
         self,
         pdf_sha256: str,
         identity: PopplerIdentity,
         page: int,
-        cache_slot: str,
+        repair_span_id: str | None,
+        replacement_text: str | None,
+        expected_target_sha256: str,
         latex: str,
         ocr_latex: str,
         region: dict[str, float],
         model: str,
         render_sha256: str,
-        equation_label: str | None,
     ) -> PdfCacheLookup:
         lookup = self._lookup_unlocked(pdf_sha256, identity)
         if lookup.status != "hit" or lookup.cache_ref is None or lookup.manifest is None:
@@ -598,34 +578,40 @@ class PdfTextCache:
         revision_dir = self._revision_dir(lookup.cache_ref)
         source_path = revision_dir / manifest.artifact.filename
         text = source_path.read_text(encoding="utf-8")
-        start_pattern = (
-            r"\[\[paper-copilot-ocr:start slot="
-            + re.escape(cache_slot)
-            + r" page="
-            + str(page)
-            + r"[^\]]*\]\]"
+        pages = text.split("\f")
+        if pages and pages[-1] == "":
+            pages.pop()
+        if len(pages) != manifest.page_count:
+            raise PdfCacheError("cached formula text has invalid page separators")
+        target_kind, target_text, start, end = _resolve_formula_target(
+            pages[page - 1],
+            page=page,
+            repair_span_id=repair_span_id,
+            replacement_text=replacement_text,
         )
-        end = _OCR_END_TEMPLATE.format(slot=cache_slot)
-        pattern = re.compile(start_pattern + r".*?" + re.escape(end), re.DOTALL)
-        if pattern.search(text) is None:
+        actual_target_sha256 = hashlib.sha256(target_text.encode("utf-8")).hexdigest()
+        if actual_target_sha256 != expected_target_sha256:
             raise PdfCacheError(
-                f"formula OCR cache slot is unavailable on page {page}: {cache_slot}"
+                "formula replacement target changed after recognition; recognize again"
             )
         normalized_latex = latex.strip()
         normalized_ocr_latex = ocr_latex.strip()
         refined = normalized_latex != normalized_ocr_latex
-        label_token = _marker_label_token(equation_label)
         refined_token = " refined=true" if refined else ""
+        target_token = (
+            repair_span_id
+            if repair_span_id is not None
+            else f"text-{actual_target_sha256[:16]}"
+        )
         marker = (
-            f"[[paper-copilot-ocr:recognized slot={cache_slot} page={page}"
-            f"{label_token} model={model} render_sha256={render_sha256}"
+            f"[[paper-copilot-formula:latex target={target_token} page={page}"
+            f" model={model} render_sha256={render_sha256}"
             f"{refined_token} verified=false]]"
         )
-        replacement = (
-            f"{marker}\n"
-            f"$$\n{normalized_latex}\n$$"
-        )
-        updated = pattern.sub(lambda _: replacement, text, count=1)
+        replacement = f"{marker}\n$$\n{normalized_latex}\n$$"
+        page_text = pages[page - 1]
+        pages[page - 1] = page_text[:start] + replacement + page_text[end:]
+        updated = "\f".join(pages) + "\f"
         updated_bytes = updated.encode("utf-8")
         page_boundaries = _page_boundaries(updated_bytes, manifest.page_count)
         revision_id = uuid4().hex
@@ -637,7 +623,9 @@ class PdfTextCache:
                 byte_count=len(updated_bytes),
             )
             record = FormulaOCRRecord(
-                slot=cache_slot,
+                target_kind=target_kind,
+                repair_span_id=repair_span_id,
+                target_sha256=actual_target_sha256,
                 page=page,
                 region=region,
                 model=model,
@@ -836,7 +824,7 @@ def _page_boundaries(layout_bytes: bytes, page_count: int) -> list[PageBoundary]
 def _formula_aware_text(
     raw_bytes: bytes,
     page_count: int,
-    slot_bboxes: dict[int, tuple[tuple[float, float, float, float], ...]] | None = None,
+    formula_hints: dict[int, tuple[_FormulaHint, ...]] | None = None,
 ) -> tuple[bytes, list[PageBoundary]]:
     raw_pages = raw_bytes.split(b"\f")
     if raw_pages and raw_pages[-1] == b"":
@@ -849,44 +837,48 @@ def _formula_aware_text(
     rendered_pages: list[str] = []
     for page, raw_page in enumerate(raw_pages, start=1):
         text = raw_page.decode("utf-8", errors="replace")
-        page_bboxes = (slot_bboxes or {}).get(page, ())
-        rendered_pages.append(_render_text_page(text, page, page_bboxes))
+        page_hints = (formula_hints or {}).get(page, ())
+        rendered_pages.append(_render_text_page(text, page, page_hints))
     text_bytes = "\f".join(rendered_pages).encode("utf-8") + b"\f"
     return text_bytes, _page_boundaries(text_bytes, page_count)
 
 
-def _garbled_flags(text: str) -> list[bool]:
-    return [_contains_extraction_garble(line) for line in text.splitlines()]
+def _repair_flags(text: str) -> list[bool]:
+    return [
+        _contains_extraction_garble(line) and not _line_has_prose(line)
+        for line in text.splitlines()
+    ]
 
 
-def _slot_block_count(text: str) -> int:
-    """Count slot blocks: garbled runs bridged by short clean gaps.
-
-    Mirrors the bbox side's grouping so the two passes produce the same
-    formula count and coordinates can attach positionally.
-    """
-    return len(_group_garbled_runs(_garbled_flags(text)))
+def _repair_span_count(text: str) -> int:
+    """Count stable cache replacement spans without inferring OCR crops."""
+    return len(_repair_blocks(text))
 
 
-def _group_garbled_runs(flags: Sequence[bool]) -> list[tuple[int, int]]:
-    """Group garbled runs separated by at most the bridging gap of clean items.
-
-    Returns half-open line ranges covering each block, including bridged
-    clean lines. Trailing clean lines without a following garbled run stay
-    outside any block.
-    """
+def _repair_blocks(text: str) -> list[tuple[int, int]]:
+    """Return damaged non-prose runs, bridging only short formula-like gaps."""
+    lines = text.splitlines()
+    repair_flags = _repair_flags(text)
     blocks: list[tuple[int, int]] = []
     block_start: int | None = None
     last_garbled = -1
-    for index, garbled in enumerate(flags):
-        if not garbled:
+    for index, (line, garbled) in enumerate(
+        zip(lines, repair_flags, strict=True)
+    ):
+        if garbled:
+            if block_start is None:
+                block_start = index
+            elif index - last_garbled - 1 > _MAX_INTRA_FORMULA_CLEAN_LINES:
+                blocks.append((block_start, last_garbled + 1))
+                block_start = index
+            last_garbled = index
             continue
-        if block_start is None:
-            block_start = index
-        elif index - last_garbled - 1 > _MAX_INTRA_FORMULA_CLEAN_LINES:
+        if block_start is not None and (
+            _line_has_prose(line)
+            or index - last_garbled > _MAX_INTRA_FORMULA_CLEAN_LINES
+        ):
             blocks.append((block_start, last_garbled + 1))
-            block_start = index
-        last_garbled = index
+            block_start = None
     if block_start is not None:
         blocks.append((block_start, last_garbled + 1))
     return blocks
@@ -895,248 +887,232 @@ def _group_garbled_runs(flags: Sequence[bool]) -> list[tuple[int, int]]:
 def _render_text_page(
     text: str,
     page: int,
-    slot_bboxes: Sequence[tuple[float, float, float, float]] = (),
+    formula_hints: Sequence[_FormulaHint] = (),
 ) -> str:
-    # Garble detection must run on the raw text: control pictures produced by
-    # the visualization step below are not garble markers themselves.
-    raw_flags = _garbled_flags(text)
+    # Repair eligibility must run on raw text: mixed prose lines stay outside
+    # automatic replacement spans even when they contain damaged characters.
+    repair_blocks = _repair_blocks(text)
     # Control characters are invisible to models; render them as Unicode
     # control pictures so extraction damage like math glyphs mapped to C0
     # codes becomes visible in the cached text.
     text = _visualize_control_characters(text)
-    lines: list[str] = [f"[[paper-copilot-page:{page}]]", ""]
-    slot_index = 0
-    pending: list[str] = []
-    pending_has_garble = False
-    pending_clean_tail = 0
-
-    def flush_pending() -> None:
-        # One slot per formula block: a display formula spanning several
-        # extraction lines (including interleaved clean limit rows) is one
-        # physical formula, so its lines share one slot and one crop. Clean
-        # lines held at the tail that never bridged to another garbled run
-        # stay outside the slot.
-        nonlocal slot_index, pending_has_garble, pending_clean_tail
-        if not pending:
-            return
-        if not pending_has_garble:
-            lines.extend(pending)
-        else:
-            body_end = len(pending) - pending_clean_tail
-            slot_index += 1
-            slot = f"page-{page:04d}-formula-{slot_index:04d}"
-            bbox = (
-                slot_bboxes[slot_index - 1] if slot_index - 1 < len(slot_bboxes) else None
+    lines: list[str] = [f"[[paper-copilot-page:{page}]]"]
+    for hint_index, hint in enumerate(formula_hints, start=1):
+        lines.append(_formula_hint_marker(page, hint_index, hint))
+    lines.append("")
+    rendered_source_lines = text.splitlines()
+    block_by_start = {start: end for start, end in repair_blocks}
+    source_index = 0
+    repair_index = 0
+    while source_index < len(rendered_source_lines):
+        block_end = block_by_start.get(source_index)
+        if block_end is None:
+            lines.append(rendered_source_lines[source_index])
+            source_index += 1
+            continue
+        repair_index += 1
+        repair_span_id = f"page-{page:04d}-repair-{repair_index:04d}"
+        lines.append(
+            _REPAIR_START_TEMPLATE.format(
+                repair_span_id=repair_span_id,
+                page=page,
             )
-            lines.append(_ocr_start_marker(slot, page, bbox))
-            lines.append(f"[公式 OCR 待识别；cache_slot={slot}]")
-            lines.extend(f"原始提取：{line}" for line in pending[:body_end])
-            lines.append(_OCR_END_TEMPLATE.format(slot=slot))
-            lines.extend(pending[body_end:])
-        pending.clear()
-        pending_has_garble = False
-        pending_clean_tail = 0
-
-    for line, garbled in zip(text.splitlines(), raw_flags, strict=True):
-        if garbled:
-            pending.append(line)
-            pending_has_garble = True
-            pending_clean_tail = 0
-            continue
-        if pending_has_garble and pending_clean_tail < _MAX_INTRA_FORMULA_CLEAN_LINES:
-            # Hold a short clean tail: a garbled line right after keeps it
-            # inside the formula block; otherwise it is flushed as prose.
-            pending.append(line)
-            pending_clean_tail += 1
-            continue
-        flush_pending()
-        lines.append(line)
-    flush_pending()
+        )
+        lines.append(f"[公式文本待恢复；repair_span_id={repair_span_id}]")
+        lines.extend(
+            f"原始提取：{line}"
+            for line in rendered_source_lines[source_index:block_end]
+        )
+        lines.append(_REPAIR_END_TEMPLATE.format(repair_span_id=repair_span_id))
+        source_index = block_end
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _ocr_start_marker(
-    slot: str,
-    page: int,
-    bbox: tuple[float, float, float, float] | None,
-) -> str:
-    marker = _OCR_START_TEMPLATE.format(slot=slot, page=page)
-    if bbox is None:
-        return marker
-    x1, y1, x2, y2 = bbox
-    coordinates = ",".join(f"{value:.4f}" for value in (x1, y1, x2, y2))
-    return marker[:-2] + f" bbox={coordinates}]]"
-
-
-def _garbled_line_bboxes(
-    bbox_html: str,
-) -> tuple[tuple[tuple[float, float, float, float], ...], int] | None:
-    """Compute one normalized bbox per formula group in reading order.
-
-    Returns the boxes together with the garbled cluster total so callers can
-    gate on both passes agreeing line by line and group by group. A display
-    formula occupying several garbled text lines (with interleaved clean
-    limit rows) yields a single box. Returns None when the bbox page cannot
-    be parsed, so callers keep plain coordinate-less slots instead of
-    writing misleading coordinates.
-    """
-    page_match = _BBOX_PAGE_PATTERN.search(bbox_html)
-    if page_match is None:
-        return None
-    page_width = float(page_match.group(1))
-    page_height = float(page_match.group(2))
-    if page_width <= 0.0 or page_height <= 0.0:
-        return None
-    words: list[_WordBox] = []
-    for match in _BBOX_WORD_PATTERN.finditer(bbox_html):
-        x_min, y_min, x_max, y_max = (float(match.group(index)) for index in range(1, 5))
-        if x_max <= x_min or y_max <= y_min:
-            continue
-        words.append(
-            _WordBox(
-                x_min=x_min,
-                y_min=y_min,
-                x_max=x_max,
-                y_max=y_max,
-                text=html_module.unescape(match.group(5)),
-            )
-        )
-    if not words:
-        return None
-    clusters = _cluster_words_into_lines(words)
-    garbled_cluster_count = sum(1 for cluster in clusters if cluster.garbled)
-    groups = _formula_groups(clusters)
-    if not groups:
-        return ((), garbled_cluster_count)
-    boxes: list[tuple[float, float, float, float]] = []
-    for group in groups:
-        box = _absorb_formula_neighbors(group, clusters)
-        x1 = max(0.0, min(1.0, (box[0] - _BBOX_MARGIN_POINTS) / page_width))
-        y1 = max(0.0, min(1.0, (box[1] - _BBOX_MARGIN_POINTS) / page_height))
-        x2 = max(0.0, min(1.0, (box[2] + _BBOX_MARGIN_POINTS) / page_width))
-        y2 = max(0.0, min(1.0, (box[3] + _BBOX_MARGIN_POINTS) / page_height))
-        if x2 <= x1 or y2 <= y1:
-            return None
-        boxes.append((x1, y1, x2, y2))
-    return (tuple(boxes), garbled_cluster_count)
-
-
-def _cluster_words_into_lines(words: list[_WordBox]) -> list[_FormulaCluster]:
-    ordered = sorted(words, key=lambda word: (word.y_min, word.x_min))
-    clusters: list[list[_WordBox]] = []
-    for word in ordered:
-        if clusters and word.y_min <= max(member.y_max for member in clusters[-1]):
-            clusters[-1].append(word)
-        else:
-            clusters.append([word])
-    return [
-        _FormulaCluster(
-            x_min=min(word.x_min for word in members),
-            y_min=min(word.y_min for word in members),
-            x_max=max(word.x_max for word in members),
-            y_max=max(word.y_max for word in members),
-            garbled=any(_contains_extraction_garble(word.text) for word in members),
-        )
-        for members in clusters
-    ]
-
-
-def _formula_groups(
-    clusters: list[_FormulaCluster],
-) -> list[_FormulaCluster]:
-    """Merge garbled clusters into one group per display formula.
-
-    Two merge rules mirror the text-side slot blocks: garbled clusters with
-    at most the bridging gap of clean clusters between them stay one formula
-    (summation limits and fraction rows extract clean between garbled rows),
-    and consecutive garbled clusters merge when geometrically adjacent (a
-    gap below their own height), which keeps far-apart formulas separated
-    even when no clean clusters sit between them.
-    """
-    group_members: list[list[_FormulaCluster]] = []
-    pending_clean: list[_FormulaCluster] = []
-    for cluster in clusters:
-        if not cluster.garbled:
-            if group_members:
-                pending_clean.append(cluster)
-            continue
-        bridged = False
-        if group_members:
-            previous = group_members[-1]
-            if pending_clean:
-                bridged = len(pending_clean) <= _MAX_INTRA_FORMULA_CLEAN_LINES
-            else:
-                last = previous[-1]
-                gap = cluster.y_min - last.y_max
-                tolerance = _BBOX_CLUSTER_GAP_FACTOR * min(
-                    last.y_max - last.y_min,
-                    cluster.y_max - cluster.y_min,
-                )
-                bridged = gap <= tolerance
-            if bridged:
-                previous.extend(pending_clean)
-                previous.append(cluster)
-                pending_clean = []
-                continue
-        pending_clean = []
-        group_members.append([cluster])
-    return [_merge_cluster_boxes(members) for members in group_members]
-
-
-def _merge_cluster_boxes(members: list[_FormulaCluster]) -> _FormulaCluster:
-    return _FormulaCluster(
-        x_min=min(member.x_min for member in members),
-        y_min=min(member.y_min for member in members),
-        x_max=max(member.x_max for member in members),
-        y_max=max(member.y_max for member in members),
-        garbled=True,
+def _formula_hint_marker(page: int, index: int, hint: _FormulaHint) -> str:
+    start = ",".join(f"{value:.4f}" for value in hint.start_bbox)
+    end = ",".join(f"{value:.4f}" for value in hint.end_bbox)
+    return (
+        f"[[paper-copilot-formula:hint id=page-{page:04d}-hint-{index:04d} "
+        f"page={page} start_bbox={start} end_bbox={end} "
+        f"line_count={hint.line_count} advisory=true]]"
     )
 
 
-def _absorb_formula_neighbors(
-    group: _FormulaCluster,
-    clusters: list[_FormulaCluster],
-) -> tuple[float, float, float, float]:
-    """Grow the group box to vertically adjacent clusters inside its span.
-
-    Summation limits and fraction rows are not garbled themselves, but they
-    sit just above or below the garbled band and inside its horizontal
-    extent; prose lines outside the span stay excluded.
-    """
-    box = [group.x_min, group.y_min, group.x_max, group.y_max]
-    changed = True
-    while changed:
-        changed = False
-        for cluster in clusters:
-            if cluster.garbled:
+def _page_formula_hints(
+    pdf_path: Path,
+    page_number: int,
+) -> tuple[_FormulaHint, ...]:
+    document = pymupdf.open(pdf_path)
+    try:
+        if page_number > document.page_count:
+            return ()
+        page = document.load_page(page_number - 1)
+        page_rect = page.rect
+        if page_rect.width <= 0.0 or page_rect.height <= 0.0:
+            return ()
+        raw = page.get_text("rawdict")
+        runs: list[
+            list[tuple[list[tuple[str, pymupdf.Rect]], pymupdf.Rect]]
+        ] = []
+        current_run: list[
+            tuple[list[tuple[str, pymupdf.Rect]], pymupdf.Rect]
+        ] = []
+        for block in raw.get("blocks", []):
+            if not isinstance(block, dict):
                 continue
-            if cluster.x_min < box[0] - _BBOX_ABSORB_PADDING_POINTS:
-                continue
-            if cluster.x_max > box[2] + _BBOX_ABSORB_PADDING_POINTS:
-                continue
-            above = box[1] - cluster.y_max
-            below = cluster.y_min - box[3]
-            gap = above if cluster.y_max <= box[1] else below if cluster.y_min >= box[3] else 0.0
-            if gap > 8.0:
-                continue
-            grown = (
-                cluster.x_min < box[0]
-                or cluster.y_min < box[1]
-                or cluster.x_max > box[2]
-                or cluster.y_max > box[3]
+            for line in block.get("lines", []):
+                characters: list[tuple[str, pymupdf.Rect]] = []
+                if isinstance(line, dict):
+                    for span in line.get("spans", []):
+                        if not isinstance(span, dict):
+                            continue
+                        for character in span.get("chars", []):
+                            if not isinstance(character, dict):
+                                continue
+                            value = character.get("c")
+                            bbox = character.get("bbox")
+                            if (
+                                isinstance(value, str)
+                                and value
+                                and _valid_character_bbox(bbox)
+                            ):
+                                characters.append((value, pymupdf.Rect(bbox)))
+                line_text = "".join(value for value, _bbox in characters)
+                line_bbox = _union_character_boxes(characters)
+                garbled = [
+                    item
+                    for item in characters
+                    if any(
+                        _is_extraction_garble_character(char)
+                        for char in item[0]
+                    )
+                ]
+                if garbled and not _line_has_prose(line_text) and line_bbox is not None:
+                    if current_run and not _visual_lines_are_consecutive(
+                        current_run[-1][1],
+                        line_bbox,
+                    ):
+                        runs.append(current_run)
+                        current_run = []
+                    current_run.append((garbled, line_bbox))
+                    continue
+                if current_run:
+                    runs.append(current_run)
+                    current_run = []
+        if current_run:
+            runs.append(current_run)
+        return tuple(
+            _FormulaHint(
+                start_bbox=_normalize_pdf_rect(run[0][0][0][1], page_rect),
+                end_bbox=_normalize_pdf_rect(run[-1][0][-1][1], page_rect),
+                line_count=len(run),
             )
-            box[0] = min(box[0], cluster.x_min)
-            box[1] = min(box[1], cluster.y_min)
-            box[2] = max(box[2], cluster.x_max)
-            box[3] = max(box[3], cluster.y_max)
-            changed = changed or grown
-    return (box[0], box[1], box[2], box[3])
+            for run in runs
+        )
+    finally:
+        document.close()
 
 
-def _marker_label_token(equation_label: str | None) -> str:
-    if equation_label is None or _SAFE_LABEL_PATTERN.fullmatch(equation_label) is None:
-        return ""
-    return f" label={equation_label}"
+def _valid_character_bbox(value: object) -> bool:
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) == 4
+        and all(isinstance(item, (int, float)) for item in value)
+        and float(value[2]) > float(value[0])
+        and float(value[3]) > float(value[1])
+    )
+
+
+def _union_character_boxes(
+    characters: list[tuple[str, pymupdf.Rect]],
+) -> pymupdf.Rect | None:
+    if not characters:
+        return None
+    bbox = pymupdf.Rect(characters[0][1])
+    for _text, character_bbox in characters[1:]:
+        bbox |= character_bbox
+    return bbox
+
+
+def _visual_lines_are_consecutive(
+    previous: pymupdf.Rect,
+    current: pymupdf.Rect,
+) -> bool:
+    if current.y0 < previous.y0:
+        return False
+    vertical_gap = max(0.0, current.y0 - previous.y1)
+    max_gap = 1.75 * max(previous.height, current.height)
+    horizontal_overlap = min(previous.x1, current.x1) - max(
+        previous.x0,
+        current.x0,
+    )
+    return vertical_gap <= max_gap and horizontal_overlap >= -2.0
+
+
+def _normalize_pdf_rect(
+    rect: pymupdf.Rect,
+    page_rect: pymupdf.Rect,
+) -> tuple[float, float, float, float]:
+    def clamp(value: float) -> float:
+        return max(0.0, min(1.0, round(value, 4)))
+
+    return (
+        clamp((rect.x0 - page_rect.x0) / page_rect.width),
+        clamp((rect.y0 - page_rect.y0) / page_rect.height),
+        clamp((rect.x1 - page_rect.x0) / page_rect.width),
+        clamp((rect.y1 - page_rect.y0) / page_rect.height),
+    )
+
+
+def _line_has_prose(text: str) -> bool:
+    return any("\u3400" <= character <= "\u9fff" for character in text) or bool(
+        _ENGLISH_PROSE_WORD_PATTERN.search(text)
+    )
+
+
+def _resolve_formula_target(
+    page_text: str,
+    *,
+    page: int,
+    repair_span_id: str | None,
+    replacement_text: str | None,
+) -> tuple[Literal["repair_span", "replacement_text"], str, int, int]:
+    if (repair_span_id is None) == (replacement_text is None):
+        raise PdfCacheError(
+            "formula target requires exactly one of repair_span_id or replacement_text"
+        )
+    if repair_span_id is not None:
+        if re.fullmatch(r"page-[0-9]{4}-repair-[0-9]{4}", repair_span_id) is None:
+            raise PdfCacheError("repair_span_id has an invalid format")
+        start = _REPAIR_START_TEMPLATE.format(
+            repair_span_id=repair_span_id,
+            page=page,
+        )
+        end = _REPAIR_END_TEMPLATE.format(repair_span_id=repair_span_id)
+        pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.DOTALL)
+        matches = list(pattern.finditer(page_text))
+        if len(matches) != 1:
+            raise PdfCacheError(
+                f"formula repair span is unavailable on page {page}: {repair_span_id}"
+            )
+        match = matches[0]
+        return "repair_span", match.group(0), match.start(), match.end()
+    assert replacement_text is not None
+    if not replacement_text.strip():
+        raise PdfCacheError("replacement_text must not be empty")
+    if "[[" in replacement_text or "\f" in replacement_text:
+        raise PdfCacheError("replacement_text must not contain cache markers")
+    if page_text.count(replacement_text) != 1:
+        raise PdfCacheError(
+            "replacement_text must match exactly one whole formula on the cached page"
+        )
+    start = page_text.index(replacement_text)
+    return (
+        "replacement_text",
+        replacement_text,
+        start,
+        start + len(replacement_text),
+    )
 
 
 def _contains_extraction_garble(text: str) -> bool:

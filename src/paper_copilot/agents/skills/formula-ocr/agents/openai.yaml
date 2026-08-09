@@ -1,0 +1,4 @@
+interface:
+  display_name: "Formula OCR"
+  short_description: "Locate, OCR, and cache selected PDF formulas"
+  default_prompt: "Use $formula-ocr to locate and verify a formula in my local paper."

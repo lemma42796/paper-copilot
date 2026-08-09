@@ -97,15 +97,16 @@ Agent loop 根据请求调用工具、聚合证据并生成自然语言或 groun
 模型 `end_turn`、预算、deadline、用户中断或失败；Runtime 处理重复签名、工具超时和
 rollout deadline。
 
-当前模型按能力条件看到最多五个工具：
+当前模型按能力和任务条件看到下列工具子集：
 
 | 工具 | 当前职责与边界 |
 |---|---|
-| `load_skill` | 从可信 Skill catalog 按需加载固定版本研究指令；同一 conversation 同版本只首次返回正文 |
+| `load_skill` | 从可信 Skill catalog 按需加载固定版本领域指令；当前含 `research-papers` 与独立 `formula-ocr`，同一 conversation 同版本只首次返回正文 |
 | `library_exec` | 在 conversation 级逻辑 workspace 中执行有界命令；`library/`、`cache/`、`papers/`、`research-manifests/` 只读，持久 `scratch/` 可写；长命令可 yield |
 | `library_write_stdin` | 以不透明 session ID 写入或轮询已 yield 的 `library_exec` 进程；继承原命令 sandbox |
 | `inspect_page` | 按授权 PDF SHA-256、页码和可选 region 渲染单页图像；不做 OCR、批量处理或文本回退 |
-| `recognize_formula` | 仅在纯文本模型且可选 Formula OCR 组件已安装时，按授权 PDF、物理页与公式定位符（乱码槽位优先，其次公式编号或 region）返回未验证 LaTeX；与 `inspect_page` 互斥暴露 |
+| `query_page_geometry` | 仅在纯文本模型且 Formula OCR 可用时，搜索页面文字或枚举限定 region 的行与逐字符坐标；只返回弱几何证据，不自动构造 crop |
+| `recognize_formula` | 仅在纯文本模型且可选 Formula OCR 组件已安装时，接收模型明确给出的 region，返回未验证 LaTeX；同一公式最多三次 recognize，与 `inspect_page` 互斥暴露 |
 | `library_edit` | 授权论文库内的用户可见写操作；禁止静默覆盖和永久删除，需要时持久审批 |
 
 ### 5.1 研究上下文与缓存
@@ -127,14 +128,21 @@ Runtime 在模型循环前只准备授权论文清单、页数、哈希和应用
 原始 PDF 始终是权威来源。未经视觉或结构化证据复核，模型不得从乱码缓存精确转写公式，
 也不得把符号列不完整的表格作为完整证据。
 
-在 `pdftotext -layout` 前，Runtime 只处理 Type0、Identity-H 且 `CIDToGIDMap` 为 Identity
-的确定性字体损坏，并且只写临时 PDF 副本：Cambria Math 用内嵌字体自身的 Unicode
-`cmap` 和 OpenType `MATH` 变体表重建损坏的 `ToUnicode`；Symbol MT 用预置的 Adobe
-Symbol 标准编码恢复数学字符；`B3+SimSun` 仅在私用区映射对应的内嵌 GID 确认没有字形
-轮廓时删除 ReaderEx 控制符。完整字符恢复为 Unicode，公式拼装件和未知字形继续输出替换
-字符，交给现有损坏证据路径处理。该修复不读取或分发本机 Word/WPS 字体，不做 OCR，也
-不改变公式定位、槽位或缓存 schema；修复版本进入 extractor fingerprint，确保旧缓存不会
-冒充新结果。
+在 `pdftotext -layout` 前，Runtime 只处理 Type0、Identity-H 且字符码到内嵌 GID 的关系
+可证明的字体损坏。`DescendantFonts` 可为直接数组或指向单元素数组的间接对象；
+`CIDToGIDMap` 可为 `/Identity` 或显式映射流。映射缺失时，Cambria Math 保持不处理；
+Symbol MT 只接受页面 `get_texttrace()` 观测到唯一 GID、且该 GID 的内嵌字形名与原私用区
+码点一致的条目；`B3+SimSun` 还要求该 GID 为空轮廓、同一私用区码点不由其他字体输出，
+才从原始提取文本删除 ReaderEx 控制符。
+
+Cambria Math 用内嵌字体自身的 Unicode `cmap` 和 OpenType `MATH` 变体表重建损坏的
+`ToUnicode`；Symbol MT 用预置的 Adobe Symbol 标准编码恢复数学字符。只有重建
+`ToUnicode` 时才写临时 PDF 副本；ReaderEx 删除直接作用于原始 `pdftotext` 产物，避免
+临时重映射改变 `-layout` 阅读顺序。完整字符恢复为 Unicode，公式拼装件和未知字形继续
+输出替换字符，交给现有损坏证据路径处理。该修复不读取或分发本机 Word/WPS 字体，不做
+OCR；字体恢复本身不改变公式定位或缓存 schema。修复版本进入 extractor fingerprint，确保旧
+缓存不会冒充新结果。确定性门槛、代表样本与整体乱码率的长期记录见
+[PDF 字体 Unicode 恢复验证](docs/design/pdf_font_unicode_repair_validation.md)。
 
 ### 5.2 页面证据与引用展示
 
@@ -144,21 +152,33 @@ Symbol 标准编码恢复数学字符；`B3+SimSun` 仅在私用区映射对应�
 纯文本（text-only）模型不能使用该视觉回退。未安装可选 Formula OCR 组件时，Runtime
 仍不暴露公式识别工具，遇到公式、符号表格或明显提取损坏时只能明确报告证据限制。组件
 安装后，纯文本模型可调用 `recognize_formula`；当前组件使用准确率优先的
-`PP-FormulaNet_plus-M`。乱码公式优先用 `cache_slot` 定位：建库时
-`pdftotext -bbox` 已算出公式归一化 bbox 写入槽位标记，Runtime 据此自动裁切；无槽位时
-回退到 PDF 自带坐标定位带编号独立公式，或调用方提供的规范化 region，随后只接收本地
-OCR helper 返回的 LaTeX。
+`PP-FormulaNet_plus-M`。缓存不再预判可执行的公式框：建库时只对“包含损坏字符且没有中英
+正文”的连续行预埋弱提示，记录首行第一个损坏字符和末行最后一个损坏字符的字形矩形；混合
+正文行不写提示，也不生成覆盖整行的自动替换范围，避免删除行内正文。提示带
+`advisory=true`，不构成裁剪或写入权限。无正文损坏行另有稳定 `repair_span_id`，只限定
+将来允许替换的缓存范围。
+
+纯文本模型通过 `query_page_geometry` 主动查询编号、正文、乱码字符、行及其归一化坐标。
+公式有编号时，编号只用于快速找页和辨认真正的展示公式；无编号时先用上下文语义找页和大概
+区域。模型可参考预埋提示，也可直接探索原文，最后必须自行给出对角线两点构成的明确
+`region`。`recognize_formula` 不再接受自动裁切的 `cache_slot` 或 `equation_label`，也不再
+执行双正文锚点推框；OCR 结果不完整时模型可调整 region 重试。
 Runtime 在首次公式识别时按需启动 Helper，并通过串行请求复用同一已加载模型；连续一小时
 没有公式请求时 Helper 自行退出并释放模型内存，之后的请求会自动重启。Helper 路径切换、
 协议失步、超时或 Runtime 退出也会丢弃对应子进程，不跨版本复用模型状态。
 公式 OCR 不提供数学正确性保证，结果必须携带原 PDF 页、region、render hash、模型身份和
-未验证警告。`layout.txt` 中的乱码行包含稳定 `cache_slot`。只有当前任务确实需要理解或引用
-某个具体公式、且该公式的 TXT 乱码阻碍任务时，模型才调用 OCR；不得仅因发现无关乱码或
-其他公式 slot 就识别。首次 `recognize` 只返回候选 LaTeX 和 `candidate_id`，不修改缓存；
-模型判断候选可接受后再次调用 `accept`（candidate_id 是唯一信任锚点，重复回传的定位
-字段被忽略），Runtime 才把 LaTeX 写入新 revision、原子发布为
-current，随后自动删除同一缓存键下的旧 revision。模型后续只读取累积修复后的 current TXT。
-无编号行内公式既无槽位又无可靠定位时不得对整页强行识别；复杂表格恢复仍属于待设计能力。
+未验证警告。OCR 只在用户要求解释或核实某个具体公式，或当前任务确实依赖公式级准确性且
+缓存文本不足时调用；不得仅因发现无关乱码而识别。调用坐标或 OCR 工具前必须先加载独立
+`formula-ocr` Skill，Runtime 会拒绝未加载 Skill 的调用。同一任务内同一公式最多三次
+`recognize`，次数以 session application event 持久计数，`accept` 不计次数。
+
+首次 `recognize` 只返回候选 LaTeX 和 `candidate_id`，不修改缓存。乱码公式可冻结
+`repair_span_id`；非乱码公式若疑似静默漏运算符或结构符，冻结缓存中唯一匹配的完整
+`replacement_text`。模型判断候选完整后调用 `accept`，可用 `refined_latex` 清洗 OCR 杂质。
+Runtime 重新验证 PDF 哈希和冻结目标，将整个目标替换成带 `verified=false` 标记的显示
+LaTeX，写入新 revision、原子发布 current，并删除同一缓存键的旧 revision。若非乱码公式
+没有发现缺失则不 accept；不得对单个符号打补丁。无法可靠确定 region 时不得整页强行识别，
+复杂表格恢复仍属于待设计能力。
 
 成功 `inspect_page` 后，Runtime 只追加不含图像正文的页面观察事件。文本读取不另设
 登记工具；权威命令、模型可见输出和完整会话历史构成审计依据。默认 Agent loop 不按
@@ -249,7 +269,7 @@ Application Support 中，经 Runtime 环境变量传入，不进入论文库、
 - `agents/context/` 按稳定 section 构建模型可见 World State。一个 context window 首次
   注入 `full`，后续 turn 和工具 batch 只在状态变化时追加 RFC 7386 merge patch；
   session 同步持久化 full/patch，恢复时从最后 full 顺序应用 patch 重建 baseline。
-- 当前 section 包含论文授权摘要、模型、静态预算、模型可见工具、research Skill 和
+- 当前 section 包含论文授权摘要、模型、静态预算、模型可见工具、Skill catalog 和
   可选 Composer 状态；逐论文 inventory 不再进入 World State。费用、deadline、授权与
   工具策略仍由 Runtime 强制；World State 不是授权边界。
 - Compaction 删除旧窗口中的 World State fragment，并在 replacement history 与 session

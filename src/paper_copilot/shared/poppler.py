@@ -11,10 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from paper_copilot.shared.errors import PdfCacheError
-from paper_copilot.shared.pdf_font_repair import (
-    PDF_CONTROL_MARKER,
-    repair_pdf_font_unicode_maps,
-)
+from paper_copilot.shared.pdf_font_repair import repair_pdf_font_unicode_maps
 
 __all__ = [
     "PopplerExtraction",
@@ -29,16 +26,16 @@ _EXTRACTION_PARAMETERS = {
     "encoding": "UTF-8",
     "eol": "unix",
     "page_breaks": "form_feed",
-    # Drives the garbled-slot bbox marker format; bumping it retires caches
-    # built before C0 control characters became garble signals rendered as
-    # visible control pictures (silent math-glyph loss now opens slots).
-    "slot_bbox_source": "pdftotext-bbox-v5",
-    # Repair only deterministic embedded-font Unicode maps in a temporary PDF
-    # copy before Poppler sees it. This changes cache content and therefore the
-    # extractor fingerprint, without changing the public cache schema.
-    "font_unicode_repair": "embedded-cmap-math-symbol-readerex-v2",
+    # Formula coordinates are advisory first/last damaged-character boxes,
+    # never executable crops. Stable repair spans remain separate write anchors.
+    "formula_hint_source": "pymupdf-rawdict-v1",
+    "formula_repair_markers": "repair-span-v1",
+    # Repair only deterministic embedded-font Unicode extraction, using a
+    # temporary PDF for rebuilt maps or verified post-extraction cleanup for
+    # ReaderEx controls. This changes cache content and therefore the extractor
+    # fingerprint, without changing the public cache schema.
+    "font_unicode_repair": "embedded-cmap-math-symbol-readerex-v3",
 }
-_MAX_BBOX_OUTPUT_BYTES = 64 * 1024 * 1024
 
 
 def find_poppler_executable(name: str) -> Path | None:
@@ -143,7 +140,9 @@ class PopplerTextExtractor:
                 pdf_path,
                 repaired_pdf_path,
             )
-            extraction_pdf_path = repaired_pdf_path if repair.modified else pdf_path
+            extraction_pdf_path = (
+                repaired_pdf_path if repair.repaired_pdf_created else pdf_path
+            )
             await self._run(
                 pdftotext_path,
                 "-layout",
@@ -155,38 +154,17 @@ class PopplerTextExtractor:
                 str(output_path),
             )
             if repair.removed_control_mapping_count > 0:
-                await asyncio.to_thread(_strip_pdf_control_markers, output_path)
+                await asyncio.to_thread(
+                    _strip_pdf_control_codepoints,
+                    output_path,
+                    repair.removed_control_codepoints,
+                )
         finally:
             with suppress(FileNotFoundError):
                 repaired_pdf_path.unlink()
         if not output_path.is_file():
             raise PdfCacheError("pdftotext completed without producing its output artifact")
         return PopplerExtraction(page_count=page_count, identity=identity)
-
-    async def page_word_boxes(self, pdf_path: Path, page: int) -> str:
-        """Return raw `pdftotext -bbox` XHTML for one page.
-
-        The bbox pass shares the layout pass's text engine, so garbled glyphs
-        surface with the same code points plus per-word coordinates.
-        """
-        if page < 1:
-            raise PdfCacheError("page must be at least 1")
-        pdftotext_path = self._resolve_executable(self._pdftotext_path, "pdftotext")
-        stdout, _stderr = await self._run(
-            pdftotext_path,
-            "-bbox",
-            "-enc",
-            _EXTRACTION_PARAMETERS["encoding"],
-            "-f",
-            str(page),
-            "-l",
-            str(page),
-            str(pdf_path),
-            "-",
-        )
-        if len(stdout) > _MAX_BBOX_OUTPUT_BYTES:
-            raise PdfCacheError("pdftotext -bbox output exceeded the size limit")
-        return stdout
 
     @staticmethod
     def _resolve_executable(configured_path: Path | None, name: str) -> Path:
@@ -262,8 +240,13 @@ class PopplerTextExtractor:
         return stdout, stderr
 
 
-def _strip_pdf_control_markers(output_path: Path) -> None:
-    marker = PDF_CONTROL_MARKER.encode("utf-8")
+def _strip_pdf_control_codepoints(
+    output_path: Path,
+    codepoints: tuple[int, ...],
+) -> None:
     output_bytes = output_path.read_bytes()
-    if marker in output_bytes:
-        output_path.write_bytes(output_bytes.replace(marker, b""))
+    cleaned_bytes = output_bytes
+    for codepoint in codepoints:
+        cleaned_bytes = cleaned_bytes.replace(chr(codepoint).encode("utf-8"), b"")
+    if cleaned_bytes != output_bytes:
+        output_path.write_bytes(cleaned_bytes)

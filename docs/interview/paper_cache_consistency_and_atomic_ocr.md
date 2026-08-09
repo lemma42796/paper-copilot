@@ -111,13 +111,14 @@ manifest 写入同样带 `flush` + `fsync`，避免崩溃后出现“指针已�
 ### 7. OCR 两阶段提交
 
 `recognize_formula` 的 `recognize` 只返回候选，并把候选绑定到 `pdf_sha256`、page、
-render_sha256、model 和 cache_slot，存于进程内受 `threading.Lock` 保护的字典；`accept`
+render_sha256、model、显式 region 和冻结替换目标，存于进程内受 `threading.Lock` 保护的
+字典；`accept`
 校验 paper/page 与 PDF 哈希匹配后，在独占锁内执行：
 
 ```text
 读 current revision 的 layout.txt
-  → 定位 cache_slot 占位符
-  → 替换为 recognized 标记 + LaTeX
+  → 校验 repair_span_id 或唯一整段 replacement_text 的哈希
+  → 把整个目标替换为 verified=false 标记 + 显示 LaTeX
   → 重算页边界
   → 写 staging 并原子发布新 revision
   → 删除同一缓存键旧 revision
@@ -299,21 +300,22 @@ revision。因为发布没有 CAS，业务侧不宣称无丢失；单用户桌�
 候选绑定识别时的 PDF 哈希、页面、渲染哈希和模型，accept 必须发生在同一 Runtime
 进程内，避免跨会话误接受过期证据。进程重启后重新识别成本很低。
 
-### 为什么 cache_slot 保持模型可见？
+### 为什么坐标提示和替换锚点必须分开？
 
-OCR 需要精确知道 layout.txt 中哪个占位符对应目标公式，cache_slot 是模型与 OCR 工具
-之间的稳定定位标识，属于有意保留的接口。
+`formula_hint` 只是首尾损坏字符的弱坐标，模型可忽略或调整；`repair_span_id` 只限定
+`layout.txt` 中允许整体替换的范围，不能自动生成 OCR crop。非乱码公式则冻结唯一匹配的
+完整原文。这样模型拥有主动定位能力，同时 Runtime 仍能拒绝错位写入。
 
 ## 尚未完成与不可宣称内容
 
 - 没有多进程/多线程并发压力测试；可宣称“设计覆盖并发场景 + 端到端功能验证通过”，
   不要宣称“并发压测通过”；
-- 没有 CAS/乐观并发控制，存在 ensure 与 OCR 之间的理论丢失更新；
+- 冻结目标带内容哈希，accept 会拒绝目标变化；尚未做多进程并发压力测试；
 - 跨进程锁基于 POSIX flock，仅适用于 macOS/Linux；
 - 未运行 Swift 构建、pytest、Ruff 或 mypy（本次任务未请求）；网络门控为代码级核查，
   未做 GUI 级抓包复测；
 - OCR 输出是候选，不是数学 ground truth；原 PDF 始终是公式权威证据；
-- 复杂表格恢复与没有可靠 region 的行内公式仍未实现。
+- 复杂表格恢复与无法探索出可靠 region 的公式仍不送整页 OCR。
 
 ## 面试前快速检查清单
 

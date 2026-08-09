@@ -25,8 +25,10 @@ class SkillCatalogEntry:
 
 
 class SkillRegistry:
-    def __init__(self, research_skill: ResearchSkill) -> None:
-        self._skills = {research_skill.name: research_skill}
+    def __init__(self, *skills: ResearchSkill) -> None:
+        self._skills = {skill.name: skill for skill in skills}
+        if len(self._skills) != len(skills):
+            raise AgentError("Skill registry contains duplicate names")
 
     def catalog(self) -> tuple[SkillCatalogEntry, ...]:
         return tuple(

@@ -67,15 +67,34 @@ maximum model-visible research tool count unchanged.
 
 ## Tool contract
 
-`recognize_formula` accepts an authorized PDF ID, a one-based physical page,
-an optional `cache_slot` shown beside garbled content in `layout.txt`, and
-exactly one of:
+Formula OCR guidance lives in the separate `formula-ocr` Skill. The general
+`research-papers` Skill describes formula evidence limits but contains no OCR
+workflow. The specialized Skill may be loaded only when the user asks to explain
+or verify a specific formula, or the current task genuinely depends on exact
+formula structure that prepared text cannot establish. Runtime rejects both geometry
+exploration and recognition until that Skill has been loaded in the conversation.
 
-- a printed equation label such as `3`; or
-- a normalized page region.
+`query_page_geometry` provides two bounded, read-only operations on an authorized
+PDF page:
 
-For a printed label, the main Runtime uses the PDF text geometry to construct a
-bounded crop. It renders that crop with Poppler and gives only the temporary PNG
+- `search_text` finds an exact printed label, prose fragment, or visible formula
+  text and returns the phrase and containing-line rectangles;
+- `inspect_region` returns bounded line and per-character rectangles for a rough
+  region, including damaged characters exposed by the PDF text layer.
+
+The model uses a printed equation label only to find the page and the displayed
+formula near it. Unnumbered formulas are first narrowed by semantic context and
+surrounding prose. The model may use cached coordinate hints or explore the page
+directly, then supplies the final diagonal crop itself.
+
+`recognize_formula` accepts an authorized PDF ID, a one-based physical page, a
+stable `formula_ref`, and an explicit normalized `region`. It no longer accepts a
+label or stored bounding box as an automatic crop. A `repair_span_id` may freeze a
+damaged cache span; alternatively, exact `replacement_text` may freeze a readable
+whole formula suspected of silently missing operators or structure. These are
+write targets, not locators.
+
+The Runtime renders the explicit crop with Poppler and gives only the temporary PNG
 path to the helper. On the first request, Runtime starts the Helper in server mode;
 the Helper loads the packaged `PP-FormulaNet_plus-M` weights on demand and then
 serves a serialized, bounded JSON-lines request/response protocol over stdin/stdout.
@@ -97,19 +116,65 @@ released even while the main Runtime remains open.
 The `recognize` result contains candidate LaTeX, a `candidate_id`, page, region,
 PDF and render hashes, model identity,
 and explicit unverified warnings. It never presents OCR output as mathematical
-ground truth or invents confidence. Recognition never changes the cache. After the
-model inspects the candidate, it may call `accept` with the frozen `candidate_id`.
-Only when the current task needs that specific formula should the model request OCR;
-unrelated garbled text or formula slots do not trigger recognition. After the model
-accepts a candidate, Runtime replaces that bounded placeholder with LaTeX in a new
-`layout.txt` revision, atomically publishes it for later reads, and deletes superseded
-revisions for the same cache key. Accepted repairs therefore accumulate in the single
-model-visible current TXT.
+ground truth or invents confidence. Recognition never changes the cache. Every
+recognize request that reaches Helper inference is charged to both
+`PDF + page + normalized formula_ref` and the stable replacement target when present, in the
+conversation session immediately before OCR begins. Invalid target or render preflight
+does not consume an attempt; a Helper failure does. The fourth attempt for the same
+formula is rejected; `accept` is not charged. After the model inspects the candidate, it may
+adjust the crop and retry up to that limit, or call `accept` with the frozen
+`candidate_id`.
+
+Acceptance rechecks the PDF and the frozen target. A damaged `repair_span_id`, or a
+unique readable whole-formula target, is replaced in a new `layout.txt` revision by
+a marker plus display LaTeX (`$$ ... $$`). A readable formula is replaced only when
+OCR establishes a material omission, and the entire formula is replaced rather than
+patching one character. The revision is atomically published and superseded revisions
+for the same cache key are deleted. Accepted repairs therefore accumulate in the
+single model-visible current TXT.
 Candidates are held only in the current Runtime process. If that process exits before
 `accept`, the model must run `recognize` again; an unaccepted candidate is never written
 to the persistent cache.
-Unnumbered inline formulas without a known region remain unsupported rather than
-sending a whole page to a formula-only recognizer.
+When geometry exploration cannot establish a bounded region, the model must report the
+gap rather than sending a whole page to a formula-only recognizer.
+
+## Cache hint contract
+
+Cache generation never writes an executable formula crop. For each visual line that
+contains damaged characters:
+
+- if the line also contains Chinese or an English prose word, no coordinate is
+  embedded for any damage on that line;
+- otherwise, a one-line run records the first and last damaged-character boxes;
+- for consecutive damaged non-prose lines, the run records the first damaged box on
+  the first line and the last damaged box on the final line, ending at the next prose
+  line or the page edge.
+
+The marker includes `advisory=true` and a line count. A damaged non-prose run also
+receives a separate stable `repair_span_id`; a mixed prose line receives neither an
+automatic coordinate nor a whole-line replacement span, because replacing that span
+could delete valid prose. The model may ignore a hint, refine beyond it, or locate the
+formula from the original page without changing what text it is authorized to replace.
+
+The hint source and repair-marker version participate in the extractor fingerprint, and
+the cache manifest schema is v3. Existing v2 caches are rebuilt on demand. Accepted OCR
+revisions from the old locator schema are not copied into the new cache automatically,
+because their replacement anchors and crop provenance are incompatible; a material
+formula must be recognized again under the new bounded target contract.
+
+## Deferred product validation
+
+The representative validation request is frozen in
+[`formula_ocr_validation_prompt.md`](formula_ocr_validation_prompt.md). It is phrased as a
+normal paper question and deliberately withholds the evaluation purpose, expected physical
+pages, and known formula structure from the executing model. The first run recognizes but
+does not accept candidates and records every crop region and render hash for review.
+
+Product execution is deferred until the separate macOS high-frequency streaming defect is
+fixed. Formula crop PNGs are currently temporary Helper inputs and are deleted after each
+call; the durable evidence available today is the normalized region, candidate ID, render
+SHA-256, raw LaTeX, and trace. A future requirement to inspect every crop image needs an
+explicit artifact-persistence design rather than prompt wording.
 
 ## Distribution prerequisite
 

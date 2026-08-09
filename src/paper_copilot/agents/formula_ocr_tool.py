@@ -10,12 +10,12 @@ import subprocess
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-import pymupdf
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from paper_copilot.agents.inspect_page_tool import (
@@ -27,8 +27,8 @@ from paper_copilot.agents.inspect_page_tool import (
     _resolve_poppler_executable,
     _sha256_file,
 )
-from paper_copilot.shared.errors import KnowledgeError, PdfCacheError
-from paper_copilot.shared.pdf_cache import PdfTextCache
+from paper_copilot.shared.errors import KnowledgeError
+from paper_copilot.shared.pdf_cache import FormulaTargetSnapshot, PdfTextCache
 
 __all__ = [
     "FormulaOCRInput",
@@ -39,15 +39,15 @@ __all__ = [
 ]
 
 _COMPONENT_SCHEMA_VERSION = 2
-_TOOL_SCHEMA_VERSION = 1
+_TOOL_SCHEMA_VERSION = 2
 _HELPER_TIMEOUT_SECONDS = 120.0
 _HELPER_IDLE_TIMEOUT_SECONDS = 60.0 * 60.0
 _HELPER_TERMINATION_GRACE_SECONDS = 2.0
 _MAX_HELPER_OUTPUT_BYTES = 64_000
 _MAX_HELPER_DIAGNOSTIC_BYTES = 4_000
 _HELPER_READ_CHUNK_BYTES = 8_192
-# Slot crops are rendered large enough for the recognizer to keep limits and
-# scripts; the cap bounds the intermediate full-page render.
+# Formula crops are rendered large enough for the recognizer to keep limits
+# and scripts; the cap bounds the intermediate full-page render.
 _FORMULA_BASE_RENDER_DIMENSION = 1_800
 _FORMULA_MAX_RENDER_DIMENSION = 3_600
 _FORMULA_MIN_CROP_WIDTH = 700
@@ -83,21 +83,21 @@ class FormulaOCRInput(BaseModel):
         ),
     )
     page: int = Field(ge=1, description="One-based physical PDF page number.")
-    equation_label: str | None = Field(
+    formula_ref: str | None = Field(
         default=None,
         min_length=1,
-        max_length=32,
+        max_length=300,
         description=(
-            "Printed equation label without parentheses, for example '3'. "
-            "Use this for numbered display equations that have no cache slot "
-            "and no known region."
+            "Stable identity for the same physical formula, such as 'equation (3.5)' "
+            "or a distinctive nearby prose fragment. Reuse it unchanged for every "
+            "crop refinement so the Runtime can enforce the attempt limit."
         ),
     )
     region: InspectPageRegion | None = Field(
         default=None,
         description=(
-            "Optional normalized formula crop. Only needed to override a stored "
-            "slot crop or for formulas without a cache slot."
+            "Explicit normalized formula crop selected after coordinate exploration. "
+            "Cached hints and printed labels never become automatic crops."
         ),
     )
     purpose: str | None = Field(
@@ -106,14 +106,23 @@ class FormulaOCRInput(BaseModel):
         max_length=500,
         description="Specific formula that needs local OCR verification.",
     )
-    cache_slot: str | None = Field(
+    repair_span_id: str | None = Field(
         default=None,
-        pattern=r"^page-[0-9]{4}-formula-[0-9]{4}$",
+        pattern=r"^page-[0-9]{4}-repair-[0-9]{4}$",
         description=(
-            "Stable cache_slot shown beside a garbled formula in layout.txt. "
-            "Recognize with only the slot when possible: the Runtime crops the "
-            "stored formula coordinates automatically. Provide it during "
-            "recognize so a later accept can replace that exact location."
+            "Stable replacement span shown beside damaged formula text. This grants "
+            "permission to replace that cache span after acceptance but does not "
+            "supply OCR coordinates."
+        ),
+    )
+    replacement_text: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=6000,
+        description=(
+            "Exact whole formula currently present on the cached page. Use for a "
+            "readable formula suspected of silently missing symbols; acceptance "
+            "replaces it only if this frozen text still matches uniquely."
         ),
     )
     candidate_id: str | None = Field(
@@ -131,28 +140,27 @@ class FormulaOCRInput(BaseModel):
         description=(
             "Accept only. Optional cleaned copy of the candidate LaTeX: fix "
             "OCR artifacts such as stray prose from an overwide crop or broken "
-            "spacing, without changing the mathematics. Omit it to publish the "
-            "OCR output unchanged."
+            "spacing, without changing the mathematics. Provide the formula body "
+            "without outer $$ or \\[...\\] delimiters. Omit it to publish the OCR "
+            "output unchanged when it is already a valid body."
         ),
     )
 
     @model_validator(mode="after")
     def _operation_arguments_match(self) -> FormulaOCRInput:
         if self.operation == "recognize":
-            if self.equation_label is not None and self.region is not None:
-                raise ValueError(
-                    "recognize accepts at most one of equation_label or region"
-                )
-            if (
-                self.equation_label is None
-                and self.region is None
-                and self.cache_slot is None
-            ):
-                raise ValueError(
-                    "recognize requires equation_label, region, or cache_slot"
-                )
+            if self.region is None:
+                raise ValueError("recognize requires an explicit region")
+            if self.formula_ref is None:
+                raise ValueError("recognize requires formula_ref")
             if self.purpose is None:
                 raise ValueError("recognize requires purpose")
+            if self.repair_span_id is not None and self.replacement_text is not None:
+                raise ValueError(
+                    "recognize accepts at most one of repair_span_id or replacement_text"
+                )
+            if self.replacement_text is not None:
+                _validate_replacement_text(self.replacement_text)
             if self.candidate_id is not None:
                 raise ValueError("recognize does not accept candidate_id")
             if self.refined_latex is not None:
@@ -163,7 +171,7 @@ class FormulaOCRInput(BaseModel):
         if self.refined_latex is not None:
             _validate_refined_latex(self.refined_latex)
         # Accept silently ignores repeated locator fields: models commonly echo
-        # cache_slot/purpose/region back, and the frozen candidate remains the
+        # repair_span_id/purpose/region back, and the frozen candidate remains the
         # only trust anchor for what gets published.
         return self
 
@@ -184,8 +192,23 @@ def _validate_refined_latex(value: str) -> None:
         raise ValueError("refined_latex must not be empty")
     if "[[" in value:
         raise ValueError("refined_latex must not contain marker sequences")
+    stripped = value.strip()
+    if (
+        stripped.startswith("$$")
+        or stripped.endswith("$$")
+        or stripped.startswith(r"\[")
+        or stripped.endswith(r"\]")
+    ):
+        raise ValueError("refined_latex must not include outer display delimiters")
     if any(ord(char) < 32 and char not in "\n\t" for char in value):
         raise ValueError("refined_latex must not contain control characters")
+
+
+def _validate_replacement_text(value: str) -> None:
+    if not value.strip():
+        raise ValueError("replacement_text must not be empty")
+    if "[[" in value or "\f" in value:
+        raise ValueError("replacement_text must not contain cache markers")
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,12 +218,14 @@ class _FormulaOCRCandidate:
     pdf_sha256: str
     page: int
     purpose: str
-    equation_label: str | None
+    formula_ref: str
     region: dict[str, float]
     latex: str
     model: str
     render_sha256: str
-    cache_slot: str | None
+    repair_span_id: str | None
+    replacement_text: str | None
+    target_snapshot: FormulaTargetSnapshot | None
 
 
 _CANDIDATES: dict[str, _FormulaOCRCandidate] = {}
@@ -499,22 +524,15 @@ _LEGACY_HELPER_SIGNATURES_LOCK = threading.Lock()
 def formula_ocr_tool_description() -> str:
     return (
         "Recognize and optionally accept one formula from an authorized local PDF. "
-        "Use this only when the current task requires understanding or citing a "
-        "specific formula, that formula is corrupted or flattened in extracted PDF "
-        "text, and the configured language model cannot inspect images. Do not call "
-        "this tool merely because unrelated garbled text or formula slots exist. Identify "
-        "the exact physical page first, then provide the cache_slot shown beside "
-        "the garbled formula (preferred; the crop is automatic), or a printed "
-        "equation label, or a normalized formula region. recognize returns a candidate without "
-        "changing the cache. Inspect its LaTeX; only when it is acceptable call this "
-        "tool again with operation=accept and candidate_id, optionally passing a "
-        "cleaned copy of the LaTeX as refined_latex when OCR artifacts pollute it. "
-        "If layout.txt showed a "
-        "cache_slot, accept atomically publishes the TXT cache with the LaTeX replacing "
-        "that garbled slot, then automatically deletes superseded TXT revisions. The "
-        "optional local Formula OCR component "
-        "must already be installed. Results are OCR output, not verified mathematical "
-        "ground truth; preserve the returned page, region, hashes, and warnings."
+        "Use it only when the user asks to explain or verify a specific formula, or "
+        "when the current task materially requires exact formula structure that cached "
+        "text cannot establish. Never call it merely because unrelated damage exists. "
+        "recognize requires a model-selected explicit region and a stable formula_ref; "
+        "printed labels and cached hints do not choose a crop. The Runtime permits at "
+        "most three recognize attempts for the same formula in one task. Inspect each "
+        "candidate and adjust the crop only when useful. accept publishes cleaned display "
+        "LaTeX through a frozen repair_span_id or exact whole-formula replacement_text. "
+        "Results remain unverified OCR evidence."
     )
 
 
@@ -527,6 +545,7 @@ async def run_formula_ocr(
     library_root: Path | None,
     *,
     cache_root: Path | None = None,
+    on_recognize_attempt: Callable[[], None] | None = None,
 ) -> FormulaOCRRun:
     if args.operation == "accept":
         return await _accept_formula_candidate(args, library_root, cache_root)
@@ -545,31 +564,20 @@ async def run_formula_ocr(
             f"page {args.page} is outside the PDF page range 1-{page_count}"
         )
     pdf_sha256 = await asyncio.to_thread(_sha256_file, pdf_path)
-    region: InspectPageRegion | None = args.region
-    region_source = "provided"
-    if region is None and args.cache_slot is not None:
-        slot_bbox = await _lookup_slot_bbox(
+    assert args.region is not None
+    assert args.formula_ref is not None
+    region = args.region
+    target_snapshot: FormulaTargetSnapshot | None = None
+    if args.repair_span_id is not None or args.replacement_text is not None:
+        if cache_root is None:
+            raise KnowledgeError("formula targeting requires a configured cache root")
+        cache = PdfTextCache(cache_root.expanduser().resolve())
+        target_snapshot = await cache.snapshot_formula_target(
             pdf_sha256,
             page=args.page,
-            cache_slot=args.cache_slot,
-            cache_root=cache_root,
+            repair_span_id=args.repair_span_id,
+            replacement_text=args.replacement_text,
         )
-        if slot_bbox is not None:
-            region = InspectPageRegion(**slot_bbox)
-            region_source = "cache_slot_bbox"
-    if region is None:
-        if args.equation_label is None:
-            raise KnowledgeError(
-                f"cache slot {args.cache_slot} has no stored crop coordinates in "
-                "the text cache; pass region or equation_label instead"
-            )
-        region = await asyncio.to_thread(
-            _locate_numbered_formula,
-            pdf_path,
-            args.page,
-            args.equation_label,
-        )
-        region_source = "equation_label"
     started = time.monotonic()
     pdftoppm_path = _resolve_poppler_executable("pdftoppm")
     with tempfile.TemporaryDirectory(prefix="paper-copilot-formula-ocr-") as raw_dir:
@@ -581,6 +589,8 @@ async def run_formula_ocr(
             render_dir=Path(raw_dir),
         )
         render_sha256 = await asyncio.to_thread(_sha256_file, render_path)
+        if on_recognize_attempt is not None:
+            on_recognize_attempt()
         helper_result = await _run_helper(helper_path, render_path)
     current_pdf_sha256 = await asyncio.to_thread(_sha256_file, pdf_path)
     if current_pdf_sha256 != pdf_sha256:
@@ -591,6 +601,7 @@ async def run_formula_ocr(
         raise KnowledgeError("Formula OCR helper returned empty LaTeX")
     if not isinstance(model_name, str) or not model_name:
         raise KnowledgeError("Formula OCR helper omitted its model identity")
+    latex_body = latex.strip()
     region_payload = region.model_dump(mode="json")
     candidate_id = f"formula-candidate-{uuid4().hex}"
     candidate = _FormulaOCRCandidate(
@@ -599,12 +610,14 @@ async def run_formula_ocr(
         pdf_sha256=pdf_sha256,
         page=args.page,
         purpose=args.purpose or "",
-        equation_label=args.equation_label,
+        formula_ref=args.formula_ref,
         region=region_payload,
-        latex=latex.strip(),
+        latex=latex_body,
         model=model_name,
         render_sha256=render_sha256,
-        cache_slot=args.cache_slot,
+        repair_span_id=args.repair_span_id,
+        replacement_text=args.replacement_text,
+        target_snapshot=target_snapshot,
     )
     with _CANDIDATES_LOCK:
         _CANDIDATES[candidate_id] = candidate
@@ -618,7 +631,11 @@ async def run_formula_ocr(
         "extractor_fingerprint": hashlib.sha256(
             model_name.encode("utf-8")
         ).hexdigest(),
-        "cache_revision_id": None,
+        "cache_revision_id": (
+            target_snapshot.cache_revision_id
+            if target_snapshot is not None
+            else None
+        ),
         "render_sha256": render_sha256,
     }
     output = {
@@ -626,16 +643,30 @@ async def run_formula_ocr(
         "candidate_id": candidate_id,
         "paper_id": args.paper_id,
         "page": args.page,
-        "region_source": region_source,
+        "region_source": "model_selected",
         "purpose": args.purpose,
-        "equation_label": args.equation_label,
+        "formula_ref": args.formula_ref,
         "region": region_payload,
-        "latex": latex,
+        "latex": latex_body,
         "model": model_name,
-        "cache_slot": args.cache_slot,
-        "cache_revision_id": None,
-        "cache_artifact_sha256": None,
-        "cache_write_pending": args.cache_slot is not None,
+        "repair_span_id": args.repair_span_id,
+        "target_kind": (
+            target_snapshot.target_kind if target_snapshot is not None else None
+        ),
+        "target_sha256": (
+            target_snapshot.target_sha256 if target_snapshot is not None else None
+        ),
+        "cache_revision_id": (
+            target_snapshot.cache_revision_id
+            if target_snapshot is not None
+            else None
+        ),
+        "cache_artifact_sha256": (
+            target_snapshot.cache_artifact_sha256
+            if target_snapshot is not None
+            else None
+        ),
+        "cache_write_pending": target_snapshot is not None,
         "verified": False,
         "warnings": [
             "formula OCR may contain symbol, subscript, superscript, or layout errors",
@@ -651,17 +682,33 @@ async def run_formula_ocr(
             "pdf_sha256": pdf_sha256,
             "page": args.page,
             "region": region_payload,
-            "region_source": region_source,
-            "equation_label": args.equation_label,
+            "region_source": "model_selected",
+            "formula_ref_sha256": hashlib.sha256(
+                args.formula_ref.encode("utf-8")
+            ).hexdigest(),
             "render_sha256": render_sha256,
             "formula_ocr_model": model_name,
             "formula_ocr_output_sha256": hashlib.sha256(
-                latex.encode("utf-8")
+                latex_body.encode("utf-8")
             ).hexdigest(),
-            "cache_slot": args.cache_slot,
+            "repair_span_id": args.repair_span_id,
+            "target_kind": (
+                target_snapshot.target_kind if target_snapshot is not None else None
+            ),
+            "target_sha256": (
+                target_snapshot.target_sha256 if target_snapshot is not None else None
+            ),
             "candidate_id": candidate_id,
-            "cache_revision_id": None,
-            "cache_artifact_sha256": None,
+            "cache_revision_id": (
+                target_snapshot.cache_revision_id
+                if target_snapshot is not None
+                else None
+            ),
+            "cache_artifact_sha256": (
+                target_snapshot.cache_artifact_sha256
+                if target_snapshot is not None
+                else None
+            ),
             "wall_time_seconds": round(time.monotonic() - started, 3),
             "page_evidence": evidence,
         },
@@ -698,32 +745,38 @@ async def _accept_formula_candidate(
     published_latex = (
         args.refined_latex.strip() if args.refined_latex else candidate.latex
     )
+    _validate_refined_latex(published_latex)
     refined = published_latex != candidate.latex
-    if candidate.cache_slot is not None:
-        if cache_root is None:
-            raise KnowledgeError("formula OCR acceptance requires a configured cache root")
-        cache = PdfTextCache(cache_root.expanduser().resolve())
-        lookup = await cache.record_formula_ocr(
-            candidate.pdf_sha256,
-            page=candidate.page,
-            cache_slot=candidate.cache_slot,
-            latex=published_latex,
-            ocr_latex=candidate.latex,
-            region=candidate.region,
-            model=candidate.model,
-            render_sha256=candidate.render_sha256,
-            equation_label=candidate.equation_label,
+    if candidate.target_snapshot is None:
+        raise KnowledgeError(
+            "this candidate has no frozen cache target; use its LaTeX as evidence "
+            "without accepting it"
         )
-        if lookup.cache_ref is None or lookup.manifest is None:
-            raise KnowledgeError("formula OCR acceptance produced no text cache revision")
-        cache_revision_id = lookup.cache_ref.revision_id
-        cache_artifact_sha256 = lookup.manifest.artifact.sha256
-        cache_path = (
-            "cache/"
-            f"{lookup.cache_ref.pdf_sha256}/"
-            f"{lookup.cache_ref.extractor_fingerprint}/revisions/"
-            f"{lookup.cache_ref.revision_id}/{lookup.manifest.artifact.filename}"
-        )
+    if cache_root is None:
+        raise KnowledgeError("formula OCR acceptance requires a configured cache root")
+    cache = PdfTextCache(cache_root.expanduser().resolve())
+    lookup = await cache.record_formula_latex(
+        candidate.pdf_sha256,
+        page=candidate.page,
+        repair_span_id=candidate.repair_span_id,
+        replacement_text=candidate.replacement_text,
+        expected_target_sha256=candidate.target_snapshot.target_sha256,
+        latex=published_latex,
+        ocr_latex=candidate.latex,
+        region=candidate.region,
+        model=candidate.model,
+        render_sha256=candidate.render_sha256,
+    )
+    if lookup.cache_ref is None or lookup.manifest is None:
+        raise KnowledgeError("formula OCR acceptance produced no text cache revision")
+    cache_revision_id = lookup.cache_ref.revision_id
+    cache_artifact_sha256 = lookup.manifest.artifact.sha256
+    cache_path = (
+        "cache/"
+        f"{lookup.cache_ref.pdf_sha256}/"
+        f"{lookup.cache_ref.extractor_fingerprint}/revisions/"
+        f"{lookup.cache_ref.revision_id}/{lookup.manifest.artifact.filename}"
+    )
     with _CANDIDATES_LOCK:
         _CANDIDATES.pop(candidate.candidate_id, None)
     output = {
@@ -732,13 +785,15 @@ async def _accept_formula_candidate(
         "paper_id": candidate.requested_paper_id,
         "page": candidate.page,
         "purpose": candidate.purpose,
-        "equation_label": candidate.equation_label,
+        "formula_ref": candidate.formula_ref,
         "region": candidate.region,
         "latex": published_latex,
         "ocr_latex": candidate.latex,
         "refined": refined,
         "model": candidate.model,
-        "cache_slot": candidate.cache_slot,
+        "repair_span_id": candidate.repair_span_id,
+        "target_kind": candidate.target_snapshot.target_kind,
+        "target_sha256": candidate.target_snapshot.target_sha256,
         "cache_revision_id": cache_revision_id,
         "cache_artifact_sha256": cache_artifact_sha256,
         "cache_path": cache_path,
@@ -758,7 +813,9 @@ async def _accept_formula_candidate(
             "pdf_sha256": candidate.pdf_sha256,
             "page": candidate.page,
             "region": candidate.region,
-            "equation_label": candidate.equation_label,
+            "formula_ref_sha256": hashlib.sha256(
+                candidate.formula_ref.encode("utf-8")
+            ).hexdigest(),
             "render_sha256": candidate.render_sha256,
             "formula_ocr_model": candidate.model,
             "formula_ocr_output_sha256": hashlib.sha256(
@@ -768,7 +825,9 @@ async def _accept_formula_candidate(
             "published_latex_sha256": hashlib.sha256(
                 published_latex.encode("utf-8")
             ).hexdigest(),
-            "cache_slot": candidate.cache_slot,
+            "repair_span_id": candidate.repair_span_id,
+            "target_kind": candidate.target_snapshot.target_kind,
+            "target_sha256": candidate.target_snapshot.target_sha256,
             "cache_revision_id": cache_revision_id,
             "cache_artifact_sha256": cache_artifact_sha256,
         },
@@ -782,27 +841,6 @@ def _resolve_library_root(library_root: Path | None) -> Path:
     if not root.is_dir():
         raise KnowledgeError("configured PDF library is not available")
     return root
-
-
-async def _lookup_slot_bbox(
-    pdf_sha256: str,
-    *,
-    page: int,
-    cache_slot: str,
-    cache_root: Path | None,
-) -> dict[str, float] | None:
-    """Return the stored slot crop, or None when unavailable.
-
-    A missing cache or unreadable revision degrades to the explicit-locator
-    path instead of failing recognition outright.
-    """
-    if cache_root is None:
-        return None
-    cache = PdfTextCache(cache_root.expanduser().resolve())
-    try:
-        return await cache.slot_bbox(pdf_sha256, page=page, cache_slot=cache_slot)
-    except PdfCacheError:
-        return None
 
 
 async def _render_formula_crop(
@@ -889,180 +927,6 @@ def _formula_ocr_helper_path() -> Path | None:
     except ValueError:
         return None
     return candidate if candidate.is_file() and os.access(candidate, os.X_OK) else None
-
-
-def _locate_numbered_formula(
-    pdf_path: Path,
-    page_number: int,
-    equation_label: str | None,
-) -> InspectPageRegion:
-    if equation_label is None:
-        raise KnowledgeError("equation_label is required when region is absent")
-    document = pymupdf.open(pdf_path)
-    try:
-        page = document.load_page(page_number - 1)
-        candidates = page.search_for(f"({equation_label})")
-        if not candidates:
-            raise KnowledgeError(
-                f"could not locate equation label ({equation_label}) on page {page_number}"
-            )
-        label = max(candidates, key=lambda rect: rect.x0)
-        page_rect = page.rect
-        content_bbox = _formula_content_bbox(page, label)
-        if content_bbox is not None:
-            width = page_rect.width
-            height = page_rect.height
-            padding = 3.0
-            x1 = max(0.0, (content_bbox[0] - padding) / width)
-            y1 = max(0.0, (content_bbox[1] - padding) / height)
-            x2 = min(1.0, (content_bbox[2] + padding) / width)
-            y2 = min(1.0, (content_bbox[3] + padding) / height)
-            if x2 > x1 and y2 > y1:
-                return InspectPageRegion(x1=x1, y1=y1, x2=x2, y2=y2)
-        # Fall back to the label-anchored column heuristic when the PDF has no
-        # usable text-layer geometry beside the label (for example vector-only
-        # equations). Geometry-based crops cover centered single-column
-        # equations that the legacy column assumption would truncate.
-        return _legacy_label_region(label, page_rect)
-    finally:
-        document.close()
-
-
-_WORD_TUPLE = tuple[float, float, float, float, str, int, int, int]
-
-
-def _formula_content_bbox(
-    page: pymupdf.Page,
-    label: pymupdf.Rect,
-) -> tuple[float, float, float, float] | None:
-    """Return the union box of text-layer words belonging to the labelled formula.
-
-    The label rect anchors the equation line; words whose vertical center lies
-    within one label height of it are clustered from the label leftwards. The
-    box then expands to nearby visual text rows only when the whole row stays
-    horizontally inside the equation box. This works for single-column centered
-    equations, two-column layouts, and sub/superscript or fraction rows without
-    assuming a page-half column boundary.
-    """
-    words = page.get_text("words")
-    vertical_tolerance = max(label.height * 0.6, 5.0)
-    gap_tolerance = max(label.height * 1.0, 14.0)
-    center = (label.y0 + label.y1) / 2.0
-    candidates = [
-        word
-        for word in words
-        if abs((word[1] + word[3]) / 2 - center) <= label.height
-        and word[2] <= label.x0 - 2.0
-    ]
-    if not candidates:
-        return None
-    ordered = sorted(candidates, key=lambda word: word[0])
-    clusters: list[list[_WORD_TUPLE]] = []
-    for word in ordered:
-        if clusters and word[0] - clusters[-1][-1][2] <= gap_tolerance:
-            clusters[-1].append(word)
-        else:
-            clusters.append([word])
-    cluster = max(clusters, key=lambda candidate: max(word[2] for word in candidate))
-    bbox = [
-        min(word[0] for word in cluster),
-        min(word[1] for word in cluster),
-        max(word[2] for word in cluster),
-        max(word[3] for word in cluster),
-    ]
-    included = {id(word) for word in cluster}
-    rows = _formula_visual_rows(page, words, label.x0)
-    changed = True
-    while changed:
-        changed = False
-        for row_box, row_words in rows:
-            if all(id(word) in included for word in row_words):
-                continue
-            if (
-                row_box[1] > bbox[3] + vertical_tolerance
-                or row_box[3] < bbox[1] - vertical_tolerance
-            ):
-                continue
-            if (
-                row_box[0] < bbox[0] - gap_tolerance
-                or row_box[2] > bbox[2] + gap_tolerance
-            ):
-                continue
-            for word in row_words:
-                included.add(id(word))
-            bbox[0] = min(bbox[0], row_box[0])
-            bbox[1] = min(bbox[1], row_box[1])
-            bbox[2] = max(bbox[2], row_box[2])
-            bbox[3] = max(bbox[3], row_box[3])
-            changed = True
-    return (bbox[0], bbox[1], bbox[2], bbox[3])
-
-
-def _formula_visual_rows(
-    page: pymupdf.Page,
-    words: list[_WORD_TUPLE],
-    label_x0: float,
-) -> list[tuple[list[float], list[_WORD_TUPLE]]]:
-    """Merge dict lines into visual rows for equation-content containment.
-
-    Dict lines are the extractor's own text-line fragments. Adjacent fragments
-    that overlap vertically by more than two points belong to the same visual
-    row; a full-width paragraph row therefore fails horizontal containment even
-    when one of its inline-math fragments fits inside the equation box.
-    """
-    rows: list[tuple[list[float], list[_WORD_TUPLE]]] = []
-    for block in page.get_text("dict")["blocks"]:
-        for line in block.get("lines", []):
-            line_box = line["bbox"]
-            line_words = [
-                word
-                for word in words
-                if word[2] <= label_x0 - 2.0
-                and line_box[0] - 0.5 <= word[0]
-                and word[2] <= line_box[2] + 0.5
-                and line_box[1] - 0.5 <= word[1]
-                and word[3] <= line_box[3] + 0.5
-            ]
-            if not line_words:
-                continue
-            merged = False
-            for row_box, row_words in rows:
-                if (
-                    line_box[1] <= row_box[3] - 2.0
-                    and line_box[3] >= row_box[1] + 2.0
-                ):
-                    row_box[0] = min(row_box[0], line_box[0])
-                    row_box[1] = min(row_box[1], line_box[1])
-                    row_box[2] = max(row_box[2], line_box[2])
-                    row_box[3] = max(row_box[3], line_box[3])
-                    row_words.extend(line_words)
-                    merged = True
-                    break
-            if not merged:
-                rows.append(
-                    (
-                        [line_box[0], line_box[1], line_box[2], line_box[3]],
-                        line_words,
-                    )
-                )
-    return rows
-
-
-def _legacy_label_region(
-    label: pymupdf.Rect,
-    page_rect: pymupdf.Rect,
-) -> InspectPageRegion:
-    width = page_rect.width
-    height = page_rect.height
-    column_left = page_rect.x0 if label.x0 < width / 2 else width / 2
-    vertical_padding = max(label.height * 2.2, 18.0)
-    x1 = max(0.0, (column_left + 8.0) / width)
-    x2 = min(1.0, (label.x0 - 5.0) / width)
-    y1 = max(0.0, (label.y0 - vertical_padding) / height)
-    y2 = min(1.0, (label.y1 + vertical_padding) / height)
-    if x2 <= x1 or y2 <= y1:
-        raise KnowledgeError("equation label produced an invalid formula crop")
-    return InspectPageRegion(x1=x1, y1=y1, x2=x2, y2=y2)
 
 
 async def _run_helper(helper_path: Path, image_path: Path) -> dict[str, Any]:

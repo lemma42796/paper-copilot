@@ -8,12 +8,14 @@ from pathlib import Path
 
 from paper_copilot.shared.errors import AgentError
 
-__all__ = ["ResearchSkill", "load_research_skill"]
+__all__ = [
+    "ResearchSkill",
+    "load_formula_ocr_skill",
+    "load_research_skill",
+]
 
 _SKILL_NAME = "research-papers"
-_SKILL_RESOURCE_URI = (
-    "resource://paper-copilot/agents/skills/research-papers/SKILL.md"
-)
+_FORMULA_OCR_SKILL_NAME = "formula-ocr"
 _SKILL_VERSION_PATTERN = re.compile(
     r"^Skill version: (?P<version>[1-9][0-9]*)$",
     re.MULTILINE,
@@ -55,31 +57,40 @@ class ResearchSkill:
 
 @lru_cache(maxsize=1)
 def load_research_skill() -> ResearchSkill:
-    skill_path = (
-        Path(__file__).with_name("skills") / _SKILL_NAME / "SKILL.md"
-    )
+    return _load_bundled_skill(_SKILL_NAME)
+
+
+@lru_cache(maxsize=1)
+def load_formula_ocr_skill() -> ResearchSkill:
+    return _load_bundled_skill(_FORMULA_OCR_SKILL_NAME)
+
+
+def _load_bundled_skill(name: str) -> ResearchSkill:
+    skill_path = Path(__file__).with_name("skills") / name / "SKILL.md"
     try:
         contents = skill_path.read_text(encoding="utf-8").strip()
     except OSError as error:
-        raise AgentError("bundled research Skill is unavailable") from error
-    expected_frontmatter = f"---\nname: {_SKILL_NAME}\n"
+        raise AgentError(f"bundled {name} Skill is unavailable") from error
+    expected_frontmatter = f"---\nname: {name}\n"
     if not contents.startswith(expected_frontmatter):
-        raise AgentError("bundled research Skill has invalid frontmatter")
+        raise AgentError(f"bundled {name} Skill has invalid frontmatter")
     version_matches = _SKILL_VERSION_PATTERN.findall(contents)
     if len(version_matches) != 1:
-        raise AgentError("bundled research Skill must declare exactly one version")
+        raise AgentError(f"bundled {name} Skill must declare exactly one version")
     description_matches = _SKILL_DESCRIPTION_PATTERN.findall(contents)
     if len(description_matches) != 1:
         raise AgentError(
-            "bundled research Skill must declare exactly one description"
+            f"bundled {name} Skill must declare exactly one description"
         )
     return ResearchSkill(
-        name=_SKILL_NAME,
+        name=name,
         # The frontmatter description is the single source of truth; the
         # catalog and system prompt must not drift from the shipped Skill.
         description=description_matches[0],
         version=version_matches[0],
         sha256=hashlib.sha256(contents.encode("utf-8")).hexdigest(),
-        resource_uri=_SKILL_RESOURCE_URI,
+        resource_uri=(
+            f"resource://paper-copilot/agents/skills/{name}/SKILL.md"
+        ),
         contents=contents,
     )

@@ -16,7 +16,6 @@ from paper_copilot.shared.adobe_symbol_encoding import symbol_glyph_name
 from paper_copilot.shared.errors import PdfCacheError
 
 __all__ = [
-    "PDF_CONTROL_MARKER",
     "PdfFontRepairResult",
     "repair_pdf_font_unicode_maps",
 ]
@@ -33,17 +32,40 @@ _BFCHAR_BLOCK = re.compile(
     rb"(?P<suffix>\bendbfchar\b)",
     re.DOTALL,
 )
+_BFRANGE_BLOCK = re.compile(
+    rb"(?P<prefix>\b[0-9]+\s+beginbfrange\b)"
+    rb"(?P<body>.*?)"
+    rb"(?P<suffix>\bendbfrange\b)",
+    re.DOTALL,
+)
 _CMAP_PAIR = re.compile(rb"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>")
+_CMAP_RANGE = re.compile(
+    rb"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*"
+    rb"(?:<([0-9A-Fa-f]+)>|\[([^]]+)\])",
+    re.DOTALL,
+)
 _SYMBOL_PRIVATE_GLYPH = re.compile(r"^uniF0([0-9A-Fa-f]{2})$")
 _FontRepairKind = Literal["cambria_math", "symbol", "readerex_controls"]
+_CidToGidSource = Literal["identity", "stream", "missing"]
 
-# A Unicode noncharacter used only inside the temporary repaired PDF. Poppler
-# emits it into the temporary text artifact, where the adapter removes it
-# before cache generation. It cannot collide with meaningful document text.
-PDF_CONTROL_MARKER = "\ufdd0"
-_PDF_CONTROL_MARKER_HEX = (
-    PDF_CONTROL_MARKER.encode("utf-16-be").hex().upper().encode("ascii")
-)
+# This internal value marks verified ReaderEx mappings while the original CMap
+# is analyzed. It is never written to the PDF or extracted text.
+_CONTROL_REWRITE_SENTINEL = "\U0010fff0"
+
+
+@dataclass(frozen=True, slots=True)
+class _CidToGidMap:
+    source: _CidToGidSource
+    gids: tuple[int, ...] = ()
+
+    def glyph_id(self, cid: int) -> int | None:
+        if not 0 <= cid <= _MAX_CID:
+            return None
+        if self.source == "identity":
+            return cid
+        if self.source == "stream" and cid < len(self.gids):
+            return self.gids[cid]
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +73,8 @@ class _FontResource:
     xref: int
     base_font: str
     kind: _FontRepairKind
+    pages: tuple[int, ...]
+    cid_to_gid: _CidToGidMap
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +82,8 @@ class PdfFontRepairResult:
     repaired_font_count: int
     unicode_mapping_count: int
     removed_control_mapping_count: int
+    repaired_pdf_created: bool
+    removed_control_codepoints: tuple[int, ...]
 
     @property
     def modified(self) -> bool:
@@ -68,13 +94,14 @@ def repair_pdf_font_unicode_maps(
     source_pdf: Path,
     repaired_pdf: Path,
 ) -> PdfFontRepairResult:
-    """Rebuild safe Unicode maps in a temporary PDF copy.
+    """Repair safe embedded-font Unicode extraction without changing the source.
 
-    Repairs are limited to embedded Type0 fonts whose character code, CID, and
-    GID are identical. Cambria Math uses its own cmap and MATH tables; Symbol
-    uses the standard Adobe Symbol encoding; ReaderEx controls are removed only
-    when a private-use mapping points to an empty embedded glyph. The source PDF
-    is never modified.
+    Repairs are limited to embedded Type0 fonts whose character-code-to-glyph
+    relationship is explicit or independently verified from rendered glyph IDs.
+    Cambria Math uses its own cmap and MATH tables; Symbol uses the standard
+    Adobe Symbol encoding; ReaderEx controls are removed only when a private-use
+    mapping resolves to an empty embedded glyph. Rebuilt maps use a temporary PDF;
+    verified ReaderEx control codepoints are returned for post-extraction cleanup.
     """
     if not source_pdf.is_file():
         raise PdfCacheError("PDF path does not identify a regular file")
@@ -89,6 +116,8 @@ def repair_pdf_font_unicode_maps(
     repaired_font_count = 0
     unicode_mapping_count = 0
     removed_control_mapping_count = 0
+    repaired_pdf_created = False
+    removed_control_codepoints: set[int] = set()
     try:
         for resource in _eligible_fonts(document):
             accepted_names = _accepted_font_names(resource.kind)
@@ -101,19 +130,79 @@ def repair_pdf_font_unicode_maps(
                 continue
             try:
                 if resource.kind == "readerex_controls":
-                    cmap_bytes, mapping_count = _readerex_control_cmap(
-                        _read_to_unicode(document, resource.xref),
+                    source_cmap_bytes = _read_to_unicode(document, resource.xref)
+                    source_cmap = _expanded_to_unicode_mapping(source_cmap_bytes)
+                    if source_cmap is None:
+                        continue
+                    observed_gids = (
+                        _observed_glyph_ids(document, resource, source_cmap)
+                        if resource.cid_to_gid.source == "missing"
+                        else {}
+                    )
+                    rewritten, mapping_count = _readerex_control_mapping(
+                        source_cmap,
                         font,
+                        resource.cid_to_gid,
+                        observed_gids,
                     )
                     if mapping_count == 0:
                         continue
-                    removed_control_mapping_count += mapping_count
+                    control_codepoints = _globally_removable_control_codepoints(
+                        document,
+                        resource,
+                        source_cmap,
+                        rewritten,
+                    )
+                    if not control_codepoints:
+                        continue
+                    removed_mapping_count = sum(
+                        1
+                        for cid, destination in source_cmap.items()
+                        if _destination_codepoint(destination) in control_codepoints
+                        and rewritten.get(cid) != destination
+                    )
+                    repaired_font_count += 1
+                    unicode_mapping_count += removed_mapping_count
+                    removed_control_mapping_count += removed_mapping_count
+                    removed_control_codepoints.update(control_codepoints)
+                    continue
                 else:
-                    mapping = (
+                    if (
+                        resource.kind == "symbol"
+                        and resource.cid_to_gid.source == "missing"
+                    ):
+                        source_cmap = _expanded_to_unicode_mapping(
+                            _read_to_unicode(document, resource.xref)
+                        )
+                        if source_cmap is None:
+                            continue
+                        observed_gids = _observed_glyph_ids(
+                            document,
+                            resource,
+                            source_cmap,
+                        )
+                        mapping, changed_count, semantic_count = (
+                            _observed_symbol_mapping(
+                                source_cmap,
+                                font,
+                                observed_gids,
+                            )
+                        )
+                        if changed_count == 0 or semantic_count == 0:
+                            continue
+                        cmap_bytes = _to_unicode_cmap_bytes(mapping)
+                        mapping_count = len(mapping)
+                        _attach_to_unicode(document, resource.xref, cmap_bytes)
+                        repaired_pdf_created = True
+                        repaired_font_count += 1
+                        unicode_mapping_count += mapping_count
+                        continue
+                    glyph_mapping = (
                         _unicode_mapping(font)
                         if resource.kind == "cambria_math"
                         else _symbol_unicode_mapping(font)
                     )
+                    mapping = _mapping_by_cid(glyph_mapping, resource.cid_to_gid)
                     if not any(
                         codepoint != _REPLACEMENT_CHARACTER
                         for codepoint in mapping.values()
@@ -127,14 +216,17 @@ def repair_pdf_font_unicode_maps(
             finally:
                 font.close()
             _attach_to_unicode(document, resource.xref, cmap_bytes)
+            repaired_pdf_created = True
             repaired_font_count += 1
             unicode_mapping_count += mapping_count
 
-        if repaired_font_count > 0:
+        if repaired_pdf_created:
             try:
                 document.save(repaired_pdf, garbage=4, deflate=True)
             except Exception as error:
-                raise PdfCacheError("could not save temporary Unicode-repaired PDF") from error
+                raise PdfCacheError(
+                    "could not save temporary Unicode-repaired PDF"
+                ) from error
     finally:
         document.close()
 
@@ -142,65 +234,124 @@ def repair_pdf_font_unicode_maps(
         repaired_font_count=repaired_font_count,
         unicode_mapping_count=unicode_mapping_count,
         removed_control_mapping_count=removed_control_mapping_count,
+        repaired_pdf_created=repaired_pdf_created,
+        removed_control_codepoints=tuple(sorted(removed_control_codepoints)),
     )
 
 
 def _eligible_fonts(document: pymupdf.Document) -> tuple[_FontResource, ...]:
-    fonts: dict[int, _FontResource] = {}
+    font_details: dict[int, tuple[str, str, str]] = {}
+    pages_by_xref: dict[int, set[int]] = defaultdict(set)
     for page_number in range(document.page_count):
         for resource in document.get_page_fonts(page_number, full=True):
             font_xref = int(resource[0])
             font_type = str(resource[2])
             base_font = str(resource[3])
             encoding = str(resource[5])
-            if font_type != "Type0" or encoding != "Identity-H":
-                continue
-            if not _has_identity_cid_to_gid_map(document, font_xref):
-                continue
-            family = _normalized_font_name(base_font)
-            kind: _FontRepairKind | None = None
-            if family == _CAMBRIA_MATH_FAMILY and _has_damaged_to_unicode(
-                document,
-                font_xref,
-            ):
-                kind = "cambria_math"
-            elif family == _SYMBOL_FAMILY and _has_damaged_to_unicode(
-                document,
-                font_xref,
-            ):
-                kind = "symbol"
-            elif (
-                base_font == _READEREX_SIMSUN_BASE_FONT
-                and _has_private_use_mapping(document, font_xref)
-            ):
-                kind = "readerex_controls"
-            if kind is not None:
-                fonts.setdefault(
-                    font_xref,
-                    _FontResource(xref=font_xref, base_font=base_font, kind=kind),
-                )
+            font_details.setdefault(font_xref, (base_font, font_type, encoding))
+            pages_by_xref[font_xref].add(page_number)
+
+    fonts: dict[int, _FontResource] = {}
+    for font_xref, (base_font, font_type, encoding) in font_details.items():
+        if font_type != "Type0" or encoding != "Identity-H":
+            continue
+        cid_to_gid = _read_cid_to_gid_map(document, font_xref)
+        if cid_to_gid is None:
+            continue
+        family = _normalized_font_name(base_font)
+        kind: _FontRepairKind | None = None
+        if family == _CAMBRIA_MATH_FAMILY and _has_damaged_to_unicode(
+            document,
+            font_xref,
+        ):
+            kind = "cambria_math"
+        elif family == _SYMBOL_FAMILY and _has_damaged_to_unicode(
+            document,
+            font_xref,
+        ):
+            kind = "symbol"
+        elif (
+            base_font == _READEREX_SIMSUN_BASE_FONT
+            and _has_private_use_mapping(document, font_xref)
+        ):
+            kind = "readerex_controls"
+        if kind is None or (
+            kind == "cambria_math" and cid_to_gid.source == "missing"
+        ):
+            continue
+        fonts[font_xref] = _FontResource(
+            xref=font_xref,
+            base_font=base_font,
+            kind=kind,
+            pages=tuple(sorted(pages_by_xref[font_xref])),
+            cid_to_gid=cid_to_gid,
+        )
     return tuple(fonts[xref] for xref in sorted(fonts))
 
 
-def _has_identity_cid_to_gid_map(
+def _read_cid_to_gid_map(
     document: pymupdf.Document,
     font_xref: int,
-) -> bool:
+) -> _CidToGidMap | None:
     descendant_type, descendant_value = document.xref_get_key(
         font_xref,
         "DescendantFonts",
     )
-    if descendant_type not in {"array", "xref"}:
-        return False
-    match = re.fullmatch(
-        r"(?:\[\s*)?([0-9]+)\s+0\s+R(?:\s*\])?",
+    descendant_xref = _descendant_font_xref(
+        document,
+        descendant_type,
         descendant_value,
     )
-    if match is None:
-        return False
-    descendant_xref = int(match.group(1))
+    if descendant_xref is None:
+        return None
+    subtype_type, subtype_value = document.xref_get_key(descendant_xref, "Subtype")
+    if subtype_type != "name" or subtype_value != "/CIDFontType2":
+        return None
     map_type, map_value = document.xref_get_key(descendant_xref, "CIDToGIDMap")
-    return map_type == "name" and map_value == "/Identity"
+    if map_type == "name" and map_value == "/Identity":
+        return _CidToGidMap(source="identity")
+    if map_type == "null":
+        return _CidToGidMap(source="missing")
+    if map_type != "xref":
+        return None
+    try:
+        stream = document.xref_stream(int(map_value.split()[0]))
+    except Exception:
+        return None
+    if not stream or len(stream) % 2 != 0 or len(stream) > 2 * (_MAX_CID + 1):
+        return None
+    gids = tuple(
+        int.from_bytes(stream[index : index + 2], "big")
+        for index in range(0, len(stream), 2)
+    )
+    return _CidToGidMap(source="stream", gids=gids)
+
+
+def _descendant_font_xref(
+    document: pymupdf.Document,
+    value_type: str,
+    value: str,
+) -> int | None:
+    if value_type == "array":
+        match = re.fullmatch(r"\[\s*([0-9]+)\s+0\s+R\s*\]", value)
+        return int(match.group(1)) if match is not None else None
+    if value_type != "xref":
+        return None
+    match = re.fullmatch(r"([0-9]+)\s+0\s+R", value)
+    if match is None:
+        return None
+    referenced_xref = int(match.group(1))
+    try:
+        referenced_object = document.xref_object(referenced_xref).strip()
+    except Exception:
+        return None
+    if not referenced_object.startswith("["):
+        return referenced_xref
+    array_match = re.fullmatch(
+        r"\[\s*([0-9]+)\s+0\s+R\s*\]",
+        referenced_object,
+    )
+    return int(array_match.group(1)) if array_match is not None else None
 
 
 def _has_damaged_to_unicode(
@@ -216,10 +367,13 @@ def _has_damaged_to_unicode(
         cmap_bytes = document.xref_stream(int(map_value.split()[0]))
     except Exception as error:
         raise PdfCacheError("could not read embedded font ToUnicode map") from error
-    for _source, destination in _direct_cmap_pairs(cmap_bytes):
-        if len(destination) != 4:
+    mapping = _expanded_to_unicode_mapping(cmap_bytes)
+    if mapping is None:
+        return False
+    for destination in mapping.values():
+        codepoint = _destination_codepoint(destination)
+        if codepoint is None:
             continue
-        codepoint = int(destination, 16)
         if (
             codepoint == 0
             or 0xD800 <= codepoint <= 0xDFFF
@@ -237,10 +391,13 @@ def _has_private_use_mapping(
         cmap_bytes = _read_to_unicode(document, font_xref)
     except PdfCacheError:
         return False
+    mapping = _expanded_to_unicode_mapping(cmap_bytes)
+    if mapping is None:
+        return False
     return any(
-        len(destination) == 4
-        and 0xE000 <= int(destination, 16) <= 0xF8FF
-        for _source, destination in _direct_cmap_pairs(cmap_bytes)
+        codepoint is not None and 0xE000 <= codepoint <= 0xF8FF
+        for destination in mapping.values()
+        if (codepoint := _destination_codepoint(destination)) is not None
     )
 
 
@@ -378,27 +535,121 @@ def _symbol_unicode_mapping(font: TTFont) -> dict[int, int]:
     return mapping
 
 
-def _readerex_control_cmap(
-    cmap_bytes: bytes,
+def _mapping_by_cid(
+    glyph_mapping: dict[int, int],
+    cid_to_gid: _CidToGidMap,
+) -> dict[int, int]:
+    if cid_to_gid.source == "identity":
+        return dict(glyph_mapping)
+    if cid_to_gid.source != "stream":
+        return {}
+    return {
+        cid: glyph_mapping.get(glyph_id, _REPLACEMENT_CHARACTER)
+        for cid, glyph_id in enumerate(cid_to_gid.gids)
+        if cid <= _MAX_CID and glyph_id != 0
+    }
+
+
+def _observed_glyph_ids(
+    document: pymupdf.Document,
+    resource: _FontResource,
+    source_cmap: dict[int, bytes],
+) -> dict[int, int]:
+    wanted_codepoints = {
+        codepoint
+        for destination in source_cmap.values()
+        if (codepoint := _destination_codepoint(destination)) is not None
+        and 0xE000 <= codepoint <= 0xF8FF
+    }
+    if not wanted_codepoints:
+        return {}
+
+    trace_names = _font_trace_names(resource.base_font)
+    observed: dict[int, set[int]] = defaultdict(set)
+    try:
+        for page_number in resource.pages:
+            matching_xrefs = {
+                int(font[0])
+                for font in document.get_page_fonts(page_number, full=True)
+                if _font_trace_names(str(font[3])).intersection(trace_names)
+            }
+            if matching_xrefs != {resource.xref}:
+                return {}
+            for span in document[page_number].get_texttrace():
+                if _normalized_font_name(str(span.get("font", ""))) not in trace_names:
+                    continue
+                for character in span.get("chars", ()):
+                    if len(character) < 2:
+                        continue
+                    codepoint = int(character[0])
+                    glyph_id = int(character[1])
+                    if codepoint in wanted_codepoints and 0 <= glyph_id <= _MAX_CID:
+                        observed[codepoint].add(glyph_id)
+    except Exception:
+        return {}
+    return {
+        codepoint: next(iter(glyph_ids))
+        for codepoint, glyph_ids in observed.items()
+        if len(glyph_ids) == 1
+    }
+
+
+def _font_trace_names(base_font: str) -> set[str]:
+    names = {_normalized_font_name(base_font)}
+    if "+" in base_font:
+        names.add(_normalized_font_name(base_font.rsplit("+", 1)[1]))
+    return names
+
+
+def _observed_symbol_mapping(
+    source_cmap: dict[int, bytes],
     font: TTFont,
-) -> tuple[bytes, int]:
+    observed_gids: dict[int, int],
+) -> tuple[dict[int, bytes], int, int]:
+    mapping = dict(source_cmap)
+    glyph_order = font.getGlyphOrder()
+    changed_count = 0
+    semantic_count = 0
+    for cid, destination in source_cmap.items():
+        codepoint = _destination_codepoint(destination)
+        if codepoint is None or not 0xF000 <= codepoint <= 0xF0FF:
+            continue
+        glyph_id = observed_gids.get(codepoint)
+        if glyph_id is None or glyph_id >= len(glyph_order):
+            continue
+        expected_name = f"uniF0{codepoint & 0xFF:02X}"
+        if glyph_order[glyph_id].upper() != expected_name.upper():
+            continue
+        encoding_name = symbol_glyph_name(codepoint & 0xFF)
+        semantic = _single_semantic_codepoint(agl.toUnicode(encoding_name or ""))
+        replacement = semantic if semantic is not None else _REPLACEMENT_CHARACTER
+        mapping[cid] = chr(replacement).encode("utf-16-be")
+        changed_count += 1
+        if semantic is not None:
+            semantic_count += 1
+    return mapping, changed_count, semantic_count
+
+
+def _readerex_control_mapping(
+    source_cmap: dict[int, bytes],
+    font: TTFont,
+    cid_to_gid: _CidToGidMap,
+    observed_gids: dict[int, int],
+) -> tuple[dict[int, bytes], int]:
+    mapping = dict(source_cmap)
     glyph_order = font.getGlyphOrder()
     glyph_set = font.getGlyphSet()
     outline_cache: dict[int, bool] = {}
     replacement_count = 0
-
-    def replace(match: re.Match[bytes]) -> bytes:
-        nonlocal replacement_count
-        source = match.group(1)
-        destination = match.group(2)
-        if len(source) != 4 or len(destination) != 4:
-            return match.group(0)
-        codepoint = int(destination, 16)
-        if not 0xE000 <= codepoint <= 0xF8FF:
-            return match.group(0)
-        glyph_id = int(source, 16)
-        if glyph_id >= len(glyph_order):
-            return match.group(0)
+    for cid, destination in source_cmap.items():
+        codepoint = _destination_codepoint(destination)
+        if codepoint is None or not 0xE000 <= codepoint <= 0xF8FF:
+            continue
+        glyph_id = cid_to_gid.glyph_id(cid)
+        if glyph_id is None:
+            glyph_id = observed_gids.get(codepoint)
+        if glyph_id is None or glyph_id >= len(glyph_order):
+            continue
         has_outline = outline_cache.get(glyph_id)
         if has_outline is None:
             pen = DecomposingRecordingPen(glyph_set)
@@ -406,25 +657,189 @@ def _readerex_control_cmap(
             has_outline = bool(pen.value)
             outline_cache[glyph_id] = has_outline
         if has_outline:
-            return match.group(0)
+            continue
+        mapping[cid] = _CONTROL_REWRITE_SENTINEL.encode("utf-16-be")
         replacement_count += 1
-        return b"<" + source.upper() + b"> <" + _PDF_CONTROL_MARKER_HEX + b">"
-
-    def replace_block(match: re.Match[bytes]) -> bytes:
-        return (
-            match.group("prefix")
-            + _CMAP_PAIR.sub(replace, match.group("body"))
-            + match.group("suffix")
-        )
-
-    return _BFCHAR_BLOCK.sub(replace_block, cmap_bytes), replacement_count
+    return mapping, replacement_count
 
 
-def _direct_cmap_pairs(cmap_bytes: bytes) -> tuple[tuple[bytes, bytes], ...]:
-    pairs: list[tuple[bytes, bytes]] = []
+def _globally_removable_control_codepoints(
+    document: pymupdf.Document,
+    resource: _FontResource,
+    source_cmap: dict[int, bytes],
+    rewritten: dict[int, bytes],
+) -> set[int]:
+    cids_by_codepoint: dict[int, set[int]] = defaultdict(set)
+    for cid, destination in source_cmap.items():
+        codepoint = _destination_codepoint(destination)
+        if codepoint is not None and 0xE000 <= codepoint <= 0xF8FF:
+            cids_by_codepoint[codepoint].add(cid)
+    candidates = {
+        codepoint
+        for codepoint, cids in cids_by_codepoint.items()
+        if cids
+        and all(rewritten.get(cid) != source_cmap[cid] for cid in cids)
+    }
+    if not candidates:
+        return set()
+
+    trace_names = _font_trace_names(resource.base_font)
+    observed: set[int] = set()
+    unsafe: set[int] = set()
+    try:
+        for page_number in range(document.page_count):
+            matching_xrefs = {
+                int(font[0])
+                for font in document.get_page_fonts(page_number, full=True)
+                if _font_trace_names(str(font[3])).intersection(trace_names)
+            }
+            for span in document[page_number].get_texttrace():
+                span_name = _normalized_font_name(str(span.get("font", "")))
+                for character in span.get("chars", ()):
+                    if not character:
+                        continue
+                    codepoint = int(character[0])
+                    if codepoint not in candidates:
+                        continue
+                    observed.add(codepoint)
+                    if (
+                        span_name not in trace_names
+                        or matching_xrefs != {resource.xref}
+                    ):
+                        unsafe.add(codepoint)
+    except Exception:
+        return set()
+    return candidates.intersection(observed).difference(unsafe)
+
+
+def _expanded_to_unicode_mapping(cmap_bytes: bytes) -> dict[int, bytes] | None:
+    mapping: dict[int, bytes] = {}
     for block in _BFCHAR_BLOCK.finditer(cmap_bytes):
-        pairs.extend(_CMAP_PAIR.findall(block.group("body")))
-    return tuple(pairs)
+        pairs = tuple(_CMAP_PAIR.finditer(block.group("body")))
+        if len(pairs) != _declared_cmap_count(block.group("prefix")):
+            return None
+        if not _fully_parsed_cmap_body(block.group("body"), pairs):
+            return None
+        for pair in pairs:
+            source = _hex_bytes(pair.group(1))
+            destination = _hex_bytes(pair.group(2))
+            if source is None or len(source) != 2 or not destination:
+                return None
+            cid = int.from_bytes(source, "big")
+            if not _add_cmap_entry(mapping, cid, destination):
+                return None
+
+    for block in _BFRANGE_BLOCK.finditer(cmap_bytes):
+        ranges = tuple(_CMAP_RANGE.finditer(block.group("body")))
+        if len(ranges) != _declared_cmap_count(block.group("prefix")):
+            return None
+        if not _fully_parsed_cmap_body(block.group("body"), ranges):
+            return None
+        for cmap_range in ranges:
+            start_bytes = _hex_bytes(cmap_range.group(1))
+            end_bytes = _hex_bytes(cmap_range.group(2))
+            if (
+                start_bytes is None
+                or end_bytes is None
+                or len(start_bytes) != 2
+                or len(end_bytes) != 2
+            ):
+                return None
+            start = int.from_bytes(start_bytes, "big")
+            end = int.from_bytes(end_bytes, "big")
+            if start > end:
+                return None
+            length = end - start + 1
+            sequential = cmap_range.group(3)
+            array = cmap_range.group(4)
+            if sequential is not None:
+                initial = _hex_bytes(sequential)
+                if initial is None or not initial:
+                    return None
+                initial_value = int.from_bytes(initial, "big")
+                maximum_value = (1 << (8 * len(initial))) - 1
+                if initial_value + length - 1 > maximum_value:
+                    return None
+                destinations = tuple(
+                    (initial_value + offset).to_bytes(len(initial), "big")
+                    for offset in range(length)
+                )
+            else:
+                if array is None:
+                    return None
+                destination_matches = tuple(
+                    re.finditer(rb"<([0-9A-Fa-f]+)>", array)
+                )
+                if len(destination_matches) != length or not _fully_parsed_cmap_body(
+                    array,
+                    destination_matches,
+                ):
+                    return None
+                parsed = tuple(
+                    _hex_bytes(match.group(1)) for match in destination_matches
+                )
+                if any(not destination for destination in parsed):
+                    return None
+                destinations = tuple(
+                    destination for destination in parsed if destination is not None
+                )
+            for offset, destination in enumerate(destinations):
+                if not _add_cmap_entry(mapping, start + offset, destination):
+                    return None
+    return mapping or None
+
+
+def _declared_cmap_count(prefix: bytes) -> int:
+    match = re.match(rb"\s*([0-9]+)", prefix)
+    return int(match.group(1)) if match is not None else -1
+
+
+def _fully_parsed_cmap_body(
+    body: bytes,
+    matches: tuple[re.Match[bytes], ...],
+) -> bool:
+    cursor = 0
+    for match in matches:
+        if not _only_cmap_space_and_comments(body[cursor : match.start()]):
+            return False
+        cursor = match.end()
+    return _only_cmap_space_and_comments(body[cursor:])
+
+
+def _only_cmap_space_and_comments(value: bytes) -> bool:
+    return re.fullmatch(rb"(?:\s|%[^\r\n]*(?:\r?\n|$))*", value) is not None
+
+
+def _hex_bytes(value: bytes) -> bytes | None:
+    if len(value) % 2 != 0:
+        return None
+    try:
+        return bytes.fromhex(value.decode("ascii"))
+    except ValueError:
+        return None
+
+
+def _add_cmap_entry(mapping: dict[int, bytes], cid: int, destination: bytes) -> bool:
+    if not 0 <= cid <= _MAX_CID or len(destination) % 2 != 0:
+        return False
+    existing = mapping.get(cid)
+    if existing is not None and existing != destination:
+        return False
+    mapping[cid] = destination
+    return True
+
+
+def _destination_codepoint(destination: bytes) -> int | None:
+    if not destination or len(destination) % 2 != 0:
+        return None
+    try:
+        text = destination.decode("utf-16-be")
+    except UnicodeDecodeError:
+        return None
+    if len(text) != 1:
+        return None
+    codepoint = ord(text)
+    return codepoint if _is_unicode_scalar(codepoint) else None
 
 
 def _single_semantic_codepoint(text: str) -> int | None:
@@ -488,6 +903,15 @@ def _attach_to_unicode(
 
 
 def _to_unicode_cmap(mapping: dict[int, int]) -> bytes:
+    byte_mapping = {
+        cid: chr(codepoint).encode("utf-16-be")
+        for cid, codepoint in mapping.items()
+        if 0 <= cid <= _MAX_CID and _is_unicode_scalar(codepoint)
+    }
+    return _to_unicode_cmap_bytes(byte_mapping)
+
+
+def _to_unicode_cmap_bytes(mapping: dict[int, bytes]) -> bytes:
     lines = [
         "/CIDInit /ProcSet findresource begin",
         "12 dict begin",
@@ -504,8 +928,8 @@ def _to_unicode_cmap(mapping: dict[int, int]) -> bytes:
         chunk = entries[start : start + 100]
         lines.append(f"{len(chunk)} beginbfchar")
         lines.extend(
-            f"<{cid:04X}> <{_utf16_hex(codepoint)}>"
-            for cid, codepoint in chunk
+            f"<{cid:04X}> <{destination.hex().upper()}>"
+            for cid, destination in chunk
         )
         lines.append("endbfchar")
     lines.extend(
@@ -517,10 +941,6 @@ def _to_unicode_cmap(mapping: dict[int, int]) -> bytes:
         ]
     )
     return ("\n".join(lines) + "\n").encode("ascii")
-
-
-def _utf16_hex(codepoint: int) -> str:
-    return chr(codepoint).encode("utf-16-be").hex().upper()
 
 
 def _normalized_font_name(name: str) -> str:
