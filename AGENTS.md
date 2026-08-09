@@ -121,26 +121,32 @@ definition-of-done items.
 
 ## Experiment artifact placement
 
-Keep each new experiment's protocol and frozen scoring artifacts in the public
-repo and its raw evidence/scoring in the private eval root:
+Keep each experiment as one flat, current-result directory. Public protocol
+files and private labels/results remain separated:
 
 - Public `eval/experiments/<name>/`: frozen rubric, runner/config scripts,
   protocol patches, and an `experiment.md` entry. Do not store labels, raw
   answers, credentials, or private run artifacts here.
 - Private
   `/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/<name>/`:
-  the current `experiment.md` and `scores.yaml` entry, a `raw/` directory of
-  symlinks into the original `runs/` trees, and one self-contained audit
-  package under `_audit/<bundle>/` per scoring round.
-- Never move, rewrite, or delete original run artifacts; `runs/` and `raw/`
-  symlinks stay append-only.
-- Each audit package contains its own `experiment.md`, `scores.yaml`,
-  `scorecards/`, and a `run` symlink to the raw run directory.
+  `experiment.md`, `queries.md`, private `labels.yaml`, rubric and metric
+  definitions, one current `scores.yaml`, and `evidence.yaml`.
+- Store aggregate and item-level adjudication together in `scores.yaml`; do not
+  create `scorecards/`, `_audit/`, per-round subdirectories, or copied raw
+  answer/log trees inside an experiment directory.
+- `evidence.yaml` points to the authoritative native run, answer, session, job,
+  and trace paths and records hashes when available. Never rewrite or delete
+  those original artifacts.
+- A formal rerun of the same frozen query, labels, rubric, system configuration,
+  and model replaces the current `scores.yaml` values and `evidence.yaml`
+  pointers. Do not retain prior-round values in the experiment directory.
+- Replicates required by one formal run remain together as the current result.
+  A material query, label, rubric, model, system, or configuration change is a
+  new experiment directory rather than another round of the old experiment.
 - Keep official blind scores separate from non-blind diagnostic scores in
-  `scores.yaml`; label each entry's status and audit path explicitly.
-- Add one entry per experiment and per latest run audit to
-  `docs/design/experiment_index.md`; the index holds entry points only, not
-  scores or conclusions.
+  `scores.yaml`; label each entry's status explicitly.
+- Add one entry per experiment to `docs/design/experiment_index.md`; the index
+  holds entry points only, not scores or conclusions.
 
 ## LLM and evaluation
 

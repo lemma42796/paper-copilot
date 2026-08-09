@@ -57,11 +57,10 @@ occurrence，partial 按 0.5 计。该口径主要评价具体方法细节，与
 
 全部答案都覆盖 14 篇并提供可核验页码，weighted 最大差距只有 2.97 个百分点。PC 的
 主要实质问题是把 P12 说成完全无标签、把 P14 缩窄为可见光—红外并漏掉近红外/热红外；
-因此新结果不支持 PC 回答质量高于 Codex 桥接组。完整匿名包、scorecard、揭盲映射和
-新旧差异审计保存在：
+因此新结果不支持 PC 回答质量高于 Codex 桥接组。汇总和逐项评分合并保存在：
 
 ```text
-/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-vs-pc-v4flash/_audit/query1-blind-rescore-v1/
+/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-vs-pc-v4flash/scores.yaml
 ```
 
 揭盲后的 trace 合规审计确认六组都有正文/PDF 或 `layout.txt` 内容读取，未发现网络命令；
@@ -79,9 +78,8 @@ occurrence，partial 按 0.5 计。该口径主要评价具体方法细节，与
 - Query 4：分别报告 14 项最终纳入判断、110 项内容准确度和 88 项逐单元格
   可追溯性，不把内容与证据压成一个 composite。
 
-Query 2–4 已完成匿名盲评、scorecard 锁定和揭盲。当前结果保存在私有
-`_audit/query2-4-blind-rescore-v2/`，当前分数入口为私有 `scores.yaml`；旧
-`query2-4-pc-vs-native-rescore-v1` 仅作历史诊断。
+Query 2–4 已完成匿名盲评、scorecard 锁定和揭盲。当前汇总、逐项裁决与揭盲映射均已
+合并进私有 `scores.yaml`；原始回答和 trace 由 `evidence.yaml` 索引。
 
 | 系统 | Q2 weighted | Q3 prior review | Q3 项莘泽 | Q4 relevance | Q4 content | Q4 traceability |
 |---|---:|---:|---:|---:|---:|---:|
@@ -110,16 +108,8 @@ weighted 均为 96.56%。
 | Paper Copilot | 94.05% | 87.04% | 100.00% | 96.67% | 100.00% | 99.55% | 86.36% |
 | clean native Codex | 97.02% | 87.96% | 98.21% | 96.67% | 100.00% | 99.55% | 92.61% |
 
-完整汇总见私有盲评包中的 `results/q1-4-paired-summary.md`。
-
-机器可读当前真源是私有共享目录中的 `gold/labels/query1.yaml` 至 `query4.yaml` 和
-`rubrics/query1.yaml` 至 `query4.yaml`。旧冻结包只作历史审计：
-
-```text
-/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-vs-pc-v4flash/_audit/query2-4-rubric-freeze-v1/
-```
-
-该目录不作为当前评分入口。
+完整机器可读结果见私有实验目录中的 `scores.yaml`；冻结 Query、标签和 rubric 也位于
+同一目录。
 
 ## 1. Responses-to-Chat adapter 兼容性链
 
@@ -338,9 +328,6 @@ eval/experiments/codex-vs-pc-v4flash/prepare_codex.sh
 eval/experiments/codex-vs-pc-v4flash/launch.sh b /absolute/private/runs
 ```
 
-将 `b` 改为 `c` 可运行静态 Skill 指令组。完整原始证据通过以下统一私有入口访问：
+将 `b` 改为 `c` 可运行静态 Skill 指令组。当前评分与原始证据索引通过以下私有入口访问：
 
-`/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-vs-pc-v4flash/raw/`
-
-该 `raw/` 目录保留 Codex direct、Chat adapter、B、C、PC current 和 PC no-Skill
-运行入口；旧 `runs/` 路径继续保留，不移动原始产物。
+`/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-vs-pc-v4flash/`

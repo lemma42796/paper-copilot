@@ -5,16 +5,39 @@
 
 更新于 2026-08-09。
 
+私有历史实验已迁移为单层当前值结构：每个实验根目录直接保存 `experiment.md`、Query、
+私有标签、rubric、metrics、包含逐项裁决的 `scores.yaml` 与 `evidence.yaml`。相同协议的
+正式重跑只保留最新值；2026-08-08 的 PC V4 Flash 单系统重跑已拆成独立实验
+`pc-v4flash-current-max`。旧 `_audit/` 与 `raw/` 包装层已移出活动 `experiments/`，可恢复地
+保存在私有根目录 `legacy_experiment_artifacts/`；原始 runs、session、job 和 trace 未删除。
+
 ## 新会话从这里继续
 
-主动坐标探索式公式 OCR 已完成第一次真实长链路验证：新 fingerprint 缓存、公式弱提示、
-`repair_span_id`、`query_page_geometry`、模型主动选择 `region`、本机 Plus-M Helper 和
-`recognize_formula` 均在真实论文任务中工作。公式 (2-9) 与 (4.10) 都在第一次裁剪中恢复
-完整主体；无编号 Rank-3 内联式通过文本与逐字符几何确认，没有调用不必要的 OCR。
+主动坐标探索式公式 OCR 已完成第一次真实 recognize 长链路验证。随后按用户批准简化
+accept：模型不再提交 `repair_span_id`、`replacement_text` 或乱码原文，只负责从原 PDF
+确定物理页与 `region`、检查候选并接受。cache manifest 源码已升到 v4，每个 revision 新增
+`formulas.jsonl`；accept 追加已接受 LaTeX 记录，原 `layout.txt` 不变，页面读取自动在末尾
+附加该页公式。多数有编号公式把编号作为辅助 `formula_ref`；无编号公式用附近短语，定位
+仍绑定 PDF SHA、页码和 region。它是按需积累的公式文档，不是全文预 OCR。
 
-本轮严格按验证提示只 recognize、未 accept，因此不能把“识别成功”写成“写回验证完成”。
-(2-9) 已冻结 `repair_span_id`，具备后续安全写回条件；(4.10) 本次没有冻结唯一完整
-`replacement_text`，不能直接 accept，必须重新 recognize 并绑定完整替换目标。
+新 overlay 已在张耀斌论文的正式 Q2/Q3 重跑中验证。Q2 完成 4 次 recognize 和 2 次
+`refined=false` accept；Q3 在全新 conversation 中直接读取两条 accepted 记录，OCR 为 0。
+两个最终答案各 12/12 标签正确，但缓存原始 LaTeX 仍含 `m a x` / `e x p`，所以跨会话复用
+有效而缓存公式精确匹配 Gold 失败。当前私有评分与逐项裁决保存在实验根目录
+`scores.yaml`，原始回答和 trace 由 `evidence.yaml` 索引。
+
+同模型 Codex CLI 基线也已交付并完成正式评分。Q1 为 6 correct、4 partial、2 incorrect，
+weighted 66.67%；主要错误是公式（3-4）时间差方向和公式（3-9）条件概率锚点/候选方向。
+Q2、Q3 均为 12/12，三个 query 的 macro weighted 为 88.89%。Q2 前误发的 Q1 在任何工具
+调用或可用答案产生前即终止，没有向 Q2 注入论文证据，按用户裁决只作为排除运行计入
+运营损耗；正式跨系统比较已经完成。
+
+正式运营汇总（均排除各系统已明确标记的非正式运行）：Paper Copilot 用时 387.708 秒、
+736,319 Token、36 次模型调用、55 次工具调用且 0 次失败，成本 ¥0.16953724；Codex CLI
+用时 1,947.231 秒、19,271,592 Token、216 次模型调用、227 次工具调用尝试且 27 次失败，
+成本 ¥1.04421308。相对 Codex CLI，Paper Copilot 在本次实验减少约 80.1% 耗时、96.2%
+Token 和 83.8% 成本。结论只适用于当前论文、模型与完整 Agent 配置，不是 OCR 组件的
+单变量因果结论。
 
 Plus-M 可选组件 `1.1.0` 已在本机构建、ad-hoc 签名并安装，`active.json` 当前指向
 `versions/1.1.0/FormulaOCRHelper/FormulaOCRHelper`。旧 Plus-S `1.0.0` 只作为回滚版本保留。
@@ -53,7 +76,7 @@ Plus-M 可选组件 `1.1.0` 已在本机构建、ad-hoc 签名并安装，`activ
 
 论文：《基于多模态信息融合的行人轨迹追踪方法研究》（项莘泽，2025），物理页 28。
 
-- `repair_span_id=page-0028-repair-0001`；
+- 当时旧协议记录了 `repair_span_id=page-0028-repair-0001`；新协议不再使用该字段；
 - region：`{"x1":0.38,"y1":0.09,"x2":0.73,"y2":0.148}`；
 - 第 1/3 次成功，用时 8.7 秒；
 - candidate：`formula-candidate-77c211087abb4fd3bb2e5e21b166ed3d`；
@@ -61,7 +84,7 @@ Plus-M 可选组件 `1.1.0` 已在本机构建、ad-hoc 签名并安装，`activ
   `dd2b793aa171b651e36ca67e1f6e70af5bfcd61c979528ed9d9a2fe5e6de0a0b`；
 - OCR 恢复向量箭头、根号、求和上下限和平方上标；原始输出的 `\boxed` / `array` 是包装
   产物，裁图顶部横线可能是诱因；
-- 已冻结 repair span 与目标哈希，后续可单独验证 accept、revision 更新和缓存回读。
+- 候选属于旧 Runtime 进程，后续需重新 recognize，再验证 overlay accept 与缓存回读。
 
 ### Rank-3 内联式
 
@@ -81,8 +104,7 @@ Plus-M 可选组件 `1.1.0` 已在本机构建、ad-hoc 签名并安装，`activ
 - render SHA-256：
   `1ae5b33808fdab6a3e67a431f2454603312904d8cc1de630834da980af2c212a`；
 - OCR 恢复两组分段左花括号和二维结构，裁图包含编号，所以原始结果尾部带 `(4.10)`；
-- 本次没有 `repair_span_id`、`replacement_text` 或写入目标快照，`cache_write_pending=false`；
-  该 candidate 不能直接安全 accept。
+- 旧协议因没有写入目标快照而不能 accept；新协议已取消该前提，但旧进程 candidate 不复用。
 
 ## Plus-M 本机组件状态
 
@@ -130,10 +152,8 @@ SwiftMath `1.7.3` 已锁定，Debug/Release arm64 构建通过；完成报告支
 
 ## 下一步
 
-1. 单独验证 (2-9) accept：确认 `repair_span_id` 整段写回、manifest/artifact 哈希更新与
-   下一次缓存命中，公式不消失；
-2. 为 (4.10) 重新 recognize 并冻结唯一完整 `replacement_text`，再验证非乱码公式整段
-   替换；不要复用当前无写入目标的 candidate；
+1. 决定 `m a x` / `e x p` 等局部 OCR 拼写间距的安全处理方式，不允许模型重写完整公式；
+2. 用无编号公式覆盖 v4 accept 与跨会话复用；
 3. 验证三次 recognize 上限、失败计数、Helper 超时/崩溃重启和一小时空闲退出；
 4. 做完整 App 打包与 SwiftMath 视觉验证；
 5. 继续寻找真实显式 `CIDToGIDMap` 流 PDF，补上字体修复集成覆盖。
@@ -142,12 +162,20 @@ SwiftMath `1.7.3` 已锁定，Debug/Release arm64 构建通过；完成报告支
 
 当前变更包含：
 
-- `src/paper_copilot/agents/formula_ocr_tool.py`：分离 PageEvidence schema 版本；
+- `src/paper_copilot/shared/pdf_cache.py`：v4 formula overlay artifact 与页面合并读取；
+- `src/paper_copilot/agents/formula_ocr_tool.py`：移除替换目标参数，accept 改写公式文档；
+- `src/paper_copilot/agents/skills/formula-ocr/SKILL.md`：模型只定位、识别与接受；
+- `ARCHITECTURE.md`、`docs/design/formula_ocr_optional_component.md`：同步新存储与边界；
+- `tests/shared/test_pdf_cache_formula_hints.py`：移除旧替换目标断言，未执行；
 - `src/paper_copilot/agents/page_geometry_tool.py`：净化孤立 surrogate；
 - `docs/stories/active_formula_localization.md`：真实主动定位展示与边界；
 - `docs/assets/formula-ocr-active-localization/`：6 张稳定证据图片；
 - `TASKS.md`、`STATUS.md`：同步最新任务与接力状态。
+- `eval/experiments/codex-vs-pc-deepseek-font-repair-ocr-v2/`：冻结 Query、rubric、metrics
+  与最终跨系统结论；私有标签、评分和证据索引仍只位于私有实验根目录。
+- `docs/design/experiment_index.md` 及既有实验入口：同步单层实验目录结构与最新入口。
 
-本轮没有运行 Python 测试、Ruff、mypy 或新 App 构建。验证证据来自已完成的真实 Paper
-Copilot 任务、trace、组件激活配置、裁图哈希复核和文档图片目视检查。`output/` 中两张
-重复的临时裁图不是交付文件，不应提交。
+本轮没有运行 Python 测试、Ruff、mypy 或新 App 构建。真实 accept、overlay 回读和新会话
+复用证据来自 `job-20260809T135954-c9e77a8e9f` 与
+`job-20260809T140329-8a85fbd21b`；21:55 的缓存失效前额外运行只进入成本审计。
+`output/` 中两张重复的临时裁图不是交付文件，不应提交。

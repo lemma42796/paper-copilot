@@ -1393,23 +1393,6 @@ def _reserve_formula_ocr_attempt(
     formula_ref_key = hashlib.sha256(
         f"{args.paper_id}:{args.page}:ref:{normalized_ref}".encode("utf-8")
     ).hexdigest()
-    target_identity = (
-        f"repair:{args.repair_span_id}"
-        if args.repair_span_id is not None
-        else (
-            "text:"
-            + hashlib.sha256(args.replacement_text.encode("utf-8")).hexdigest()
-            if args.replacement_text is not None
-            else None
-        )
-    )
-    target_key = (
-        hashlib.sha256(
-            f"{args.paper_id}:{args.page}:{target_identity}".encode("utf-8")
-        ).hexdigest()
-        if target_identity is not None
-        else None
-    )
     attempts = 0
     for entry in store.read_all():
         if (
@@ -1420,11 +1403,7 @@ def _reserve_formula_ocr_attempt(
             payload = getattr(entry, "payload", {})
             if not isinstance(payload, dict):
                 continue
-            same_ref = payload.get("formula_ref_key") == formula_ref_key
-            same_target = (
-                target_key is not None and payload.get("target_key") == target_key
-            )
-            if same_ref or same_target:
+            if payload.get("formula_ref_key") == formula_ref_key:
                 attempts += 1
     if attempts >= _MAX_FORMULA_OCR_ATTEMPTS_PER_FORMULA:
         raise KnowledgeError(
@@ -1437,7 +1416,6 @@ def _reserve_formula_ocr_attempt(
         name="recognize_attempt",
         payload={
             "formula_ref_key": formula_ref_key,
-            "target_key": target_key,
             "attempt_number": attempt_number,
             "attempt_limit": _MAX_FORMULA_OCR_ATTEMPTS_PER_FORMULA,
         },

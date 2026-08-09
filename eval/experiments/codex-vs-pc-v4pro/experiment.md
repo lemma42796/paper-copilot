@@ -144,11 +144,8 @@ Paper Copilot Agent loop。
   分数差异不能归因于单一变量；
 - 原始四轮回答、原生 rollout、冻结 Query、配置和语料哈希均保留在正式运行目录中。
 
-## 9. 原始证据入口
+## 9. 私有评分与证据索引
 
-统一私有入口：
+统一私有入口中的 `scores.yaml` 保存当前评分，`evidence.yaml` 指向原始运行：
 
-`/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-vs-pc-v4pro/raw/`
-
-其中分别链接原生 Codex/GPT、Codex/V4 Pro、PC/V4 Pro、PC batch-view 和 PC no-Skill
-历史运行。旧 `runs/` 路径继续保留，不移动原始产物。
+`/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-vs-pc-v4pro/`

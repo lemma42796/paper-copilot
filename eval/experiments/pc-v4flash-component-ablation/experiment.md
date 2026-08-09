@@ -103,6 +103,6 @@ The runner remains beside this record as `run_lane.py`. A lane is launched with:
   --batch-root /absolute/private/batch-directory
 ```
 
-The unified private raw entry is:
+The private score and evidence-index entry is:
 
-`/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/pc-v4flash-component-ablation/raw/`
+`/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/pc-v4flash-component-ablation/`

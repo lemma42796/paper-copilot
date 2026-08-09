@@ -101,6 +101,6 @@ Query 2 的 answer quality 与 Query 1 分开评分。跨会话复用只从 trac
 Query 1 没有 accept 公式，Query 2 因而再次 OCR；本轮未建立 accepted cache reuse 条件，缓存
 结论为空，只保留为诊断。
 
-私有审计入口：
+私有评分与证据索引入口：
 
-`/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-vs-pc-deepseek-formula-ocr/_audit/manual-runs-20260808-v1/experiment.md`
+`/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-vs-pc-deepseek-formula-ocr/`

@@ -25,7 +25,8 @@ from paper_copilot.shared.poppler import PopplerIdentity, PopplerTextExtractor
 
 __all__ = [
     "PageBoundary",
-    "FormulaTargetSnapshot",
+    "FormulaArtifact",
+    "FormulaOCRRecord",
     "PdfCacheLookup",
     "PdfCacheManifest",
     "PdfCachePage",
@@ -34,17 +35,12 @@ __all__ = [
     "TextArtifact",
 ]
 
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 _LAYOUT_FILENAME = "layout.txt"
+_FORMULAS_FILENAME = "formulas.jsonl"
 _MANIFEST_FILENAME = "manifest.json"
 _CURRENT_FILENAME = "current.json"
 _READ_CHUNK_BYTES = 1024 * 1024
-_REPAIR_START_TEMPLATE = (
-    "[[paper-copilot-formula:repair-start id={repair_span_id} page={page}]]"
-)
-_REPAIR_END_TEMPLATE = (
-    "[[paper-copilot-formula:repair-end id={repair_span_id}]]"
-)
 _REVISION_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 # One display formula can interleave clean extraction lines between its
 # garbled rows (summation limits, fraction numerators). Garbled runs or
@@ -73,17 +69,24 @@ class TextArtifact(BaseModel):
     byte_count: int = Field(ge=0)
 
 
+class FormulaArtifact(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    filename: Literal["formulas.jsonl"] = _FORMULAS_FILENAME
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    byte_count: int = Field(ge=0)
+    record_count: int = Field(ge=0)
+
+
 class FormulaOCRRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    target_kind: Literal["repair_span", "replacement_text"]
-    repair_span_id: str | None = Field(
-        default=None,
-        pattern=r"^page-[0-9]{4}-repair-[0-9]{4}$",
-    )
-    target_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    schema_version: Literal[1] = 1
+    formula_id: str = Field(pattern=r"^formula-[0-9a-f]{32}$")
+    formula_ref: str = Field(min_length=1, max_length=300)
     page: int = Field(ge=1)
     region: dict[str, float]
+    latex: str = Field(min_length=1, max_length=6000)
     model: str = Field(min_length=1)
     render_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     latex_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -94,13 +97,14 @@ class FormulaOCRRecord(BaseModel):
     ocr_latex_sha256: str | None = Field(
         default=None, pattern=r"^[0-9a-f]{64}$"
     )
+    verified: Literal[False] = False
     created_at: datetime
 
 
 class PdfCacheManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[3] = _SCHEMA_VERSION
+    schema_version: Literal[4] = _SCHEMA_VERSION
     revision_id: str
     pdf_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_locator: str
@@ -115,7 +119,7 @@ class PdfCacheManifest(BaseModel):
     status: Literal["complete", "partial", "failed"]
     unresolved_pages: list[int]
     artifact: TextArtifact
-    formula_ocr_records: list[FormulaOCRRecord] = Field(default_factory=list)
+    formula_artifact: FormulaArtifact
 
     @field_validator("source_locator")
     @classmethod
@@ -162,14 +166,6 @@ class _CurrentRevision(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     revision_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class FormulaTargetSnapshot:
-    target_kind: Literal["repair_span", "replacement_text"]
-    target_sha256: str
-    cache_revision_id: str
-    cache_artifact_sha256: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +264,15 @@ class PdfTextCache:
                 boundary.start_offset,
                 boundary.end_offset,
             )
+            records = tuple(
+                record
+                for record in _read_formula_records(
+                    revision_dir / manifest.formula_artifact.filename
+                )
+                if record.page == page
+            )
+            if records:
+                text = _append_formula_records(text, page=page, records=records)
             return PdfCachePage(
                 cache_ref=cache_ref,
                 paper_id=cache_ref.pdf_sha256,
@@ -319,32 +324,12 @@ class PdfTextCache:
         """Remove content-addressed caches that no current library PDF references."""
         return await asyncio.to_thread(self._prune_orphans, live_pdf_sha256)
 
-    async def snapshot_formula_target(
-        self,
-        pdf_sha256: str,
-        *,
-        page: int,
-        repair_span_id: str | None,
-        replacement_text: str | None,
-    ) -> FormulaTargetSnapshot:
-        identity = await self._extractor.identity()
-        return await asyncio.to_thread(
-            self._snapshot_formula_target,
-            pdf_sha256,
-            identity,
-            page,
-            repair_span_id,
-            replacement_text,
-        )
-
     async def record_formula_latex(
         self,
         pdf_sha256: str,
         *,
         page: int,
-        repair_span_id: str | None,
-        replacement_text: str | None,
-        expected_target_sha256: str,
+        formula_ref: str,
         latex: str,
         ocr_latex: str,
         region: dict[str, float],
@@ -360,9 +345,7 @@ class PdfTextCache:
                 pdf_sha256,
                 identity,
                 page,
-                repair_span_id,
-                replacement_text,
-                expected_target_sha256,
+                formula_ref,
                 latex,
                 ocr_latex,
                 region,
@@ -411,6 +394,16 @@ class PdfTextCache:
                 sha256=hashlib.sha256(text_bytes).hexdigest(),
                 byte_count=len(text_bytes),
             )
+            formula_bytes = b""
+            await asyncio.to_thread(
+                (staging_path / _FORMULAS_FILENAME).write_bytes,
+                formula_bytes,
+            )
+            formula_artifact = FormulaArtifact(
+                sha256=hashlib.sha256(formula_bytes).hexdigest(),
+                byte_count=0,
+                record_count=0,
+            )
             manifest = PdfCacheManifest(
                 revision_id=revision_id,
                 pdf_sha256=pdf_sha256,
@@ -426,7 +419,7 @@ class PdfTextCache:
                 status="complete",
                 unresolved_pages=[],
                 artifact=artifact,
-                formula_ocr_records=[],
+                formula_artifact=formula_artifact,
             )
             await asyncio.to_thread(
                 _write_json,
@@ -483,56 +476,12 @@ class PdfTextCache:
                 formula_hints[page_number] = hints
         return formula_hints
 
-    def _snapshot_formula_target(
-        self,
-        pdf_sha256: str,
-        identity: PopplerIdentity,
-        page: int,
-        repair_span_id: str | None,
-        replacement_text: str | None,
-    ) -> FormulaTargetSnapshot:
-        key_dir = self._key_dir(pdf_sha256, identity.fingerprint)
-        with _paper_file_lock(key_dir, exclusive=False):
-            lookup = self._lookup_unlocked(pdf_sha256, identity)
-            if (
-                lookup.status != "hit"
-                or lookup.cache_ref is None
-                or lookup.manifest is None
-            ):
-                raise PdfCacheError(
-                    "formula-aware text cache is unavailable for formula targeting"
-                )
-            manifest = lookup.manifest
-            if page > manifest.page_count:
-                raise PdfCacheError("formula target page exceeds the cached page count")
-            revision_dir = self._revision_dir(lookup.cache_ref)
-            boundary = manifest.page_boundaries[page - 1]
-            page_text = _read_text_range(
-                revision_dir / manifest.artifact.filename,
-                boundary.start_offset,
-                boundary.end_offset,
-            )
-            target_kind, target_text, _start, _end = _resolve_formula_target(
-                page_text,
-                page=page,
-                repair_span_id=repair_span_id,
-                replacement_text=replacement_text,
-            )
-            return FormulaTargetSnapshot(
-                target_kind=target_kind,
-                target_sha256=hashlib.sha256(target_text.encode("utf-8")).hexdigest(),
-                cache_revision_id=manifest.revision_id,
-                cache_artifact_sha256=manifest.artifact.sha256,
-            )
-
     def _record_formula_latex(
         self,
         pdf_sha256: str,
         identity: PopplerIdentity,
         page: int,
-        repair_span_id: str | None,
-        replacement_text: str | None,
-        expected_target_sha256: str,
+        formula_ref: str,
         latex: str,
         ocr_latex: str,
         region: dict[str, float],
@@ -545,9 +494,7 @@ class PdfTextCache:
                 pdf_sha256,
                 identity,
                 page,
-                repair_span_id,
-                replacement_text,
-                expected_target_sha256,
+                formula_ref,
                 latex,
                 ocr_latex,
                 region,
@@ -560,9 +507,7 @@ class PdfTextCache:
         pdf_sha256: str,
         identity: PopplerIdentity,
         page: int,
-        repair_span_id: str | None,
-        replacement_text: str | None,
-        expected_target_sha256: str,
+        formula_ref: str,
         latex: str,
         ocr_latex: str,
         region: dict[str, float],
@@ -577,57 +522,23 @@ class PdfTextCache:
             raise PdfCacheError("formula OCR page exceeds the cached page count")
         revision_dir = self._revision_dir(lookup.cache_ref)
         source_path = revision_dir / manifest.artifact.filename
-        text = source_path.read_text(encoding="utf-8")
-        pages = text.split("\f")
-        if pages and pages[-1] == "":
-            pages.pop()
-        if len(pages) != manifest.page_count:
-            raise PdfCacheError("cached formula text has invalid page separators")
-        target_kind, target_text, start, end = _resolve_formula_target(
-            pages[page - 1],
-            page=page,
-            repair_span_id=repair_span_id,
-            replacement_text=replacement_text,
+        layout_bytes = source_path.read_bytes()
+        records = _read_formula_records(
+            revision_dir / manifest.formula_artifact.filename
         )
-        actual_target_sha256 = hashlib.sha256(target_text.encode("utf-8")).hexdigest()
-        if actual_target_sha256 != expected_target_sha256:
-            raise PdfCacheError(
-                "formula replacement target changed after recognition; recognize again"
-            )
         normalized_latex = latex.strip()
         normalized_ocr_latex = ocr_latex.strip()
         refined = normalized_latex != normalized_ocr_latex
-        refined_token = " refined=true" if refined else ""
-        target_token = (
-            repair_span_id
-            if repair_span_id is not None
-            else f"text-{actual_target_sha256[:16]}"
-        )
-        marker = (
-            f"[[paper-copilot-formula:latex target={target_token} page={page}"
-            f" model={model} render_sha256={render_sha256}"
-            f"{refined_token} verified=false]]"
-        )
-        replacement = f"{marker}\n$$\n{normalized_latex}\n$$"
-        page_text = pages[page - 1]
-        pages[page - 1] = page_text[:start] + replacement + page_text[end:]
-        updated = "\f".join(pages) + "\f"
-        updated_bytes = updated.encode("utf-8")
-        page_boundaries = _page_boundaries(updated_bytes, manifest.page_count)
         revision_id = uuid4().hex
         key_dir = self._key_dir(pdf_sha256, identity.fingerprint)
         staging_path = Path(tempfile.mkdtemp(prefix=".staging-", dir=key_dir))
         try:
-            artifact = TextArtifact(
-                sha256=hashlib.sha256(updated_bytes).hexdigest(),
-                byte_count=len(updated_bytes),
-            )
             record = FormulaOCRRecord(
-                target_kind=target_kind,
-                repair_span_id=repair_span_id,
-                target_sha256=actual_target_sha256,
+                formula_id=f"formula-{uuid4().hex}",
+                formula_ref=formula_ref.strip(),
                 page=page,
                 region=region,
+                latex=normalized_latex,
                 model=model,
                 render_sha256=render_sha256,
                 latex_sha256=hashlib.sha256(normalized_latex.encode("utf-8")).hexdigest(),
@@ -639,16 +550,31 @@ class PdfTextCache:
                 ),
                 created_at=datetime.now(UTC),
             )
+            updated_records = [
+                existing
+                for existing in records
+                if not (
+                    existing.page == page
+                    and existing.formula_ref.casefold()
+                    == formula_ref.strip().casefold()
+                )
+            ]
+            updated_records.append(record)
+            formula_bytes = _formula_records_bytes(updated_records)
+            formula_artifact = FormulaArtifact(
+                sha256=hashlib.sha256(formula_bytes).hexdigest(),
+                byte_count=len(formula_bytes),
+                record_count=len(updated_records),
+            )
             derived = manifest.model_copy(
                 update={
                     "revision_id": revision_id,
-                    "page_boundaries": page_boundaries,
                     "created_at": datetime.now(UTC),
-                    "artifact": artifact,
-                    "formula_ocr_records": [*manifest.formula_ocr_records, record],
+                    "formula_artifact": formula_artifact,
                 }
             )
-            (staging_path / _LAYOUT_FILENAME).write_bytes(updated_bytes)
+            (staging_path / _LAYOUT_FILENAME).write_bytes(layout_bytes)
+            (staging_path / _FORMULAS_FILENAME).write_bytes(formula_bytes)
             _write_json(
                 staging_path / _MANIFEST_FILENAME,
                 derived.model_dump(mode="json"),
@@ -658,7 +584,7 @@ class PdfTextCache:
                 status="hit",
                 cache_ref=_cache_ref(derived),
                 manifest=derived,
-                reason="formula OCR recorded",
+                reason="formula OCR overlay recorded",
             )
         finally:
             if staging_path.exists():
@@ -903,27 +829,19 @@ def _render_text_page(
     rendered_source_lines = text.splitlines()
     block_by_start = {start: end for start, end in repair_blocks}
     source_index = 0
-    repair_index = 0
     while source_index < len(rendered_source_lines):
         block_end = block_by_start.get(source_index)
         if block_end is None:
             lines.append(rendered_source_lines[source_index])
             source_index += 1
             continue
-        repair_index += 1
-        repair_span_id = f"page-{page:04d}-repair-{repair_index:04d}"
-        lines.append(
-            _REPAIR_START_TEMPLATE.format(
-                repair_span_id=repair_span_id,
-                page=page,
-            )
-        )
-        lines.append(f"[公式文本待恢复；repair_span_id={repair_span_id}]")
+        lines.append(f"[[paper-copilot-formula:damaged page={page}]]")
+        lines.append("[公式文本可能乱码；需要精确内容时回到 PDF 定位并 OCR]")
         lines.extend(
             f"原始提取：{line}"
             for line in rendered_source_lines[source_index:block_end]
         )
-        lines.append(_REPAIR_END_TEMPLATE.format(repair_span_id=repair_span_id))
+        lines.append("[[paper-copilot-formula:damaged-end]]")
         source_index = block_end
     return "\n".join(lines).rstrip() + "\n"
 
@@ -1070,51 +988,6 @@ def _line_has_prose(text: str) -> bool:
     )
 
 
-def _resolve_formula_target(
-    page_text: str,
-    *,
-    page: int,
-    repair_span_id: str | None,
-    replacement_text: str | None,
-) -> tuple[Literal["repair_span", "replacement_text"], str, int, int]:
-    if (repair_span_id is None) == (replacement_text is None):
-        raise PdfCacheError(
-            "formula target requires exactly one of repair_span_id or replacement_text"
-        )
-    if repair_span_id is not None:
-        if re.fullmatch(r"page-[0-9]{4}-repair-[0-9]{4}", repair_span_id) is None:
-            raise PdfCacheError("repair_span_id has an invalid format")
-        start = _REPAIR_START_TEMPLATE.format(
-            repair_span_id=repair_span_id,
-            page=page,
-        )
-        end = _REPAIR_END_TEMPLATE.format(repair_span_id=repair_span_id)
-        pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.DOTALL)
-        matches = list(pattern.finditer(page_text))
-        if len(matches) != 1:
-            raise PdfCacheError(
-                f"formula repair span is unavailable on page {page}: {repair_span_id}"
-            )
-        match = matches[0]
-        return "repair_span", match.group(0), match.start(), match.end()
-    assert replacement_text is not None
-    if not replacement_text.strip():
-        raise PdfCacheError("replacement_text must not be empty")
-    if "[[" in replacement_text or "\f" in replacement_text:
-        raise PdfCacheError("replacement_text must not contain cache markers")
-    if page_text.count(replacement_text) != 1:
-        raise PdfCacheError(
-            "replacement_text must match exactly one whole formula on the cached page"
-        )
-    start = page_text.index(replacement_text)
-    return (
-        "replacement_text",
-        replacement_text,
-        start,
-        start + len(replacement_text),
-    )
-
-
 def _contains_extraction_garble(text: str) -> bool:
     return any(_is_extraction_garble_character(character) for character in text)
 
@@ -1176,15 +1049,88 @@ def _read_manifest(revision_dir: Path) -> PdfCacheManifest:
     return PdfCacheManifest.model_validate_json(manifest_path.read_text())
 
 
+def _formula_records_bytes(records: list[FormulaOCRRecord]) -> bytes:
+    return "".join(
+        json.dumps(
+            record.model_dump(mode="json"),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        + "\n"
+        for record in records
+    ).encode("utf-8")
+
+
+def _read_formula_records(path: Path) -> list[FormulaOCRRecord]:
+    records: list[FormulaOCRRecord] = []
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for line_number, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            records.append(FormulaOCRRecord.model_validate_json(line))
+        except ValueError as error:
+            raise PdfCacheError(
+                f"formula artifact contains an invalid record on line {line_number}"
+            ) from error
+    return records
+
+
+def _append_formula_records(
+    page_text: str,
+    *,
+    page: int,
+    records: tuple[FormulaOCRRecord, ...],
+) -> str:
+    lines = [
+        page_text.rstrip(),
+        "",
+        f"[[paper-copilot-formulas:accepted page={page}]]",
+    ]
+    for record in sorted(
+        records,
+        key=lambda item: (
+            item.region.get("y1", 0.0),
+            item.region.get("x1", 0.0),
+            item.created_at,
+        ),
+    ):
+        metadata = json.dumps(
+            {
+                "formula_id": record.formula_id,
+                "formula_ref": record.formula_ref,
+                "region": record.region,
+                "verified": record.verified,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        lines.extend(
+            (
+                f"[[paper-copilot-formula:accepted {metadata}]]",
+                "$$",
+                record.latex,
+                "$$",
+            )
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def _artifact_is_valid(revision_dir: Path, manifest: PdfCacheManifest) -> bool:
     artifact_path = revision_dir / manifest.artifact.filename
+    formula_path = revision_dir / manifest.formula_artifact.filename
     try:
         stat = artifact_path.stat()
+        formula_stat = formula_path.stat()
+        formula_records = _read_formula_records(formula_path)
         return (
             stat.st_size == manifest.artifact.byte_count
             and _sha256_path(artifact_path) == manifest.artifact.sha256
+            and formula_stat.st_size == manifest.formula_artifact.byte_count
+            and _sha256_path(formula_path) == manifest.formula_artifact.sha256
+            and len(formula_records) == manifest.formula_artifact.record_count
         )
-    except OSError:
+    except (OSError, ValueError, PdfCacheError):
         return False
 
 

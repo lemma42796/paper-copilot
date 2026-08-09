@@ -118,7 +118,7 @@ Skill 只指导研究流程，不授予权限。
 Runtime 在模型循环前只准备授权论文清单、页数、哈希和应用内 `citation_base`，不批量生成
 正文缓存。模型确定任务需要某篇论文后，通过占据整个 `library_exec` 命令的
 `paper read <pdf> <page>` / `paper search <pdf> <query>` 按需生成并读取内容寻址
-`layout.txt`；模型不接触缓存键、哈希或 revision。TXT 以换页符保留物理页定位，模型可见输出进入会话历史。详细契约见
+`layout.txt`；同一 revision 的 `formulas.jsonl` 按需保存模型已接受的 OCR LaTeX。模型不接触缓存键、哈希或 revision。TXT 以换页符保留物理页定位，读取页时 Runtime 在末尾附加该页的已接受公式，模型可见输出进入会话历史。详细契约见
 [library_exec_codex_source_mapping.md](docs/design/library_exec_codex_source_mapping.md)。
 
 `layout.txt` 是从 PDF 派生的搜索、普通正文读取和物理页定位层，不是 PDF 原文或
@@ -154,9 +154,8 @@ OCR；字体恢复本身不改变公式定位或缓存 schema。修复版本进�
 安装后，纯文本模型可调用 `recognize_formula`；当前组件使用准确率优先的
 `PP-FormulaNet_plus-M`。缓存不再预判可执行的公式框：建库时只对“包含损坏字符且没有中英
 正文”的连续行预埋弱提示，记录首行第一个损坏字符和末行最后一个损坏字符的字形矩形；混合
-正文行不写提示，也不生成覆盖整行的自动替换范围，避免删除行内正文。提示带
-`advisory=true`，不构成裁剪或写入权限。无正文损坏行另有稳定 `repair_span_id`，只限定
-将来允许替换的缓存范围。
+正文行不写提示。提示带 `advisory=true`，只帮助回到 PDF 探索坐标，不构成自动裁剪或
+写入目标；损坏文本仅标记为可能乱码，不要求模型记忆或复述原始乱码。
 
 纯文本模型通过 `query_page_geometry` 主动查询编号、正文、乱码字符、行及其归一化坐标。
 公式有编号时，编号只用于快速找页和辨认真正的展示公式；无编号时先用上下文语义找页和大概
@@ -172,13 +171,13 @@ Runtime 在首次公式识别时按需启动 Helper，并通过串行请求复�
 `formula-ocr` Skill，Runtime 会拒绝未加载 Skill 的调用。同一任务内同一公式最多三次
 `recognize`，次数以 session application event 持久计数，`accept` 不计次数。
 
-首次 `recognize` 只返回候选 LaTeX 和 `candidate_id`，不修改缓存。乱码公式可冻结
-`repair_span_id`；非乱码公式若疑似静默漏运算符或结构符，冻结缓存中唯一匹配的完整
-`replacement_text`。模型判断候选完整后调用 `accept`，可用 `refined_latex` 清洗 OCR 杂质。
-Runtime 重新验证 PDF 哈希和冻结目标，将整个目标替换成带 `verified=false` 标记的显示
-LaTeX，写入新 revision、原子发布 current，并删除同一缓存键的旧 revision。若非乱码公式
-没有发现缺失则不 accept；不得对单个符号打补丁。无法可靠确定 region 时不得整页强行识别，
-复杂表格恢复仍属于待设计能力。
+首次 `recognize` 只返回候选 LaTeX 和 `candidate_id`，不修改缓存。模型判断候选完整后调用
+`accept`，可用 `refined_latex` 清洗 OCR 杂质。Runtime 重新验证 PDF 哈希，把页码、明确
+`region`、`formula_ref` 和 LaTeX 追加到 `formulas.jsonl`，写入新 revision 并原子发布
+current；原始 `layout.txt` 保持不变。公式编号存在时优先作为辅助 `formula_ref`；无编号公式
+使用附近短语作为引用，持久身份仍绑定 PDF 哈希、物理页和 region。读取或搜索该页时，
+Runtime 在原文本之后展示已接受公式并保留 `verified=false`。无法可靠确定 region 时不得整页
+强行识别，复杂表格恢复仍属于待设计能力。
 
 成功 `inspect_page` 后，Runtime 只追加不含图像正文的页面观察事件。文本读取不另设
 登记工具；权威命令、模型可见输出和完整会话历史构成审计依据。默认 Agent loop 不按
@@ -238,7 +237,7 @@ observability bundle；Reducer 只消费完整事件前缀并校验顺序与引�
 papers/<conversation_id>/session.jsonl
 papers/<standalone_session_id>/session.jsonl
 jobs/<job_id>/{job.json,events.jsonl,attempts/<n>/{manifest.json,trace.jsonl,state.json,payloads/}}
-cache/<pdf_sha256>/<extractor_fingerprint>/revisions/<revision_id>/layout.txt
+cache/<pdf_sha256>/<extractor_fingerprint>/revisions/<revision_id>/{layout.txt,formulas.jsonl,manifest.json}
 optional-components/formula-ocr/{active.json,downloads/,artifacts/,versions/<version>/}
 stress-tests/<run_id>/{run.json,summary.json,samples.json}
 ```

@@ -1,0 +1,100 @@
+schema_version: 1
+status: frozen
+experiment: codex-vs-pc-deepseek-font-repair-ocr-v2
+
+identity:
+  required:
+    - system
+    - model
+    - model_snapshot
+    - reasoning_effort
+    - query_id
+    - run_id
+    - conversation_id
+    - started_at_utc
+    - finished_at_utc
+    - pdf_sha256
+    - query_sha256
+
+answer_quality:
+  fields:
+    label_count: integer
+    correct: integer
+    partial: integer
+    incorrect: integer
+    missing: integer
+    strict: ratio
+    weighted: ratio
+    completion: ratio
+
+agent:
+  fields:
+    task_completed: boolean
+    grounded_claim_rate: ratio_or_null
+    unsupported_claim_count: integer
+    honest_uncertainty_count: integer
+    effective_tool_calls: integer
+    failed_tool_calls: integer
+    recovery_attempts: integer
+    recovery_success: boolean_or_null
+    human_interventions: integer
+    terminal_state: string
+    evidence_path: list_of_strings
+    formula_recognize_calls: integer_or_null
+    formula_accept_calls: integer_or_null
+    accepted_formula_matches_gold: boolean_or_null
+    accepted_cache_visible: boolean_or_null
+    warm_reuse_without_ocr: boolean_or_null
+    warm_quality_delta: ratio_or_null
+
+latency:
+  unit: seconds
+  fields:
+    wall_clock: number
+    time_to_first_effective_answer: number_or_null
+    model: number_or_null
+    tools: number_or_null
+    local_ocr: number_or_null
+
+usage:
+  unit: tokens
+  fields:
+    input: integer_or_null
+    output: integer_or_null
+    reasoning: integer_or_null
+    cache_read: integer_or_null
+    cache_write: integer_or_null
+    total: integer_or_null
+
+calls:
+  fields:
+    model: integer
+    tools: integer
+    local_ocr: integer_or_null
+
+cost:
+  currency: CNY
+  fields:
+    model: number_or_null
+    local_ocr_attributable: number_or_null
+    total_attributable: number_or_null
+    per_successful_task: number_or_null
+    per_weighted_percentage_point: number_or_null
+    per_1k_tokens: number_or_null
+
+reliability:
+  fields:
+    valid_for_quality_scoring: boolean
+    invalidation_reasons: list_of_strings
+    errors: integer
+    timeouts: integer
+    retries: integer
+    truncated: boolean
+    trace_complete: boolean
+
+collection_policy:
+  measured_only: true
+  unavailable_value: null
+  quality_and_operations_reported_separately: true
+  failed_runs_excluded_from_quality_denominator: true
+  failed_runs_included_in_operations_and_cost: true

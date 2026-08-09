@@ -51,20 +51,23 @@ Symbol MT 和 ReaderEx 三条源码缓存路径均已用代表性真实学位论
 
 ### 2. 验证主动坐标探索式公式 OCR
 
-状态：`real_recognize_complete_accept_validation_pending`。旧三级定位代码已经删除，新协议
-和独立 Skill 已实现；新 fingerprint 缓存、逐字符坐标查询、模型主动选框和 Plus-M 真实
-recognize 长链路已经用三篇代表论文验证，写回与失败恢复仍待验证。
+状态：`formula_overlay_warm_reuse_valid_cache_exactness_pending`。主动定位、真实 accept、
+overlay 页面回读和新会话零 OCR 复用均已验证；原样 OCR 缓存仍有运算符拼写间距问题。
 
 已完成：
 
 - 删除缓存完整 bbox 自动裁剪、双正文锚点推框和 `equation_label` 自动裁剪；
 - 新增 `query_page_geometry`，模型可搜索编号/正文并在限定区域读取行与逐字符坐标；
-- 缓存只对损坏且无中英正文的连续行预埋首尾损坏字符弱提示并建立独立
-  `repair_span_id`；混合正文行两者均不生成，避免整行误替换；
+- 缓存只对损坏且无中英正文的连续行预埋首尾损坏字符弱提示；损坏块只显示通用乱码标记，
+  不再向模型暴露替换跨度 ID；
 - `recognize_formula` 只接受模型明确给出的 region，并用稳定 `formula_ref` 归并同一公式；
 - 同一任务同一公式最多三次 recognize，次数写入 session application event，accept 不计；
-- 乱码公式通过 `repair_span_id` 整段替换，疑似静默漏符号的非乱码公式通过唯一完整
-  `replacement_text` 冻结；accept 只写显示 LaTeX，不做单字符补丁；
+- `recognize_formula` 已移除 `repair_span_id` 和 `replacement_text`；模型只负责从原 PDF
+  确定页码与 region、检查 OCR 候选并接受，不再记忆乱码或管理缓存写入目标；
+- cache manifest 升级为 v4；每个 revision 新增 `formulas.jsonl`，accept 追加页码、region、
+  `formula_ref`、LaTeX 与证据哈希，保留原 `layout.txt`；页面读取自动附加该页已接受公式；
+- 有编号公式优先以编号作为辅助 `formula_ref`；无编号公式用附近短语，持久定位仍绑定 PDF
+  SHA、物理页与明确 region；不执行全文公式 OCR；
 - `research-papers` Skill 已删除 OCR 流程，新增独立 `formula-ocr` Skill 负责触发门槛、
   编号/无编号/非乱码定位、重裁剪和 LaTeX 发布；未加载该 Skill 时 Runtime 拒绝坐标与
   OCR 工具调用；
@@ -82,15 +85,24 @@ recognize 长链路已经用三篇代表论文验证，写回与失败恢复仍�
 - 已在 [主动公式定位案例](docs/stories/active_formula_localization.md) 保存两组缓存文本、
   实际模型裁图、原始 OCR LaTeX、可读渲染、region、candidate 与渲染哈希；两张裁图文件
   SHA-256 与 trace 中 `render_sha256` 完全一致。
+- Skill v3 重跑 Q2 完成 4 次 recognize 和 2 次 `refined=false` accept；manifest v4 的
+  `formulas.jsonl` 保存 2 条记录，原 `layout.txt` 哈希保持不变；
+- Q3 在全新 conversation 中直接读到 accepted overlay，recognize/accept 均为 0，证明
+  跨会话零 OCR 复用有效；Q2/Q3 最终答案各 12/12 标签正确；
+- 原样记录仍含 `\operatorname*{m a x}` 与 `e x p`，因此缓存公式精确匹配 Gold 为 false；
+  当前不能把最终回答的正确规范化反推成缓存 LaTeX 已正确。
+- 同模型 Codex CLI 基线已完成正式评分：Q1 weighted 66.67%，Q2/Q3 均为 12/12，macro
+  weighted 88.89%；Q2 前误发的 Q1 在工具调用或可用答案前即终止，只作为排除运行计入
+  运营损耗。跨系统比较已完成。
 
 尚未完成：
 
 - 未运行 Python 测试、Ruff 或 mypy；
-- 未核对旧 v2 accepted OCR revision 在 v3 中不自动迁移时的产品提示和重新识别体验；
+- 未核对旧 v3 缓存在 v4 中按需重建时的产品提示和重新识别体验；
 - 未验证同一公式三次重裁剪后的次数拒绝、Helper 失败计数和重试恢复；
-- 本次按提示只 recognize、未 accept：尚未验证 (2-9) 的 `repair_span_id` 整段写回和缓存
-  回读；(4.10) 本次没有冻结唯一 `replacement_text`，不能直接安全写回，仍需重新识别并
-  冻结完整替换目标后验证非乱码整段替换。
+- 尚未决定如何在不允许模型重写完整公式的前提下，安全处理 `m a x` / `e x p` 等局部
+  OCR 拼写间距；缓存公式精确性仍未达到产品验收条件；
+- 尚未用无编号公式覆盖 v4 accept 与跨会话复用。
 
 ### 3. 构建并验证 Plus-M Formula OCR 可选组件
 

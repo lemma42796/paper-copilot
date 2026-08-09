@@ -62,9 +62,10 @@ It does not demonstrate a text-only formula recovery path. A text-only model suc
 
 ## Artifacts
 
-The raw artifacts are outside the public repository at:
+The private `evidence.yaml` index points to the native rollout, rendered page,
+and final answer under the private runs root:
 
-`/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-pdf-formula-reading/raw/`
+`/Users/a123/paper-copilot-eval-private/multi-thesis-v1/experiments/codex-pdf-formula-reading/`
 
 - `native-rollout.jsonl`: complete persisted Codex rollout, including the image payload
 - `page-34.png`: the exact page sent to the model

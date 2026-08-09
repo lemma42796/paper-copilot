@@ -28,7 +28,7 @@ from paper_copilot.agents.inspect_page_tool import (
     _sha256_file,
 )
 from paper_copilot.shared.errors import KnowledgeError
-from paper_copilot.shared.pdf_cache import FormulaTargetSnapshot, PdfTextCache
+from paper_copilot.shared.pdf_cache import PdfTextCache
 
 __all__ = [
     "FormulaOCRInput",
@@ -39,7 +39,7 @@ __all__ = [
 ]
 
 _COMPONENT_SCHEMA_VERSION = 2
-_TOOL_SCHEMA_VERSION = 2
+_TOOL_SCHEMA_VERSION = 3
 _PAGE_EVIDENCE_SCHEMA_VERSION = 1
 _HELPER_TIMEOUT_SECONDS = 120.0
 _HELPER_IDLE_TIMEOUT_SECONDS = 60.0 * 60.0
@@ -71,7 +71,7 @@ class FormulaOCRInput(BaseModel):
         description=(
             "Use recognize to obtain a candidate LaTeX result without changing the "
             "cache. After inspecting that result, use accept with its candidate_id "
-            "to publish it into the text cache."
+            "to append it to the PDF cache's accepted-formula document."
         ),
     )
     paper_id: str = Field(
@@ -107,25 +107,6 @@ class FormulaOCRInput(BaseModel):
         max_length=500,
         description="Specific formula that needs local OCR verification.",
     )
-    repair_span_id: str | None = Field(
-        default=None,
-        pattern=r"^page-[0-9]{4}-repair-[0-9]{4}$",
-        description=(
-            "Stable replacement span shown beside damaged formula text. This grants "
-            "permission to replace that cache span after acceptance but does not "
-            "supply OCR coordinates."
-        ),
-    )
-    replacement_text: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=6000,
-        description=(
-            "Exact whole formula currently present on the cached page. Use for a "
-            "readable formula suspected of silently missing symbols; acceptance "
-            "replaces it only if this frozen text still matches uniquely."
-        ),
-    )
     candidate_id: str | None = Field(
         default=None,
         pattern=r"^formula-candidate-[0-9a-f]{32}$",
@@ -154,14 +135,11 @@ class FormulaOCRInput(BaseModel):
                 raise ValueError("recognize requires an explicit region")
             if self.formula_ref is None:
                 raise ValueError("recognize requires formula_ref")
+            self.formula_ref = self.formula_ref.strip()
+            if not self.formula_ref:
+                raise ValueError("recognize requires a non-empty formula_ref")
             if self.purpose is None:
                 raise ValueError("recognize requires purpose")
-            if self.repair_span_id is not None and self.replacement_text is not None:
-                raise ValueError(
-                    "recognize accepts at most one of repair_span_id or replacement_text"
-                )
-            if self.replacement_text is not None:
-                _validate_replacement_text(self.replacement_text)
             if self.candidate_id is not None:
                 raise ValueError("recognize does not accept candidate_id")
             if self.refined_latex is not None:
@@ -171,9 +149,7 @@ class FormulaOCRInput(BaseModel):
             raise ValueError("accept requires candidate_id")
         if self.refined_latex is not None:
             _validate_refined_latex(self.refined_latex)
-        # Accept silently ignores repeated locator fields: models commonly echo
-        # repair_span_id/purpose/region back, and the frozen candidate remains the
-        # only trust anchor for what gets published.
+        # The frozen candidate remains the only trust anchor for what gets published.
         return self
 
 
@@ -184,11 +160,7 @@ class FormulaOCRRun:
 
 
 def _validate_refined_latex(value: str) -> None:
-    """Reject refined LaTeX that could corrupt the text cache.
-
-    The published text is spliced into layout.txt, so marker-like sequences
-    and control characters are forbidden regardless of prompt wording.
-    """
+    """Reject refined LaTeX that could corrupt a formula overlay record."""
     if not value.strip():
         raise ValueError("refined_latex must not be empty")
     if "[[" in value:
@@ -205,13 +177,6 @@ def _validate_refined_latex(value: str) -> None:
         raise ValueError("refined_latex must not contain control characters")
 
 
-def _validate_replacement_text(value: str) -> None:
-    if not value.strip():
-        raise ValueError("replacement_text must not be empty")
-    if "[[" in value or "\f" in value:
-        raise ValueError("replacement_text must not contain cache markers")
-
-
 @dataclass(frozen=True, slots=True)
 class _FormulaOCRCandidate:
     candidate_id: str
@@ -224,9 +189,6 @@ class _FormulaOCRCandidate:
     latex: str
     model: str
     render_sha256: str
-    repair_span_id: str | None
-    replacement_text: str | None
-    target_snapshot: FormulaTargetSnapshot | None
 
 
 _CANDIDATES: dict[str, _FormulaOCRCandidate] = {}
@@ -532,8 +494,8 @@ def formula_ocr_tool_description() -> str:
         "printed labels and cached hints do not choose a crop. The Runtime permits at "
         "most three recognize attempts for the same formula in one task. Inspect each "
         "candidate and adjust the crop only when useful. accept publishes cleaned display "
-        "LaTeX through a frozen repair_span_id or exact whole-formula replacement_text. "
-        "Results remain unverified OCR evidence."
+        "LaTeX to the PDF cache's accepted-formula document without replacing extracted "
+        "page text. Results remain unverified OCR evidence."
     )
 
 
@@ -568,17 +530,6 @@ async def run_formula_ocr(
     assert args.region is not None
     assert args.formula_ref is not None
     region = args.region
-    target_snapshot: FormulaTargetSnapshot | None = None
-    if args.repair_span_id is not None or args.replacement_text is not None:
-        if cache_root is None:
-            raise KnowledgeError("formula targeting requires a configured cache root")
-        cache = PdfTextCache(cache_root.expanduser().resolve())
-        target_snapshot = await cache.snapshot_formula_target(
-            pdf_sha256,
-            page=args.page,
-            repair_span_id=args.repair_span_id,
-            replacement_text=args.replacement_text,
-        )
     started = time.monotonic()
     pdftoppm_path = _resolve_poppler_executable("pdftoppm")
     with tempfile.TemporaryDirectory(prefix="paper-copilot-formula-ocr-") as raw_dir:
@@ -616,9 +567,6 @@ async def run_formula_ocr(
         latex=latex_body,
         model=model_name,
         render_sha256=render_sha256,
-        repair_span_id=args.repair_span_id,
-        replacement_text=args.replacement_text,
-        target_snapshot=target_snapshot,
     )
     with _CANDIDATES_LOCK:
         _CANDIDATES[candidate_id] = candidate
@@ -632,11 +580,7 @@ async def run_formula_ocr(
         "extractor_fingerprint": hashlib.sha256(
             model_name.encode("utf-8")
         ).hexdigest(),
-        "cache_revision_id": (
-            target_snapshot.cache_revision_id
-            if target_snapshot is not None
-            else None
-        ),
+        "cache_revision_id": None,
         "render_sha256": render_sha256,
     }
     output = {
@@ -650,24 +594,10 @@ async def run_formula_ocr(
         "region": region_payload,
         "latex": latex_body,
         "model": model_name,
-        "repair_span_id": args.repair_span_id,
-        "target_kind": (
-            target_snapshot.target_kind if target_snapshot is not None else None
-        ),
-        "target_sha256": (
-            target_snapshot.target_sha256 if target_snapshot is not None else None
-        ),
-        "cache_revision_id": (
-            target_snapshot.cache_revision_id
-            if target_snapshot is not None
-            else None
-        ),
-        "cache_artifact_sha256": (
-            target_snapshot.cache_artifact_sha256
-            if target_snapshot is not None
-            else None
-        ),
-        "cache_write_pending": target_snapshot is not None,
+        "cache_record_mode": "formula_overlay",
+        "cache_revision_id": None,
+        "formula_artifact_sha256": None,
+        "cache_write_pending": cache_root is not None,
         "verified": False,
         "warnings": [
             "formula OCR may contain symbol, subscript, superscript, or layout errors",
@@ -692,24 +622,10 @@ async def run_formula_ocr(
             "formula_ocr_output_sha256": hashlib.sha256(
                 latex_body.encode("utf-8")
             ).hexdigest(),
-            "repair_span_id": args.repair_span_id,
-            "target_kind": (
-                target_snapshot.target_kind if target_snapshot is not None else None
-            ),
-            "target_sha256": (
-                target_snapshot.target_sha256 if target_snapshot is not None else None
-            ),
+            "cache_record_mode": "formula_overlay",
             "candidate_id": candidate_id,
-            "cache_revision_id": (
-                target_snapshot.cache_revision_id
-                if target_snapshot is not None
-                else None
-            ),
-            "cache_artifact_sha256": (
-                target_snapshot.cache_artifact_sha256
-                if target_snapshot is not None
-                else None
-            ),
+            "cache_revision_id": None,
+            "formula_artifact_sha256": None,
             "wall_time_seconds": round(time.monotonic() - started, 3),
             "page_evidence": evidence,
         },
@@ -741,27 +657,20 @@ async def _accept_formula_candidate(
     if current_pdf_sha256 != candidate.pdf_sha256:
         raise KnowledgeError("PDF changed after formula OCR recognition")
     cache_revision_id: str | None = None
-    cache_artifact_sha256: str | None = None
+    formula_artifact_sha256: str | None = None
     cache_path: str | None = None
     published_latex = (
         args.refined_latex.strip() if args.refined_latex else candidate.latex
     )
     _validate_refined_latex(published_latex)
     refined = published_latex != candidate.latex
-    if candidate.target_snapshot is None:
-        raise KnowledgeError(
-            "this candidate has no frozen cache target; use its LaTeX as evidence "
-            "without accepting it"
-        )
     if cache_root is None:
         raise KnowledgeError("formula OCR acceptance requires a configured cache root")
     cache = PdfTextCache(cache_root.expanduser().resolve())
     lookup = await cache.record_formula_latex(
         candidate.pdf_sha256,
         page=candidate.page,
-        repair_span_id=candidate.repair_span_id,
-        replacement_text=candidate.replacement_text,
-        expected_target_sha256=candidate.target_snapshot.target_sha256,
+        formula_ref=candidate.formula_ref,
         latex=published_latex,
         ocr_latex=candidate.latex,
         region=candidate.region,
@@ -771,12 +680,13 @@ async def _accept_formula_candidate(
     if lookup.cache_ref is None or lookup.manifest is None:
         raise KnowledgeError("formula OCR acceptance produced no text cache revision")
     cache_revision_id = lookup.cache_ref.revision_id
-    cache_artifact_sha256 = lookup.manifest.artifact.sha256
+    formula_artifact_sha256 = lookup.manifest.formula_artifact.sha256
     cache_path = (
         "cache/"
         f"{lookup.cache_ref.pdf_sha256}/"
         f"{lookup.cache_ref.extractor_fingerprint}/revisions/"
-        f"{lookup.cache_ref.revision_id}/{lookup.manifest.artifact.filename}"
+        f"{lookup.cache_ref.revision_id}/"
+        f"{lookup.manifest.formula_artifact.filename}"
     )
     with _CANDIDATES_LOCK:
         _CANDIDATES.pop(candidate.candidate_id, None)
@@ -792,11 +702,9 @@ async def _accept_formula_candidate(
         "ocr_latex": candidate.latex,
         "refined": refined,
         "model": candidate.model,
-        "repair_span_id": candidate.repair_span_id,
-        "target_kind": candidate.target_snapshot.target_kind,
-        "target_sha256": candidate.target_snapshot.target_sha256,
+        "cache_record_mode": "formula_overlay",
         "cache_revision_id": cache_revision_id,
-        "cache_artifact_sha256": cache_artifact_sha256,
+        "formula_artifact_sha256": formula_artifact_sha256,
         "cache_path": cache_path,
         "verified": False,
         "warnings": [
@@ -826,11 +734,9 @@ async def _accept_formula_candidate(
             "published_latex_sha256": hashlib.sha256(
                 published_latex.encode("utf-8")
             ).hexdigest(),
-            "repair_span_id": candidate.repair_span_id,
-            "target_kind": candidate.target_snapshot.target_kind,
-            "target_sha256": candidate.target_snapshot.target_sha256,
+            "cache_record_mode": "formula_overlay",
             "cache_revision_id": cache_revision_id,
-            "cache_artifact_sha256": cache_artifact_sha256,
+            "formula_artifact_sha256": formula_artifact_sha256,
         },
     )
 

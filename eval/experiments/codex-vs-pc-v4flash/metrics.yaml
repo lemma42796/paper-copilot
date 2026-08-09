@@ -1,0 +1,19 @@
+---
+answer_quality:
+- strict
+- weighted
+- completion
+- correct
+- partial
+- incorrect
+- missing
+agent:
+- task_completed
+- tool_calls
+- tool_failures
+- terminal_state
+- evidence_traceability
+business:
+- wall_seconds
+- total_tokens
+- cost_cny

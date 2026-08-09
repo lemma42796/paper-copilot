@@ -1,11 +1,10 @@
-"""Advisory formula hints and stable LaTeX replacement targets."""
+"""Advisory formula hints and the model-facing Formula OCR contract."""
 
 from __future__ import annotations
 
 import pytest
 
 from paper_copilot.agents.formula_ocr_tool import FormulaOCRInput
-from paper_copilot.shared.errors import PdfCacheError
 from paper_copilot.shared.pdf_cache import (
     _FormulaHint,
     _contains_extraction_garble,
@@ -13,7 +12,6 @@ from paper_copilot.shared.pdf_cache import (
     _line_has_prose,
     _render_text_page,
     _repair_span_count,
-    _resolve_formula_target,
 )
 
 _GARBLE = "\uf8eb"
@@ -45,12 +43,11 @@ def test_mixed_damaged_prose_line_is_not_hint_eligible() -> None:
     assert "repair_span_id" not in rendered
 
 
-def test_render_text_page_keeps_repair_anchor_separate_from_hint() -> None:
+def test_render_text_page_marks_damage_without_a_replacement_identifier() -> None:
     rendered = _render_text_page(f"x {_GARBLE}\ny {_GARBLE}\nclean line\n", 4, (_hint(),))
-    assert rendered.count("paper-copilot-formula:repair-start") == 1
-    assert "repair_span_id=page-0004-repair-0001" in rendered
-    assert "bbox=" not in rendered.split("repair-start", maxsplit=1)[1]
-    assert "paper-copilot-formula:repair-end id=page-0004-repair-0001" in rendered
+    assert rendered.count("paper-copilot-formula:damaged page=4") == 1
+    assert "repair_span_id" not in rendered
+    assert "paper-copilot-formula:damaged-end" in rendered
 
 
 def test_repair_spans_bridge_short_clean_formula_rows() -> None:
@@ -63,14 +60,14 @@ def test_repair_spans_bridge_short_clean_formula_rows() -> None:
     )
     assert _repair_span_count(text) == 1
     rendered = _render_text_page(text, 4)
-    assert rendered.count("paper-copilot-formula:repair-start") == 1
+    assert rendered.count("paper-copilot-formula:damaged page=4") == 1
     assert "原始提取：i=1" in rendered  # noqa: RUF001
 
 
 def test_repair_spans_stop_before_mixed_prose() -> None:
     text = f"x {_GARBLE}\n正文 {_GARBLE}\ny {_GARBLE}\n"
     rendered = _render_text_page(text, 4)
-    assert rendered.count("paper-copilot-formula:repair-start") == 2
+    assert rendered.count("paper-copilot-formula:damaged page=4") == 2
     assert "原始提取：正文" not in rendered  # noqa: RUF001
 
 
@@ -81,29 +78,6 @@ def test_formula_aware_text_carries_page_hints() -> None:
     assert len(boundaries) == 2
 
 
-def test_repair_target_resolves_exact_bounded_span() -> None:
-    page_text = _render_text_page(f"x {_GARBLE}\n", 4)
-    kind, target, start, end = _resolve_formula_target(
-        page_text,
-        page=4,
-        repair_span_id="page-0004-repair-0001",
-        replacement_text=None,
-    )
-    assert kind == "repair_span"
-    assert target == page_text[start:end]
-
-
-def test_readable_formula_target_must_be_unique() -> None:
-    page_text = "formula: x+y\nformula: x+y\n"
-    with pytest.raises(PdfCacheError, match="exactly one"):
-        _resolve_formula_target(
-            page_text,
-            page=1,
-            repair_span_id=None,
-            replacement_text="x+y",
-        )
-
-
 def _recognize(**overrides: object) -> FormulaOCRInput:
     payload: dict[str, object] = {
         "operation": "recognize",
@@ -112,7 +86,6 @@ def _recognize(**overrides: object) -> FormulaOCRInput:
         "purpose": "explain equation (3.5)",
         "formula_ref": "equation (3.5)",
         "region": {"x1": 0.2, "y1": 0.2, "x2": 0.8, "y2": 0.3},
-        "repair_span_id": "page-0004-repair-0001",
     }
     payload.update(overrides)
     return FormulaOCRInput.model_validate(payload)
@@ -126,8 +99,8 @@ def test_recognize_requires_model_selected_region_and_stable_ref() -> None:
         _recognize(formula_ref=None)
 
 
-def test_recognize_rejects_two_replacement_targets() -> None:
-    with pytest.raises(ValueError, match="at most one"):
+def test_recognize_rejects_legacy_replacement_targets() -> None:
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
         _recognize(replacement_text="x+y")
 
 

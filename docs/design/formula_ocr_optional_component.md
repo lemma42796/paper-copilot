@@ -89,10 +89,9 @@ directly, then supplies the final diagonal crop itself.
 
 `recognize_formula` accepts an authorized PDF ID, a one-based physical page, a
 stable `formula_ref`, and an explicit normalized `region`. It no longer accepts a
-label or stored bounding box as an automatic crop. A `repair_span_id` may freeze a
-damaged cache span; alternatively, exact `replacement_text` may freeze a readable
-whole formula suspected of silently missing operators or structure. These are
-write targets, not locators.
+label or stored bounding box as an automatic crop. A printed equation number is the
+preferred `formula_ref`; an unnumbered formula uses a short distinctive nearby prose
+fragment. The model never copies garbled text or manages a cache replacement target.
 
 The Runtime renders the explicit crop with Poppler and gives only the temporary PNG
 path to the helper. On the first request, Runtime starts the Helper in server mode;
@@ -118,20 +117,19 @@ PDF and render hashes, model identity,
 and explicit unverified warnings. It never presents OCR output as mathematical
 ground truth or invents confidence. Recognition never changes the cache. Every
 recognize request that reaches Helper inference is charged to both
-`PDF + page + normalized formula_ref` and the stable replacement target when present, in the
-conversation session immediately before OCR begins. Invalid target or render preflight
-does not consume an attempt; a Helper failure does. The fourth attempt for the same
+`PDF + page + normalized formula_ref` in the conversation session immediately before
+OCR begins. Invalid render preflight does not consume an attempt; a Helper failure does.
+The fourth attempt for the same
 formula is rejected; `accept` is not charged. After the model inspects the candidate, it may
 adjust the crop and retry up to that limit, or call `accept` with the frozen
 `candidate_id`.
 
-Acceptance rechecks the PDF and the frozen target. A damaged `repair_span_id`, or a
-unique readable whole-formula target, is replaced in a new `layout.txt` revision by
-a marker plus display LaTeX (`$$ ... $$`). A readable formula is replaced only when
-OCR establishes a material omission, and the entire formula is replaced rather than
-patching one character. The revision is atomically published and superseded revisions
-for the same cache key are deleted. Accepted repairs therefore accumulate in the
-single model-visible current TXT.
+Acceptance rechecks the PDF, then appends a record containing PDF-bound page, region,
+`formula_ref`, LaTeX, model and evidence hashes to `formulas.jsonl` in a new cache
+revision. `layout.txt` is copied unchanged. The revision is atomically published and
+superseded revisions for the same cache key are deleted. Page read and search append the
+accepted formulas for that page as a separate model-visible section with
+`verified=false`.
 Candidates are held only in the current Runtime process. If that process exits before
 `accept`, the model must run `recognize` again; an unaccepted candidate is never written
 to the persistent cache.
@@ -150,17 +148,17 @@ contains damaged characters:
   the first line and the last damaged box on the final line, ending at the next prose
   line or the page edge.
 
-The marker includes `advisory=true` and a line count. A damaged non-prose run also
-receives a separate stable `repair_span_id`; a mixed prose line receives neither an
-automatic coordinate nor a whole-line replacement span, because replacing that span
-could delete valid prose. The model may ignore a hint, refine beyond it, or locate the
-formula from the original page without changing what text it is authorized to replace.
+The marker includes `advisory=true` and a line count. A damaged non-prose run is marked
+as possible garble, but receives no replacement identifier; a mixed prose line receives
+no automatic coordinate. The model may ignore a hint, refine beyond it, or locate the
+formula from the original page.
 
-The hint source and repair-marker version participate in the extractor fingerprint, and
-the cache manifest schema is v3. Existing v2 caches are rebuilt on demand. Accepted OCR
-revisions from the old locator schema are not copied into the new cache automatically,
-because their replacement anchors and crop provenance are incompatible; a material
-formula must be recognized again under the new bounded target contract.
+The hint source and damage-marker version participate in the extractor fingerprint, and
+the cache manifest schema is v4. Each revision contains `layout.txt`, `formulas.jsonl`,
+and `manifest.json`; the formula artifact has its own hash, byte count, and record count.
+Older caches are rebuilt on demand. Accepted OCR revisions from the replacement schema
+are not copied automatically; a material formula must be recognized again with an
+explicit region.
 
 ## Deferred product validation
 
