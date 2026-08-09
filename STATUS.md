@@ -61,14 +61,10 @@ ad-hoc 签名、未经 Apple 公证的开发预览；设置页全新下载与安
 - `page_geometry_tool.py` 可能从 PyMuPDF 收到孤立 UTF-16 surrogate，JSON/UTF-8 序列化会
   中断；现在在提取边界统一替换为 `U+FFFD`。
 
-用于 README 后续展示的详细案例与 6 张稳定图片已经建立：
-
-- [主动公式定位案例](docs/stories/active_formula_localization.md)
-- [案例图片目录](docs/assets/formula-ocr-active-localization/)
-
-文档明确区分缓存文本、模型实际裁图、原始 OCR LaTeX 与整理后的可读渲染；不宣称“零
-算法定位”或“任意公式都能一次成功”。两张模型裁图的文件 SHA-256 与真实 trace 中的
-`render_sha256` 完全一致。
+用于 README 展示的 6 张稳定图片保存在
+[案例图片目录](docs/assets/formula-ocr-active-localization/)。README 明确区分缓存文本、模型
+实际裁图与可读 OCR 渲染，不宣称“零算法定位”或“任意公式都能一次成功”。两张模型裁图的
+文件 SHA-256 与真实 trace 中的 `render_sha256` 完全一致。
 
 ## 主动公式 OCR 真实验证
 

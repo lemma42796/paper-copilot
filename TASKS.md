@@ -87,9 +87,8 @@ overlay 页面回读和新会话零 OCR 复用均已验证；原样 OCR 缓存�
 - 首次运行暴露并修复两个真实协议边界：公式 OCR tool schema 2 不能直接充当
   `PageEvidence` schema 版本；PyMuPDF 可能返回孤立 UTF-16 surrogate，现已在几何提取
   边界替换为 `U+FFFD`，保证工具结果可序列化；
-- 已在 [主动公式定位案例](docs/stories/active_formula_localization.md) 保存两组缓存文本、
-  实际模型裁图、原始 OCR LaTeX、可读渲染、region、candidate 与渲染哈希；两张裁图文件
-  SHA-256 与 trace 中 `render_sha256` 完全一致。
+- 已在 `docs/assets/formula-ocr-active-localization/` 保存两组缓存文本、实际模型裁图和可读
+  OCR 渲染；两张裁图文件 SHA-256 与 trace 中 `render_sha256` 完全一致。
 - Skill v3 重跑 Q2 完成 4 次 recognize 和 2 次 `refined=false` accept；manifest v4 的
   `formulas.jsonl` 保存 2 条记录，原 `layout.txt` 哈希保持不变；
 - Q3 在全新 conversation 中直接读到 accepted overlay，recognize/accept 均为 0，证明

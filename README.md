@@ -97,7 +97,6 @@ PDF 的逐字符几何信息，自主选择裁剪区域。系统仅渲染选定�
 识别结果经 Agent 检查后才写入缓存。若裁图不完整或结果不可靠，Agent 可以调整区域重试；
 无法确认时，则在报告中明确说明。已确认的公式可在后续会话中复用。
 
-[查看完整案例](docs/stories/active_formula_localization.md) ·
 [了解 Formula OCR 组件](docs/design/formula_ocr_optional_component.md)
 
 ## 与 Codex CLI 的同模型实验
