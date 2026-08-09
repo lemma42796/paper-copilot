@@ -50,6 +50,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var availableModels: [ModelConfiguration] = []
     @Published private(set) var selectedModel: ModelConfiguration?
     @Published private(set) var formulaOCRStatus: FormulaOCRInstallStatus
+    @Published private(set) var clientStressTestStatus =
+        ClientStressTestStatus.idle
     @Published private(set) var deletingConversationIDs: Set<String> = []
     @Published private(set) var resolvingApprovalIDs: Set<String> = []
     @Published private(set) var approvalMode: ApprovalMode
@@ -63,9 +65,15 @@ final class AppModel: ObservableObject {
     private var api: PaperCopilotAPI?
     private var eventCursors: [String: Int] = [:]
     private var observationTasks: [String: Task<Void, Never>] = [:]
+    private var pendingJobEvents: [String: [ChatJobEvent]] = [:]
+    private var eventFlushTasks: [String: Task<Void, Never>] = [:]
+    private var clientStressTestTask: Task<Void, Never>?
+    private var clientStressTestJobIDs: Set<String> = []
     private var requestedDiagnosticAttempts: [String: Int] = [:]
     private var hasInitializedConversationSelection = false
     private static let approvalModeKey = "approvalMode"
+    private static let eventPresentationIntervalNanoseconds: UInt64 =
+        200_000_000
 
     init() {
         formulaOCRStatus = .notInstalled
@@ -216,6 +224,107 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func startClientStressTest(_ preset: ClientStressTestPreset) {
+        guard !clientStressTestStatus.isRunning else {
+            return
+        }
+        guard !hasActiveJobs, !isSubmitting else {
+            jobError = "请先等待当前任务结束，再运行客户端压测。"
+            return
+        }
+
+        removePreviousClientStressJobs()
+        let timestamp = Self.clientStressTimestamp()
+        let runID = "client-stress-\(Self.clientStressRunStamp())-\(UUID().uuidString.prefix(6).lowercased())"
+        let conversationID = "conversation-\(runID)"
+        let jobID = "job-\(runID)"
+        let outputDirectory: URL
+        do {
+            outputDirectory = try ClientStressArtifactStore.createRunDirectory(
+                runID: runID
+            )
+            try ClientStressArtifactStore.write(
+                ClientStressRunMetadata(
+                    generatorVersion: 1,
+                    eventSource: "local_synthetic",
+                    modelCallCount: 0,
+                    runtimeRequestCount: 0,
+                    apiKeyReadCount: 0,
+                    runID: runID,
+                    preset: preset.rawValue,
+                    startedAt: timestamp,
+                    expectedEventCount: preset.totalEventCount,
+                    reasoningDeltaCount: preset.reasoningDeltaCount,
+                    assistantDeltaCount: preset.assistantDeltaCount,
+                    formulaCount: preset.formulaCount,
+                    sourceBatchSize: preset.sourceBatchSize,
+                    sourceBatchIntervalMilliseconds: Double(
+                        preset.sourceBatchIntervalNanoseconds
+                    ) / 1_000_000,
+                    cooldownSeconds: preset.cooldownSeconds
+                ),
+                named: "run.json",
+                to: outputDirectory
+            )
+        } catch {
+            clientStressTestStatus = ClientStressTestStatus(
+                phase: .failed,
+                preset: preset,
+                runID: runID,
+                deliveredEvents: 0,
+                totalEvents: preset.totalEventCount,
+                progress: 0,
+                currentCPUPercent: nil,
+                residentBytes: nil,
+                outputPath: nil,
+                message: "无法创建压测产物目录：\(error.localizedDescription)"
+            )
+            return
+        }
+
+        let record = clientStressRecord(
+            jobID: jobID,
+            conversationID: conversationID,
+            timestamp: timestamp,
+            status: .running,
+            result: nil,
+            error: nil
+        )
+        clientStressTestJobIDs.insert(jobID)
+        eventCursors[jobID] = 0
+        jobEvents[jobID] = []
+        upsert(record)
+        hasInitializedConversationSelection = true
+        selectedConversationID = conversationID
+        jobError = nil
+        clientStressTestStatus = ClientStressTestStatus(
+            phase: .preparing,
+            preset: preset,
+            runID: runID,
+            deliveredEvents: 0,
+            totalEvents: preset.totalEventCount,
+            progress: 0,
+            currentCPUPercent: nil,
+            residentBytes: nil,
+            outputPath: outputDirectory.path,
+            message: "正在准备本地合成事件，模型调用数为 0。"
+        )
+        clientStressTestTask = Task { [weak self] in
+            await self?.runClientStressTest(
+                preset: preset,
+                runID: runID,
+                jobID: jobID,
+                conversationID: conversationID,
+                timestamp: timestamp,
+                outputDirectory: outputDirectory
+            )
+        }
+    }
+
+    func stopClientStressTest() {
+        clientStressTestTask?.cancel()
+    }
+
     func formulaOCRMenuDetail(for model: ModelConfiguration) -> String? {
         guard !model.supportsImageInput else {
             return nil
@@ -348,6 +457,15 @@ final class AppModel: ObservableObject {
         guard !trimmed.isEmpty, !isSubmitting else {
             return false
         }
+        if
+            let conversationID,
+            conversations.first(where: { $0.id == conversationID })?.jobs
+                .contains(where: { clientStressTestJobIDs.contains($0.id) })
+                == true
+        {
+            jobError = "客户端压测会话不接受真实模型请求。"
+            return false
+        }
         guard let api else {
             jobError = "本地 Runtime 尚未连接。"
             return false
@@ -404,6 +522,10 @@ final class AppModel: ObservableObject {
     }
 
     func interrupt(_ jobID: String) {
+        if clientStressTestJobIDs.contains(jobID) {
+            stopClientStressTest()
+            return
+        }
         guard let api else {
             jobError = "本地 Runtime 尚未连接。"
             return
@@ -451,8 +573,24 @@ final class AppModel: ObservableObject {
     }
 
     func deleteConversation(_ conversation: ChatConversation) {
+        let jobIDs = Set(conversation.jobs.map(\.id))
         guard !conversation.jobs.contains(where: { $0.status.isActive }) else {
             jobError = "请先停止会话中正在运行的任务。"
+            return
+        }
+        if !jobIDs.isEmpty, jobIDs.isSubset(of: clientStressTestJobIDs) {
+            for jobID in jobIDs {
+                eventFlushTasks[jobID]?.cancel()
+                eventFlushTasks.removeValue(forKey: jobID)
+                pendingJobEvents.removeValue(forKey: jobID)
+                eventCursors.removeValue(forKey: jobID)
+                jobEvents.removeValue(forKey: jobID)
+                clientStressTestJobIDs.remove(jobID)
+            }
+            jobs.removeAll { jobIDs.contains($0.id) }
+            if selectedConversationID == conversation.id {
+                selectedConversationID = conversations.first?.id
+            }
             return
         }
         guard let api else {
@@ -467,7 +605,6 @@ final class AppModel: ObservableObject {
         let deletedIndex = conversationOrder.firstIndex {
             $0.id == conversation.id
         }
-        let jobIDs = Set(conversation.jobs.map(\.id))
         deletingConversationIDs.insert(conversation.id)
         jobError = nil
         Task {
@@ -476,6 +613,9 @@ final class AppModel: ObservableObject {
                 for jobID in jobIDs {
                     observationTasks[jobID]?.cancel()
                     observationTasks.removeValue(forKey: jobID)
+                    eventFlushTasks[jobID]?.cancel()
+                    eventFlushTasks.removeValue(forKey: jobID)
+                    pendingJobEvents.removeValue(forKey: jobID)
                     eventCursors.removeValue(forKey: jobID)
                     jobEvents.removeValue(forKey: jobID)
                     jobDiagnostics.removeValue(forKey: jobID)
@@ -579,7 +719,9 @@ final class AppModel: ObservableObject {
             return
         }
         for job in conversation.jobs {
-            loadEvents(for: job.id)
+            if !clientStressTestJobIDs.contains(job.id) {
+                loadEvents(for: job.id)
+            }
         }
     }
 
@@ -753,6 +895,450 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func runClientStressTest(
+        preset: ClientStressTestPreset,
+        runID: String,
+        jobID: String,
+        conversationID: String,
+        timestamp: String,
+        outputDirectory: URL
+    ) async {
+        defer {
+            clientStressTestTask = nil
+        }
+
+        let startedDate = Date()
+        let startedWallTime = Date.timeIntervalSinceReferenceDate
+        var generator = ClientStressEventGenerator(
+            preset: preset,
+            timestamp: timestamp
+        )
+        let sampleRecorder = ClientStressSampleRecorder(
+            directory: outputDirectory
+        )
+        var expected = ClientStressTextAccumulator()
+        var probe = ClientStressResourceProbe()
+        var samples: [ClientStressProcessSample] = []
+        var deliveredEvents = 0
+        var latestCPUPercent: Double?
+        var latestResidentBytes: UInt64?
+        var lastSampleWallTime = startedWallTime
+        var lastArtifactCheckpointWallTime = startedWallTime - 2
+        let sampleInterval: TimeInterval = 0.5
+        let artifactCheckpointInterval: TimeInterval = 2
+
+        do {
+            while true {
+                try Task.checkCancellation()
+                var batch: [ChatJobEvent] = []
+                batch.reserveCapacity(preset.sourceBatchSize)
+                for _ in 0..<preset.sourceBatchSize {
+                    guard let event = generator.next() else {
+                        break
+                    }
+                    expected.append(event)
+                    batch.append(event)
+                }
+                guard let finalSequence = batch.last?.seq else {
+                    break
+                }
+                applyEvents(
+                    batch,
+                    nextAfter: finalSequence,
+                    jobID: jobID
+                )
+                deliveredEvents += batch.count
+
+                let now = Date.timeIntervalSinceReferenceDate
+                if now - lastSampleWallTime >= sampleInterval {
+                    let sample = probe.sample(
+                        startedAt: startedWallTime,
+                        phase: "replaying",
+                        deliveredEvents: deliveredEvents,
+                        expectedInterval: sampleInterval
+                    )
+                    samples.append(sample)
+                    latestCPUPercent = sample.cpuPercent
+                    latestResidentBytes = sample.residentBytes
+                    lastSampleWallTime = now
+                    if
+                        now - lastArtifactCheckpointWallTime
+                            >= artifactCheckpointInterval
+                    {
+                        try await sampleRecorder.checkpoint(samples)
+                        lastArtifactCheckpointWallTime = now
+                    }
+                    clientStressTestStatus = ClientStressTestStatus(
+                        phase: .replaying,
+                        preset: preset,
+                        runID: runID,
+                        deliveredEvents: deliveredEvents,
+                        totalEvents: preset.totalEventCount,
+                        progress: 0.9 * Double(deliveredEvents)
+                            / Double(preset.totalEventCount),
+                        currentCPUPercent: latestCPUPercent,
+                        residentBytes: latestResidentBytes,
+                        outputPath: outputDirectory.path,
+                        message: "本地回放中；未连接模型或 Runtime。"
+                    )
+                }
+                try await Task.sleep(
+                    nanoseconds: preset.sourceBatchIntervalNanoseconds
+                )
+            }
+
+            flushPendingEvents(for: jobID)
+            let report = ClientStressReportBuilder.markdown(
+                preset: preset,
+                runID: runID
+            )
+            upsert(clientStressRecord(
+                jobID: jobID,
+                conversationID: conversationID,
+                timestamp: timestamp,
+                status: .completed,
+                result: ChatJobResult(
+                    request: "客户端本地压测：\(preset.displayName)",
+                    reportMarkdown: report,
+                    terminationReason: "local_stress_test",
+                    costCNY: 0,
+                    citationTargets: [:]
+                ),
+                error: nil
+            ))
+
+            let cooldownStarted = Date.timeIntervalSinceReferenceDate
+            while true {
+                try Task.checkCancellation()
+                let now = Date.timeIntervalSinceReferenceDate
+                let cooldownElapsed = now - cooldownStarted
+                guard cooldownElapsed < preset.cooldownSeconds else {
+                    break
+                }
+                try await Task.sleep(nanoseconds: 500_000_000)
+                let sample = probe.sample(
+                    startedAt: startedWallTime,
+                    phase: "cooldown",
+                    deliveredEvents: deliveredEvents,
+                    expectedInterval: sampleInterval
+                )
+                samples.append(sample)
+                latestCPUPercent = sample.cpuPercent
+                latestResidentBytes = sample.residentBytes
+                if
+                    now - lastArtifactCheckpointWallTime
+                        >= artifactCheckpointInterval
+                {
+                    try await sampleRecorder.checkpoint(samples)
+                    lastArtifactCheckpointWallTime = now
+                }
+                clientStressTestStatus = ClientStressTestStatus(
+                    phase: .coolingDown,
+                    preset: preset,
+                    runID: runID,
+                    deliveredEvents: deliveredEvents,
+                    totalEvents: preset.totalEventCount,
+                    progress: min(
+                        0.9 + 0.1 * cooldownElapsed / preset.cooldownSeconds,
+                        0.99
+                    ),
+                    currentCPUPercent: latestCPUPercent,
+                    residentBytes: latestResidentBytes,
+                    outputPath: outputDirectory.path,
+                    message: "事件完成，正在观察 CPU 与内存回落。"
+                )
+            }
+
+            try finishClientStressTest(
+                outcome: "completed",
+                error: nil,
+                preset: preset,
+                runID: runID,
+                jobID: jobID,
+                startedDate: startedDate,
+                startedWallTime: startedWallTime,
+                expected: expected,
+                samples: samples,
+                outputDirectory: outputDirectory
+            )
+        } catch is CancellationError {
+            flushPendingEvents(for: jobID)
+            upsert(clientStressRecord(
+                jobID: jobID,
+                conversationID: conversationID,
+                timestamp: timestamp,
+                status: .interrupted,
+                result: nil,
+                error: "用户停止了客户端压测。"
+            ))
+            do {
+                try finishClientStressTest(
+                    outcome: "cancelled",
+                    error: "用户停止",
+                    preset: preset,
+                    runID: runID,
+                    jobID: jobID,
+                    startedDate: startedDate,
+                    startedWallTime: startedWallTime,
+                    expected: expected,
+                    samples: samples,
+                    outputDirectory: outputDirectory
+                )
+            } catch {
+                clientStressTestStatus = failedClientStressStatus(
+                    preset: preset,
+                    runID: runID,
+                    deliveredEvents: deliveredEvents,
+                    outputDirectory: outputDirectory,
+                    message: "压测已停止，但写入产物失败：\(error.localizedDescription)"
+                )
+            }
+        } catch {
+            flushPendingEvents(for: jobID)
+            upsert(clientStressRecord(
+                jobID: jobID,
+                conversationID: conversationID,
+                timestamp: timestamp,
+                status: .failed,
+                result: nil,
+                error: error.localizedDescription
+            ))
+            do {
+                try finishClientStressTest(
+                    outcome: "failed",
+                    error: error.localizedDescription,
+                    preset: preset,
+                    runID: runID,
+                    jobID: jobID,
+                    startedDate: startedDate,
+                    startedWallTime: startedWallTime,
+                    expected: expected,
+                    samples: samples,
+                    outputDirectory: outputDirectory
+                )
+            } catch {
+                clientStressTestStatus = failedClientStressStatus(
+                    preset: preset,
+                    runID: runID,
+                    deliveredEvents: deliveredEvents,
+                    outputDirectory: outputDirectory,
+                    message: "压测失败且无法写入产物：\(error.localizedDescription)"
+                )
+            }
+        }
+    }
+
+    private func finishClientStressTest(
+        outcome: String,
+        error: String?,
+        preset: ClientStressTestPreset,
+        runID: String,
+        jobID: String,
+        startedDate: Date,
+        startedWallTime: TimeInterval,
+        expected: ClientStressTextAccumulator,
+        samples: [ClientStressProcessSample],
+        outputDirectory: URL
+    ) throws {
+        let actualEvents = jobEvents[jobID, default: []]
+        var actual = ClientStressTextAccumulator()
+        for event in actualEvents {
+            actual.append(event)
+        }
+        let orderingValid = actualEvents.enumerated().allSatisfy {
+            index, event in
+            event.seq == index + 1
+        }
+        let contentValid = outcome == "completed"
+            && expected.eventCount == preset.totalEventCount
+            && actual.eventCount == expected.eventCount
+            && actual.reasoningSHA256 == expected.reasoningSHA256
+            && actual.assistantSHA256 == expected.assistantSHA256
+            && orderingValid
+        let responsivenessThresholdSeconds = 1.0
+        let maximumMainActorGapSeconds = samples
+            .map(\.mainActorGapSeconds)
+            .max() ?? 0
+        let responsivenessValid = outcome == "completed"
+            && maximumMainActorGapSeconds <= responsivenessThresholdSeconds
+        let passed = contentValid && responsivenessValid
+        let cpuValues = samples.map(\.cpuPercent)
+        let cooldownCPUValues = samples
+            .filter { $0.phase == "cooldown" }
+            .map(\.cpuPercent)
+        let finishedDate = Date()
+        let summary = ClientStressTestSummary(
+            generatorVersion: 1,
+            eventSource: "local_synthetic",
+            modelCallCount: 0,
+            runtimeRequestCount: 0,
+            apiKeyReadCount: 0,
+            runID: runID,
+            preset: preset.rawValue,
+            reasoningDeltaCount: preset.reasoningDeltaCount,
+            assistantDeltaCount: preset.assistantDeltaCount,
+            formulaCount: preset.formulaCount,
+            sourceBatchSize: preset.sourceBatchSize,
+            sourceBatchIntervalMilliseconds: Double(
+                preset.sourceBatchIntervalNanoseconds
+            ) / 1_000_000,
+            cooldownSeconds: preset.cooldownSeconds,
+            outcome: outcome,
+            startedAt: Self.clientStressTimestamp(startedDate),
+            finishedAt: Self.clientStressTimestamp(finishedDate),
+            durationSeconds: Date.timeIntervalSinceReferenceDate
+                - startedWallTime,
+            expectedEventCount: preset.totalEventCount,
+            actualEventCount: actual.eventCount,
+            expectedFinalSequence: preset.totalEventCount,
+            actualFinalSequence: actual.finalSequence,
+            orderingValid: orderingValid,
+            expectedReasoningCharacters: expected.reasoningText.count,
+            actualReasoningCharacters: actual.reasoningText.count,
+            expectedAssistantCharacters: expected.assistantText.count,
+            actualAssistantCharacters: actual.assistantText.count,
+            expectedReasoningSHA256: expected.reasoningSHA256,
+            actualReasoningSHA256: actual.reasoningSHA256,
+            expectedAssistantSHA256: expected.assistantSHA256,
+            actualAssistantSHA256: actual.assistantSHA256,
+            contentValid: contentValid,
+            responsivenessThresholdSeconds: responsivenessThresholdSeconds,
+            responsivenessValid: responsivenessValid,
+            passed: passed,
+            averageCPUPercent: average(cpuValues),
+            maximumCPUPercent: cpuValues.max() ?? 0,
+            cooldownAverageCPUPercent: average(cooldownCPUValues),
+            peakResidentBytes: samples.compactMap(\.residentBytes).max(),
+            maximumMainActorGapSeconds: maximumMainActorGapSeconds,
+            sampleCount: samples.count,
+            error: error
+        )
+        try ClientStressArtifactStore.write(
+            summary,
+            named: "summary.json",
+            to: outputDirectory
+        )
+        try ClientStressArtifactStore.write(
+            samples,
+            named: "samples.json",
+            to: outputDirectory
+        )
+
+        let phase: ClientStressTestStatus.Phase
+        let message: String
+        switch outcome {
+        case "completed":
+            phase = passed ? .completed : .failed
+            if !contentValid {
+                message = "压测完成，但事件完整性校验失败。"
+            } else if !responsivenessValid {
+                message = String(
+                    format: "事件完整，但主线程最长停顿 %.2f 秒，响应性未通过。",
+                    maximumMainActorGapSeconds
+                )
+            } else {
+                message = "压测通过，事件完整且主线程停顿未超过 1 秒；模型调用数为 0。"
+            }
+        case "cancelled":
+            phase = .cancelled
+            message = "压测已停止，已保存部分产物。"
+        default:
+            phase = .failed
+            message = "压测失败：\(error ?? "未知错误")"
+        }
+        clientStressTestStatus = ClientStressTestStatus(
+            phase: phase,
+            preset: preset,
+            runID: runID,
+            deliveredEvents: actual.eventCount,
+            totalEvents: preset.totalEventCount,
+            progress: outcome == "completed" ? 1 : 0,
+            currentCPUPercent: samples.last?.cpuPercent,
+            residentBytes: samples.last?.residentBytes,
+            outputPath: outputDirectory.path,
+            message: message
+        )
+    }
+
+    private func clientStressRecord(
+        jobID: String,
+        conversationID: String,
+        timestamp: String,
+        status: ChatJobStatus,
+        result: ChatJobResult?,
+        error: String?
+    ) -> ChatJobRecord {
+        ChatJobRecord(
+            id: jobID,
+            status: status,
+            createdAt: timestamp,
+            updatedAt: Self.clientStressTimestamp(),
+            spec: ChatJobSpec(
+                request: "客户端本地压测",
+                conversationID: conversationID,
+                pdfDir: nil,
+                approvalMode: .ask
+            ),
+            attempts: [],
+            result: result,
+            error: error,
+            pendingApproval: nil,
+            contextUsage: nil
+        )
+    }
+
+    private func failedClientStressStatus(
+        preset: ClientStressTestPreset,
+        runID: String,
+        deliveredEvents: Int,
+        outputDirectory: URL,
+        message: String
+    ) -> ClientStressTestStatus {
+        ClientStressTestStatus(
+            phase: .failed,
+            preset: preset,
+            runID: runID,
+            deliveredEvents: deliveredEvents,
+            totalEvents: preset.totalEventCount,
+            progress: 0,
+            currentCPUPercent: nil,
+            residentBytes: nil,
+            outputPath: outputDirectory.path,
+            message: message
+        )
+    }
+
+    private func removePreviousClientStressJobs() {
+        for jobID in clientStressTestJobIDs {
+            eventFlushTasks[jobID]?.cancel()
+            eventFlushTasks.removeValue(forKey: jobID)
+            pendingJobEvents.removeValue(forKey: jobID)
+            eventCursors.removeValue(forKey: jobID)
+            jobEvents.removeValue(forKey: jobID)
+        }
+        jobs.removeAll { clientStressTestJobIDs.contains($0.id) }
+        clientStressTestJobIDs.removeAll()
+    }
+
+    private func average(_ values: [Double]) -> Double {
+        guard !values.isEmpty else {
+            return 0
+        }
+        return values.reduce(0, +) / Double(values.count)
+    }
+
+    private static func clientStressTimestamp(_ date: Date = Date()) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
+
+    private static func clientStressRunStamp() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+        return formatter.string(from: Date())
+    }
+
     private func connectRuntime(_ url: URL) {
         runtimeStatus = .online(url)
         api = PaperCopilotAPI(baseURL: url)
@@ -767,6 +1353,9 @@ final class AppModel: ObservableObject {
             task.cancel()
         }
         observationTasks.removeAll()
+        for jobID in Array(pendingJobEvents.keys) {
+            flushPendingEvents(for: jobID)
+        }
         api = nil
     }
 
@@ -775,12 +1364,17 @@ final class AppModel: ObservableObject {
             return
         }
         do {
-            jobs = try await api.listJobs()
+            let persistedJobs = try await api.listJobs()
+            let localStressJobs = jobs.filter {
+                clientStressTestJobIDs.contains($0.id)
+            }
+            jobs = persistedJobs + localStressJobs
+            jobs.sort { $0.updatedAt > $1.updatedAt }
             if !hasInitializedConversationSelection {
                 hasInitializedConversationSelection = true
                 selectedConversationID = conversations.first?.id
             }
-            for record in jobs where record.status.isActive {
+            for record in persistedJobs where record.status.isActive {
                 observe(record.id)
             }
         } catch {
@@ -870,9 +1464,44 @@ final class AppModel: ObservableObject {
         let cursor = eventCursors[jobID, default: 0]
         let freshEvents = events.filter { $0.seq > cursor }
         if !freshEvents.isEmpty {
-            jobEvents[jobID, default: []].append(contentsOf: freshEvents)
+            pendingJobEvents[jobID, default: []].append(
+                contentsOf: freshEvents
+            )
+            if freshEvents.contains(where: { $0.activityPhase != "delta" }) {
+                flushPendingEvents(for: jobID)
+            } else {
+                scheduleEventFlush(for: jobID)
+            }
         }
         eventCursors[jobID] = max(cursor, nextAfter)
+    }
+
+    private func scheduleEventFlush(for jobID: String) {
+        guard eventFlushTasks[jobID] == nil else {
+            return
+        }
+        eventFlushTasks[jobID] = Task { [weak self] in
+            do {
+                try await Task.sleep(
+                    nanoseconds: Self.eventPresentationIntervalNanoseconds
+                )
+            } catch {
+                return
+            }
+            self?.flushPendingEvents(for: jobID)
+        }
+    }
+
+    private func flushPendingEvents(for jobID: String) {
+        eventFlushTasks[jobID]?.cancel()
+        eventFlushTasks.removeValue(forKey: jobID)
+        guard
+            let events = pendingJobEvents.removeValue(forKey: jobID),
+            !events.isEmpty
+        else {
+            return
+        }
+        jobEvents[jobID, default: []].append(contentsOf: events)
     }
 
     private func upsert(_ record: ChatJobRecord) {

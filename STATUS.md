@@ -22,11 +22,33 @@ PDF 字体乱码恢复三条源码路径均已通过代表性真实学位论文�
 给出 OCR region；三个旧自动定位入口已经删除。OCR 流程从 `research-papers` 拆到独立
 `formula-ocr` Skill，同一任务同一公式最多三次 recognize，accept 写回显示 LaTeX。实现尚未
 跑 Python 测试或真实论文重建验证，不能宣称产品可用。后续真实验证提示词已经冻结在
-`docs/design/formula_ocr_validation_prompt.md`，但因客户端高 CPU 假死缺陷仍未修复，本轮
-明确暂缓执行。
+`docs/design/formula_ocr_validation_prompt.md`；客户端性能修复已通过本地合成压测，但公式
+OCR 长链路本身仍未执行验证。
 
-另有一个已复现的 macOS 客户端性能缺陷：长 reasoning 流结束后 `PaperCopilot` 仍持续
-占满一个 CPU 核心，Runtime 已空闲。该缺陷已写入 `TASKS.md`，当前只完成诊断，未改代码。
+macOS 长 reasoning 流第三轮 3,278 条回归和历史上强退的 10,000 条突发均已通过：两次
+事件、顺序和全文哈希完整，最大主 actor 超期分别为 0.462 秒和 0.505 秒，且都发生在冷却
+阶段；回放阶段最大约 0.222 秒和 0.210 秒，均无超过 1 秒的样本。10,000 条峰值 CPU
+74.68%、冷却平均 21.19%、最后采样 23.31%，未复现持续满核。模型、Runtime 请求和凭据
+读取计数均为 0。用户接受以 3,278、10,000 和 500 公式三项为本轮验收边界，不再运行
+50,000 条耐久或追加压测，因此客户端满核假死修复与压测入口任务已关闭。该结论不覆盖
+真实模型长流、长时间重复运行或内存泄漏证明。
+
+报告公式直接显示 LaTeX 源码的原因已经确认并完成源码修复：原视图没有 TeX 排版引擎，
+报告又主要使用 `latex` fenced code block。用户已批准原生 SwiftMath，工程现锁定 `1.7.3`；
+完成报告会识别常用展示和行内数学定界符，解析失败保留原始 LaTeX。为避免重新放大流式
+重绘，生成中的活动文本仍保持轻量纯文本。修复 `CGFloat.greatestFiniteMagnitude` 类型歧义
+后，Debug/Release arm64 构建均通过；尚未做 App 内公式视觉验证。
+
+设置页现已加入客户端本地压测入口：可选 3,278 条回归、10,000 条突发、50,000 条耐久和
+500 个公式预设。事件、推理文本、回答和公式全部由 Swift 确定性生成，压测路径不调用
+`PaperCopilotAPI`、Python Runtime、模型或凭据存储；本地压测会话也拒绝真实提交。运行会
+复用生产事件发布和 UI 渲染路径，并把完整性哈希、CPU、常驻内存和主 actor 采样间隔写入
+`~/.paper-copilot/stress-tests/<run_id>/`。用户首次运行三个预设：3,278 条与 500 公式写出
+完整产物，10,000 条突发卡死后强退。旧版把内容完整误显示为绿色成功且只在结束时落盘；
+现在已把 1 秒主 actor 响应阈值纳入通过判定，并在开始前写 `run.json`、运行中检查点更新
+`samples.json`。第二轮 3,278 条被正确判为失败；第三轮 3,278 条与 10,000 条已分别以
+最大超期 0.462 秒和 0.505 秒通过。此前 500 公式也通过。50,000 条耐久、停止/强退恢复
+和重复长跑未执行；用户已明确本轮不再继续压测，它们不是本次交付的待办项。
 
 ## PDF 字体乱码恢复实现
 
@@ -157,7 +179,7 @@ App 当前缓存或原论文。因此结论仅覆盖源码 `PdfTextCache` 的 Ca
 Runtime 均为 0.0%，`WindowServer` 为 48.5%–49.4%。直接症状是客户端界面进程持续占满
 一个核心并带动窗口合成负载。
 
-当前源码中的主要嫌疑链：
+修改前源码中的主要问题链：
 
 1. `AppModel` 为 `@MainActor`，每个 SSE payload 都把 fresh events 立即追加到
    `@Published jobEvents`；
@@ -166,10 +188,23 @@ Runtime 均为 0.0%，`WindowServer` 为 48.5%–49.4%。直接症状是客户�
 3. accumulator 对每个 delta 执行增长字符串追加，live reasoning 标题又反复扫描完整
    reasoning 文本。
 
-这条链已足以解释高频事件下的主线程放大效应，但还没有 Instruments 采样，不能把某一行
-宣称为唯一热点。修复时保持服务端事件、SSE 游标、持久化和恢复语义不变，只优化客户端
-合并/节流与增量派生状态；用保存事件或等价的 3,000+ 条流验证交互、CPU、最终文本、顺序
-和重连完整性。
+第一轮让纯 delta 最多每 200 ms 合并发布一次；活动字符串在数组内原位追加，生命周期事件
+和 reasoning 标题增量归约，完成后的 reasoning 展示只计算一次；timeline 使用
+`LazyVStack`。服务端事件、SSE 游标、持久化和恢复语义未改。首次 3,278 条回放证明内容
+完整但响应性失败：最大主 actor 超期 36.07 秒。该预设逐条发送事件，暴露出 reasoning
+完成事件单独发布时先展开布局完整 transcript、下一批 assistant 才折叠的中间状态。第二轮
+将 reasoning 默认保持折叠后，最大超期降到 2.55 秒；新曲线剩余高负载集中在后半段流式
+回答。第三轮限制生成中回答预览为最近 4,000 字符并关闭选择，完成报告不丢全文；3,278 条
+回归与 10,000 条突发均已通过。用户接受当前验证边界，不再运行 50,000 条耐久。
+
+为执行该验证，设置页增加了只在客户端内运行的压测模块。合成任务进入既有 `applyEvents`
+和 conversation 视图，但不会进入 API、Runtime、模型或正常持久化。运行中每 0.5 秒采样
+进程 CPU、常驻内存和主 actor 延迟，事件完成后继续采样 10 秒；事件总数、序号、文本字符数
+和 SHA-256 一并写入 JSON。首次两个完整产物确认模型、Runtime 与凭据计数均为 0。旧版
+强退目录为空，现已改为开始前写 `run.json`、运行中每两秒更新 `samples.json`；同时新增
+1 秒主 actor 响应阈值，内容完整但卡顿会标红失败。第二轮 3,278 条已正确标红；第三轮样本
+新增 `deliveredEvents`，可直接映射 reasoning/assistant 阶段。3,278 条回归和 10,000 条
+突发均已通过。
 
 ## 本轮文件边界
 
@@ -180,8 +215,20 @@ Runtime 均为 0.0%，`WindowServer` 为 48.5%–49.4%。直接症状是客户�
 - `tests/shared/test_pdf_font_repair.py`：CMap、后代字体、GID 与正文顺序的定向测试。
 - `pyproject.toml`、`uv.lock`：fontTools 依赖。
 - `scripts/build_macos_app.sh`：macOS Helper 打包收集 fontTools。
-- `ARCHITECTURE.md`：同步字体恢复边界。
-- `TASKS.md`：分别记录字体恢复和公式定位的未完成验证。
+- `apps/macos/PaperCopilot/AppModel.swift`：delta 事件合并发布、压测编排、本地会话隔离、
+  真实提交阻断以及 Runtime 任务刷新隔离。
+- `apps/macos/PaperCopilot/Views/ConversationDetailView.swift`：活动增量归约、reasoning 展示
+  缓存和 timeline 惰性布局。
+- `apps/macos/PaperCopilot/Views/MarkdownReportView.swift`：展示/行内数学解析、SwiftMath
+  图片排版缓存和原始 LaTeX 降级。
+- `apps/macos/PaperCopilot/Diagnostics/ClientStressTest.swift`：本地事件/公式生成、资源采样、
+  完整性摘要和压测产物写入。
+- `apps/macos/PaperCopilot/Views/SettingsView.swift`：压测预设、开始/停止、进度与资源指标入口。
+- `apps/macos/PaperCopilot.xcodeproj/project.pbxproj` 与 workspace `Package.resolved`：加入并
+  锁定 SwiftMath `1.7.3`。
+- `ARCHITECTURE.md`：同步字体恢复和客户端本地压测边界。
+- `TASKS.md`：保留字体恢复、公式定位、Plus-M 和数学排版的未完成验证；已完成的客户端
+  性能与压测入口任务从活动清单移除。
 
 上述字体抽查发生在公式定位重构之前，使用的是旧缓存 schema。当前源码已换成弱提示、
 `repair_span_id`、`query_page_geometry`、显式 region OCR 和整段 LaTeX accept；旧验证不能
@@ -189,12 +236,18 @@ Runtime 均为 0.0%，`WindowServer` 为 48.5%–49.4%。直接症状是客户�
 
 ## 尚未验证
 
-按仓库规则，本次执行了用户确认的 8 项定向 pytest 和 5 篇代表性论文缓存验证，没有运行
-Ruff、mypy、完整 pytest 或 macOS App 构建。以下事项仍待完成：
+按仓库规则，本次执行了用户确认的 8 项定向 pytest、5 篇代表性论文缓存验证和
+Debug/Release arm64 客户端构建，没有运行 Ruff、mypy、完整 pytest 或包含 Python Helper
+的完整分发打包。以下事项仍待完成：
 
 1. 找到真实使用显式 `CIDToGIDMap` 流的 PDF 做集成验证；当前流解析和 CID→GID 应用只有
    定向测试，真实样本覆盖的是间接数组内 `/Identity` 与缺失映射 ReaderEx；
-2. 构建 macOS App，确认 PyInstaller 包含 fontTools 所需模块，并在产品缓存目录复现结果。
+2. 构建 macOS App，确认 PyInstaller 包含 fontTools 所需模块，并在产品缓存目录复现结果；
+3. 在完成报告中验证 SwiftMath 的展示/行内公式、现有多行 `latex` block、深浅色、长公式、
+   链接和失败降级。流式活动文本按设计不做数学排版；
+
+客户端压测已按用户接受的边界结束，不再把 50,000 条、停止/强退恢复或重复长跑列为本轮
+待办。现有单轮产物不能证明真实模型长流表现或长期无内存泄漏。
 
 ## 其他未完成工程线
 
@@ -244,10 +297,10 @@ recognize 最多三次；每次真正进入 Helper 推理前写 application even
 ## Git 与下一步
 
 - 分支：`main`。
-- 本轮提交包含字体恢复和公式定位两组修改；公式定位新增独立 Skill、页面坐标工具、缓存
-  弱提示与 LaTeX 替换协议，并替换相应定向测试文件。
+- 本次提交包含客户端性能修复、内置压测入口、数学排版、SwiftMath 依赖及状态文档。
 - 不提交 PDF、临时修复副本、生成缓存、权重、凭据、构建产物或私有实验产物。
 
-建议下一步：先修复并验证长推理 UI 满核假死，再按任务 2 重建代表缓存并发送已经冻结的
-自然用户提示词；人工复核定位与裁剪证据后，再单独验证三次上限和 LaTeX accept/回读。
-不要把公式定位结果与此前字体恢复验证混为同一验收。Plus-M 打包仍保持独立任务。
+建议下一步：检查完成报告中的常用数学定界符和现有 `latex` 代码块，再按任务 2 重建代表
+缓存并发送已经冻结的自然用户提示词；人工复核定位与裁剪证据后，单独验证三次上限和
+LaTeX accept/回读。不要把公式定位结果与此前字体恢复验证混为同一验收。Plus-M 打包仍
+保持独立任务。

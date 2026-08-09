@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import PDFKit
+import SwiftMath
 import SwiftUI
 
 struct MarkdownReportView: View {
@@ -183,16 +185,23 @@ private struct MarkdownBlockView: View {
     var body: some View {
         switch block {
         case .heading(let level, let text):
-            Text(inlineMarkdown(text))
-                .font(headingFont(for: level))
+            MarkdownInlineView(
+                source: text,
+                fontSize: headingFontSize(for: level),
+                fontWeight: .semibold,
+                foregroundColor: .labelColor,
+                lineSpacing: 2
+            )
                 .foregroundStyle(.primary)
-                .lineSpacing(2)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .paragraph(let text):
-            Text(inlineMarkdown(text))
-                .font(.system(size: 15))
+            MarkdownInlineView(
+                source: text,
+                fontSize: 15,
+                foregroundColor: .labelColor,
+                lineSpacing: 5
+            )
                 .foregroundStyle(.primary)
-                .lineSpacing(5)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .list(let items):
             MarkdownListView(items: items)
@@ -201,16 +210,21 @@ private struct MarkdownBlockView: View {
                 RoundedRectangle(cornerRadius: 1.5, style: .continuous)
                     .fill(Color.accentColor.opacity(0.55))
                     .frame(width: 3)
-                Text(inlineMarkdown(text))
-                    .font(.system(size: 14.5))
+                MarkdownInlineView(
+                    source: text,
+                    fontSize: 14.5,
+                    foregroundColor: .secondaryLabelColor,
+                    lineSpacing: 4,
+                    italic: true
+                )
                     .foregroundStyle(.secondary)
-                    .italic()
-                    .lineSpacing(4)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.vertical, 4)
         case .code(let language, let text):
             MarkdownCodeBlock(language: language, text: text)
+        case .math(let latex):
+            MarkdownMathBlock(latex: latex)
         case .table(let headers, let rows):
             MarkdownTable(headers: headers, rows: rows)
         case .rule:
@@ -219,14 +233,14 @@ private struct MarkdownBlockView: View {
         }
     }
 
-    private func headingFont(for level: Int) -> Font {
+    private func headingFontSize(for level: Int) -> CGFloat {
         switch level {
         case 1:
-            return .system(size: 24, weight: .semibold)
+            return 24
         case 2:
-            return .system(size: 20, weight: .semibold)
+            return 20
         default:
-            return .system(size: 16, weight: .semibold)
+            return 16
         }
     }
 }
@@ -242,9 +256,12 @@ private struct MarkdownListView: View {
                         .font(.system(size: 14, weight: .medium))
                         .foregroundStyle(.secondary)
                         .frame(width: 22, alignment: .trailing)
-                    Text(inlineMarkdown(item.text))
-                        .font(.system(size: 15))
-                        .lineSpacing(4)
+                    MarkdownInlineView(
+                        source: item.text,
+                        fontSize: 15,
+                        foregroundColor: .labelColor,
+                        lineSpacing: 4
+                    )
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(.leading, CGFloat(item.depth) * 20)
@@ -312,14 +329,15 @@ private struct MarkdownTable: View {
     private func tableRow(_ cells: [String], isHeader: Bool) -> some View {
         HStack(alignment: .top, spacing: 0) {
             ForEach(headers.indices, id: \.self) { columnIndex in
-                Text(inlineMarkdown(
-                    columnIndex < cells.count ? cells[columnIndex] : ""
-                ))
-                .font(.system(
-                    size: 13,
-                    weight: isHeader ? .semibold : .regular
-                ))
-                .lineSpacing(3)
+                MarkdownInlineView(
+                    source: columnIndex < cells.count
+                        ? cells[columnIndex]
+                        : "",
+                    fontSize: 13,
+                    fontWeight: isHeader ? .semibold : .regular,
+                    foregroundColor: .labelColor,
+                    lineSpacing: 3
+                )
                 .frame(
                     width: columnWidths[columnIndex],
                     alignment: .topLeading
@@ -357,6 +375,7 @@ private enum MarkdownBlock {
     case list([MarkdownListItem])
     case quote(String)
     case code(language: String?, text: String)
+    case math(String)
     case table(headers: [String], rows: [[String]])
     case rule
 
@@ -369,7 +388,7 @@ private enum MarkdownBlock {
             return level <= 2 ? 30 : 22
         case .paragraph:
             return 14
-        case .list, .quote, .code, .table:
+        case .list, .quote, .code, .math, .table:
             return 18
         case .rule:
             return 24
@@ -418,10 +437,15 @@ private enum MarkdownParser {
 
             if trimmed.hasPrefix("```") {
                 if let currentCodeLines = codeLines {
-                    blocks.append(.code(
-                        language: codeLanguage,
-                        text: currentCodeLines.joined(separator: "\n")
-                    ))
+                    let text = currentCodeLines.joined(separator: "\n")
+                    if isMathLanguage(codeLanguage) {
+                        blocks.append(.math(text))
+                    } else {
+                        blocks.append(.code(
+                            language: codeLanguage,
+                            text: text
+                        ))
+                    }
                     codeLines = nil
                     codeLanguage = nil
                 } else {
@@ -439,6 +463,17 @@ private enum MarkdownParser {
             if codeLines != nil {
                 codeLines?.append(line)
                 lineIndex += 1
+                continue
+            }
+
+            if let displayMath = displayMathBlock(
+                in: lines,
+                startingAt: lineIndex
+            ) {
+                flushParagraph()
+                flushList()
+                blocks.append(.math(displayMath.latex))
+                lineIndex = displayMath.nextIndex
                 continue
             }
 
@@ -519,12 +554,101 @@ private enum MarkdownParser {
         flushParagraph()
         flushList()
         if let codeLines {
-            blocks.append(.code(
-                language: codeLanguage,
-                text: codeLines.joined(separator: "\n")
-            ))
+            let text = codeLines.joined(separator: "\n")
+            if isMathLanguage(codeLanguage) {
+                blocks.append(.math(text))
+            } else {
+                blocks.append(.code(
+                    language: codeLanguage,
+                    text: text
+                ))
+            }
         }
         return blocks
+    }
+
+    private static func isMathLanguage(_ language: String?) -> Bool {
+        guard let language else {
+            return false
+        }
+        return ["latex", "tex", "math"].contains(language.lowercased())
+    }
+
+    private static func displayMathBlock(
+        in lines: [String],
+        startingAt index: Int
+    ) -> (latex: String, nextIndex: Int)? {
+        let trimmed = lines[index]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if
+            trimmed.hasPrefix("$$"),
+            trimmed.hasSuffix("$$"),
+            trimmed.count > 4
+        {
+            return (
+                String(trimmed.dropFirst(2).dropLast(2)),
+                index + 1
+            )
+        }
+        if
+            trimmed.hasPrefix("\\["),
+            trimmed.hasSuffix("\\]"),
+            trimmed.count > 4
+        {
+            return (
+                String(trimmed.dropFirst(2).dropLast(2)),
+                index + 1
+            )
+        }
+        if trimmed == "$$" || trimmed == "\\[" {
+            let closing = trimmed == "$$" ? "$$" : "\\]"
+            var mathLines: [String] = []
+            var currentIndex = index + 1
+            while currentIndex < lines.count {
+                let candidate = lines[currentIndex]
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if candidate == closing {
+                    return (
+                        mathLines.joined(separator: "\n"),
+                        currentIndex + 1
+                    )
+                }
+                mathLines.append(lines[currentIndex])
+                currentIndex += 1
+            }
+            return nil
+        }
+
+        guard let environment = latexEnvironmentName(in: trimmed) else {
+            return nil
+        }
+        let closing = "\\end{\(environment)}"
+        var mathLines: [String] = []
+        var currentIndex = index
+        while currentIndex < lines.count {
+            mathLines.append(lines[currentIndex])
+            if lines[currentIndex].contains(closing) {
+                return (
+                    mathLines.joined(separator: "\n"),
+                    currentIndex + 1
+                )
+            }
+            currentIndex += 1
+        }
+        return nil
+    }
+
+    private static func latexEnvironmentName(in line: String) -> String? {
+        guard line.hasPrefix("\\begin{") else {
+            return nil
+        }
+        let nameStart = line.index(line.startIndex, offsetBy: 7)
+        guard let nameEnd = line[nameStart...].firstIndex(of: "}") else {
+            return nil
+        }
+        let name = String(line[nameStart..<nameEnd])
+        return name.isEmpty ? nil : name
     }
 
     private static func heading(from line: String) -> (
@@ -614,6 +738,665 @@ private enum MarkdownParser {
             .dropLast(trimmed.hasSuffix("|") ? 1 : 0)
             .split(separator: "|", omittingEmptySubsequences: false)
             .map { $0.trimmingCharacters(in: .whitespaces) }
+    }
+}
+
+private struct MarkdownMathBlock: View {
+    let latex: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                if let image = MathImageRenderer.image(
+                    latex: row,
+                    fontSize: 18,
+                    mode: .display
+                ) {
+                    ScrollView(.horizontal) {
+                        Image(nsImage: image)
+                            .fixedSize()
+                            .accessibilityLabel(row)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    MarkdownCodeBlock(language: "latex", text: row)
+                }
+            }
+        }
+    }
+
+    private var rows: [String] {
+        let trimmed = latex.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return [latex]
+        }
+        if trimmed.contains("\\begin{") {
+            return [trimmed]
+        }
+        let lines = trimmed
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter {
+                !$0.isEmpty && $0 != "\\quad" && $0 != "\\qquad"
+            }
+        return lines.isEmpty ? [trimmed] : lines
+    }
+}
+
+private struct MarkdownInlineView: View {
+    let source: String
+    let fontSize: CGFloat
+    let fontWeight: NSFont.Weight
+    let foregroundColor: NSColor
+    let lineSpacing: CGFloat
+    let italic: Bool
+
+    init(
+        source: String,
+        fontSize: CGFloat,
+        fontWeight: NSFont.Weight = .regular,
+        foregroundColor: NSColor,
+        lineSpacing: CGFloat,
+        italic: Bool = false
+    ) {
+        self.source = source
+        self.fontSize = fontSize
+        self.fontWeight = fontWeight
+        self.foregroundColor = foregroundColor
+        self.lineSpacing = lineSpacing
+        self.italic = italic
+    }
+
+    @ViewBuilder
+    var body: some View {
+        if InlineMathParser.containsMath(in: source) {
+            MarkdownInlineMathText(
+                source: source,
+                fontSize: fontSize,
+                fontWeight: fontWeight,
+                foregroundColor: foregroundColor,
+                lineSpacing: lineSpacing,
+                italic: italic
+            )
+        } else {
+            if italic {
+                plainMarkdownText.italic()
+            } else {
+                plainMarkdownText
+            }
+        }
+    }
+
+    private var plainMarkdownText: some View {
+        Text(inlineMarkdown(source))
+            .font(.system(
+                size: fontSize,
+                weight: swiftUIFontWeight
+            ))
+            .lineSpacing(lineSpacing)
+    }
+
+    private var swiftUIFontWeight: Font.Weight {
+        fontWeight == .semibold ? .semibold : .regular
+    }
+}
+
+private struct MarkdownInlineMathText: NSViewRepresentable {
+    let source: String
+    let fontSize: CGFloat
+    let fontWeight: NSFont.Weight
+    let foregroundColor: NSColor
+    let lineSpacing: CGFloat
+    let italic: Bool
+    @Environment(\.openURL) private var openURL
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(openURL: openURL)
+    }
+
+    func makeNSView(context: Context) -> NSTextView {
+        let textView = NSTextView()
+        textView.delegate = context.coordinator
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isRichText = true
+        textView.drawsBackground = false
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.isHorizontallyResizable = false
+        textView.isVerticallyResizable = true
+        textView.maxSize = CGSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        textView.linkTextAttributes = [
+            .foregroundColor: NSColor.linkColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+        ]
+        update(textView, coordinator: context.coordinator)
+        return textView
+    }
+
+    func updateNSView(_ textView: NSTextView, context: Context) {
+        context.coordinator.openURL = openURL
+        update(textView, coordinator: context.coordinator)
+    }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView textView: NSTextView,
+        context: Context
+    ) -> CGSize? {
+        let width = proposal.width ?? 760
+        guard width.isFinite, width > 0 else {
+            return nil
+        }
+        textView.frame.size.width = width
+        textView.textContainer?.containerSize = CGSize(
+            width: width,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+        guard
+            let layoutManager = textView.layoutManager,
+            let textContainer = textView.textContainer
+        else {
+            return CGSize(width: width, height: fontSize + lineSpacing)
+        }
+        layoutManager.ensureLayout(for: textContainer)
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        return CGSize(
+            width: width,
+            height: max(ceil(usedRect.height), fontSize + lineSpacing)
+        )
+    }
+
+    private func update(
+        _ textView: NSTextView,
+        coordinator: Coordinator
+    ) {
+        let styleKey = [
+            String(describing: fontSize),
+            String(describing: fontWeight.rawValue),
+            foregroundColor.description,
+            String(describing: lineSpacing),
+            String(describing: italic),
+        ].joined(separator: "|")
+        guard
+            coordinator.source != source
+                || coordinator.styleKey != styleKey
+        else {
+            return
+        }
+        coordinator.source = source
+        coordinator.styleKey = styleKey
+        textView.textStorage?.setAttributedString(
+            InlineMathAttributedStringBuilder.build(
+                source: source,
+                fontSize: fontSize,
+                fontWeight: fontWeight,
+                foregroundColor: foregroundColor,
+                lineSpacing: lineSpacing,
+                italic: italic
+            )
+        )
+        textView.invalidateIntrinsicContentSize()
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var openURL: OpenURLAction
+        var source: String?
+        var styleKey: String?
+
+        init(openURL: OpenURLAction) {
+            self.openURL = openURL
+        }
+
+        func textView(
+            _ textView: NSTextView,
+            clickedOnLink link: Any,
+            at charIndex: Int
+        ) -> Bool {
+            let url: URL?
+            if let link = link as? URL {
+                url = link
+            } else if let link = link as? String {
+                url = URL(string: link)
+            } else {
+                url = nil
+            }
+            guard let url else {
+                return false
+            }
+            openURL(url)
+            return true
+        }
+    }
+}
+
+private enum InlineMathAttributedStringBuilder {
+    private enum PresentationMask {
+        static let emphasized: UInt = 1 << 0
+        static let stronglyEmphasized: UInt = 1 << 1
+        static let code: UInt = 1 << 2
+        static let strikethrough: UInt = 1 << 5
+    }
+
+    static func build(
+        source: String,
+        fontSize: CGFloat,
+        fontWeight: NSFont.Weight,
+        foregroundColor: NSColor,
+        lineSpacing: CGFloat,
+        italic: Bool
+    ) -> NSAttributedString {
+        let output = NSMutableAttributedString(string: "")
+        let font = resolvedFont(
+            size: fontSize,
+            weight: fontWeight,
+            italic: italic
+        )
+        for segment in InlineMathParser.parse(source) {
+            switch segment {
+            case .text(let text):
+                output.append(styledMarkdown(
+                    text,
+                    font: font,
+                    foregroundColor: foregroundColor,
+                    lineSpacing: lineSpacing,
+                    italic: italic
+                ))
+            case .math(let latex, let raw):
+                guard let image = MathImageRenderer.image(
+                    latex: latex,
+                    fontSize: fontSize + 1,
+                    mode: .text
+                ) else {
+                    output.append(styledMarkdown(
+                        raw,
+                        font: NSFont.monospacedSystemFont(
+                            ofSize: fontSize - 1,
+                            weight: .regular
+                        ),
+                        foregroundColor: foregroundColor,
+                        lineSpacing: lineSpacing,
+                        italic: false
+                    ))
+                    continue
+                }
+                let attachment = NSTextAttachment()
+                attachment.image = image
+                let attachmentText = NSMutableAttributedString(
+                    attachment: attachment
+                )
+                let baselineOffset = min(
+                    0,
+                    (font.capHeight - image.size.height) / 2
+                )
+                attachmentText.addAttribute(
+                    .baselineOffset,
+                    value: baselineOffset,
+                    range: NSRange(location: 0, length: attachmentText.length)
+                )
+                output.append(attachmentText)
+            }
+        }
+        return output
+    }
+
+    private static func styledMarkdown(
+        _ source: String,
+        font: NSFont,
+        foregroundColor: NSColor,
+        lineSpacing: CGFloat,
+        italic: Bool
+    ) -> NSAttributedString {
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+        let parsed = (try? NSAttributedString(
+            markdown: source,
+            options: options
+        )) ?? NSAttributedString(string: source)
+        let result = NSMutableAttributedString(attributedString: parsed)
+        let fullRange = NSRange(location: 0, length: result.length)
+        guard fullRange.length > 0 else {
+            return result
+        }
+        var fontRuns: [(NSRange, NSFont)] = []
+        result.enumerateAttribute(
+            .font,
+            in: fullRange
+        ) { value, range, _ in
+            let runFont: NSFont
+            if let existingFont = value as? NSFont {
+                runFont = NSFontManager.shared.convert(
+                    existingFont,
+                    toSize: font.pointSize
+                )
+            } else {
+                runFont = font
+            }
+            fontRuns.append((range, runFont))
+        }
+        for (range, runFont) in fontRuns {
+            let styledFont = italic
+                ? NSFontManager.shared.convert(
+                    runFont,
+                    toHaveTrait: .italicFontMask
+                )
+                : runFont
+            result.addAttribute(.font, value: styledFont, range: range)
+        }
+        result.addAttribute(
+            .foregroundColor,
+            value: foregroundColor,
+            range: fullRange
+        )
+        applyInlinePresentationIntents(
+            to: result,
+            baseFont: font,
+            forceItalic: italic
+        )
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = lineSpacing
+        result.addAttribute(
+            .paragraphStyle,
+            value: paragraphStyle,
+            range: fullRange
+        )
+        return result
+    }
+
+    private static func applyInlinePresentationIntents(
+        to result: NSMutableAttributedString,
+        baseFont: NSFont,
+        forceItalic: Bool
+    ) {
+        let fullRange = NSRange(location: 0, length: result.length)
+        var runs: [(NSRange, UInt)] = []
+        result.enumerateAttribute(
+            .inlinePresentationIntent,
+            in: fullRange
+        ) { value, range, _ in
+            guard let rawValue = (value as? NSNumber)?.uintValue else {
+                return
+            }
+            runs.append((range, rawValue))
+        }
+        for (range, rawValue) in runs {
+            var runFont = baseFont
+            if rawValue & PresentationMask.stronglyEmphasized != 0 {
+                runFont = NSFontManager.shared.convert(
+                    runFont,
+                    toHaveTrait: .boldFontMask
+                )
+            }
+            if forceItalic || rawValue & PresentationMask.emphasized != 0 {
+                runFont = NSFontManager.shared.convert(
+                    runFont,
+                    toHaveTrait: .italicFontMask
+                )
+            }
+            if rawValue & PresentationMask.code != 0 {
+                runFont = NSFont.monospacedSystemFont(
+                    ofSize: baseFont.pointSize - 1,
+                    weight: .regular
+                )
+            }
+            result.addAttribute(.font, value: runFont, range: range)
+            if rawValue & PresentationMask.strikethrough != 0 {
+                result.addAttribute(
+                    .strikethroughStyle,
+                    value: NSUnderlineStyle.single.rawValue,
+                    range: range
+                )
+            }
+        }
+    }
+
+    private static func resolvedFont(
+        size: CGFloat,
+        weight: NSFont.Weight,
+        italic: Bool
+    ) -> NSFont {
+        let font = NSFont.systemFont(ofSize: size, weight: weight)
+        guard italic else {
+            return font
+        }
+        return NSFontManager.shared.convert(
+            font,
+            toHaveTrait: .italicFontMask
+        )
+    }
+}
+
+private enum MathImageRenderer {
+    private static let cache = NSCache<NSString, NSImage>()
+
+    static func image(
+        latex: String,
+        fontSize: CGFloat,
+        mode: MTMathUILabelMode
+    ) -> NSImage? {
+        let normalized = normalizedLatex(latex)
+        guard !normalized.isEmpty else {
+            return nil
+        }
+        let modeKey: String
+        switch mode {
+        case .display:
+            modeKey = "display"
+        case .text:
+            modeKey = "text"
+        }
+        let cacheKey = "\(modeKey)|\(fontSize)|\(normalized)" as NSString
+        if let cached = cache.object(forKey: cacheKey) {
+            return cached
+        }
+        let renderer = MTMathImage(
+            latex: normalized,
+            fontSize: fontSize,
+            textColor: NSColor.labelColor,
+            labelMode: mode,
+            textAlignment: .left
+        )
+        let (error, image) = renderer.asImage()
+        guard error == nil, let image else {
+            return nil
+        }
+        cache.setObject(image, forKey: cacheKey)
+        return image
+    }
+
+    private static func normalizedLatex(_ latex: String) -> String {
+        let trimmed = latex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if
+            trimmed.hasPrefix("$$"),
+            trimmed.hasSuffix("$$"),
+            trimmed.count > 4
+        {
+            return String(trimmed.dropFirst(2).dropLast(2))
+        }
+        if
+            trimmed.hasPrefix("\\["),
+            trimmed.hasSuffix("\\]"),
+            trimmed.count > 4
+        {
+            return String(trimmed.dropFirst(2).dropLast(2))
+        }
+        if
+            trimmed.hasPrefix("\\("),
+            trimmed.hasSuffix("\\)"),
+            trimmed.count > 4
+        {
+            return String(trimmed.dropFirst(2).dropLast(2))
+        }
+        if
+            trimmed.hasPrefix("$"),
+            trimmed.hasSuffix("$"),
+            trimmed.count > 2
+        {
+            return String(trimmed.dropFirst().dropLast())
+        }
+        return trimmed
+    }
+}
+
+private enum InlineMathSegment {
+    case text(String)
+    case math(latex: String, raw: String)
+}
+
+private enum InlineMathParser {
+    static func containsMath(in source: String) -> Bool {
+        parse(source).contains { segment in
+            if case .math = segment {
+                return true
+            }
+            return false
+        }
+    }
+
+    static func parse(_ source: String) -> [InlineMathSegment] {
+        var segments: [InlineMathSegment] = []
+        var textStart = source.startIndex
+        var cursor = source.startIndex
+
+        func appendText(until end: String.Index) {
+            guard textStart < end else {
+                return
+            }
+            segments.append(.text(String(source[textStart..<end])))
+        }
+
+        while cursor < source.endIndex {
+            if source[cursor] == "`", !isEscaped(cursor, in: source) {
+                let afterOpening = source.index(after: cursor)
+                if let closing = source[afterOpening...].firstIndex(of: "`") {
+                    cursor = source.index(after: closing)
+                    continue
+                }
+            }
+
+            if
+                source[cursor...].hasPrefix("\\("),
+                !isEscaped(cursor, in: source),
+                let closing = closingParenthesis(
+                    in: source,
+                    after: source.index(cursor, offsetBy: 2)
+                )
+            {
+                appendText(until: cursor)
+                let contentStart = source.index(cursor, offsetBy: 2)
+                let rawEnd = closing.upperBound
+                segments.append(.math(
+                    latex: String(source[contentStart..<closing.lowerBound]),
+                    raw: String(source[cursor..<rawEnd])
+                ))
+                cursor = rawEnd
+                textStart = rawEnd
+                continue
+            }
+
+            if
+                source[cursor] == "$",
+                !isEscaped(cursor, in: source),
+                let contentStart = validDollarContentStart(
+                    in: source,
+                    after: cursor
+                ),
+                let closing = closingDollar(
+                    in: source,
+                    after: contentStart
+                )
+            {
+                appendText(until: cursor)
+                let rawEnd = source.index(after: closing)
+                segments.append(.math(
+                    latex: String(source[contentStart..<closing]),
+                    raw: String(source[cursor..<rawEnd])
+                ))
+                cursor = rawEnd
+                textStart = rawEnd
+                continue
+            }
+            cursor = source.index(after: cursor)
+        }
+        appendText(until: source.endIndex)
+        return segments.isEmpty ? [.text(source)] : segments
+    }
+
+    private static func validDollarContentStart(
+        in source: String,
+        after opening: String.Index
+    ) -> String.Index? {
+        let next = source.index(after: opening)
+        guard
+            next < source.endIndex,
+            source[next] != "$",
+            !source[next].isWhitespace
+        else {
+            return nil
+        }
+        return next
+    }
+
+    private static func closingDollar(
+        in source: String,
+        after start: String.Index
+    ) -> String.Index? {
+        var cursor = start
+        while cursor < source.endIndex {
+            if source[cursor] == "$", !isEscaped(cursor, in: source) {
+                let previous = source.index(before: cursor)
+                let next = source.index(after: cursor)
+                if
+                    !source[previous].isWhitespace,
+                    next == source.endIndex || source[next] != "$"
+                {
+                    return cursor
+                }
+            }
+            cursor = source.index(after: cursor)
+        }
+        return nil
+    }
+
+    private static func closingParenthesis(
+        in source: String,
+        after start: String.Index
+    ) -> Range<String.Index>? {
+        var searchStart = start
+        while
+            let range = source.range(
+                of: "\\)",
+                range: searchStart..<source.endIndex
+            )
+        {
+            if !isEscaped(range.lowerBound, in: source) {
+                return range
+            }
+            searchStart = range.upperBound
+        }
+        return nil
+    }
+
+    private static func isEscaped(
+        _ index: String.Index,
+        in source: String
+    ) -> Bool {
+        var slashCount = 0
+        var cursor = index
+        while cursor > source.startIndex {
+            let previous = source.index(before: cursor)
+            guard source[previous] == "\\" else {
+                break
+            }
+            slashCount += 1
+            cursor = previous
+        }
+        return slashCount.isMultiple(of: 2) == false
     }
 }
 

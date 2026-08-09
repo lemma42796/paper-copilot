@@ -51,9 +51,9 @@ Symbol MT 和 ReaderEx 三条源码缓存路径均已用代表性真实学位论
 
 ### 2. 验证主动坐标探索式公式 OCR
 
-状态：`implementation_complete_validation_deferred_for_client_bug`。旧三级定位代码已经
-删除，新协议和独立 Skill 已实现；代表公式和自然用户提示词已经冻结，但客户端长推理流
-满核假死缺陷尚未修复，因此产品验证暂缓。
+状态：`implementation_complete_validation_pending`。旧三级定位代码已经删除，新协议和
+独立 Skill 已实现；代表公式和自然用户提示词已经冻结。客户端性能修复已通过本地合成
+压测，公式 OCR 长链路本身仍待验证。
 
 已完成：
 
@@ -74,14 +74,12 @@ Symbol MT 和 ReaderEx 三条源码缓存路径均已用代表性真实学位论
 
 尚未完成：
 
-- 未运行 Python 测试、Ruff、mypy 或 macOS App 构建；
+- 未运行 Python 测试、Ruff 或 mypy；
 - 未用代表性真实论文重建新 fingerprint 缓存，核对弱提示、逐字符坐标和
   `repair_span_id` 的对应关系；
 - 未核对旧 v2 accepted OCR revision 在 v3 中不自动迁移时的产品提示和重新识别体验；
 - 未执行安装 Plus-M 后的真实三次重裁剪、次数拒绝、乱码公式 accept、非乱码整段替换和
-  缓存回读验证；
-- 客户端满核假死修复完成前不执行上述长链路产品验证，避免把 UI 无响应混同为定位或 OCR
-  失败。
+  缓存回读验证。
 
 ### 3. 构建并验证 Plus-M Formula OCR 可选组件
 
@@ -98,30 +96,25 @@ Symbol MT 和 ReaderEx 三条源码缓存路径均已用代表性真实学位论
 - 真机安装更新，验证冷启动、连续复用、超时/崩溃重启、一小时空闲释放和真实公式识别；
 - 有验证结果后再决定是否清理旧 Plus-S 安装或保留回滚版本。
 
-### 4. 修复长推理流导致 macOS 界面满核假死
+### 4. 渲染报告中的 LaTeX 数学公式
 
-状态：`diagnosed_implementation_pending`，任务和 Runtime 均正常完成，问题已定位到 macOS
-客户端对高频流式事件的主线程处理；本轮只记录缺陷，尚未修改实现。
+状态：`build_complete_visual_validation_pending`。用户已批准新增原生 SwiftMath；工程依赖
+和报告数学排版源码已经实现，Debug/Release arm64 构建通过，尚未在 App 中视觉验证。
 
-复现证据：
+已实现：
 
-- job `job-20260808T180219-3bfaa96a8a` 在约 5 分 24 秒后以 `end_turn` 正常完成，报告已
-  持久化，服务端事件在推理期间持续到达，不是模型或 Runtime 无响应；
-- `events.jsonl` 共 3,278 行、1,176,218 字节，其中 reasoning 2,749 条、assistant
-  511 条；
-- 任务结束后连续三次进程快照中，`PaperCopilot` 为 99.0%–100.1% CPU，两个 Runtime
-  进程均为 0.0%，`WindowServer` 为 48.5%–49.4%，界面仍无法正常交互；
-- `AppModel` 在主 actor 上把每批新事件立即追加到 `@Published jobEvents`；
-  `JobTurnView` 随每个序号变化接收完整事件数组，累积 delta 到不断增长的字符串，并在
-  live reasoning 标题计算中反复扫描完整 reasoning 文本。该链条是当前源码支持的主要
-  原因，具体热点仍需用 Instruments 或等价采样确认。
+- Swift Package 依赖锁定 SwiftMath `1.7.3`，只在本地通过 AppKit/CoreText 排版，不使用
+  WebView 或运行时联网；
+- `MarkdownReportView` 将 `latex`、`tex`、`math` fenced code block，以及 `$$...$$`、
+  `\[...\]` 和完整 `\begin{...}...\end{...}` 识别为展示公式；
+- 段落、标题、列表、引用和表格单元格识别 `$...$` 与 `\(...\)` 行内公式，同时保留
+  Markdown 链接、强调、代码和删除线样式；
+- 公式图片按 LaTeX、字号和显示模式缓存；单个公式解析失败时降级显示原始 LaTeX，不让
+  整份报告变空或失败；
+- 为避免重新引入流式滚动卡顿，模型生成中的活动文本仍使用轻量纯文本，任务完成后的正式
+  报告才启用数学排版。
 
-修复边界与验收：
-
-- 不改变 SSE 游标、事件持久化、断线恢复、最终报告或 append-only 历史语义；
-- 客户端对 UI 发布进行合并或节流，派生显示状态按新增事件增量更新，避免每个 delta 都
-  复制/扫描完整事件历史和完整 reasoning 字符串；
-- 用本次已保存事件或等价的 3,000+ 条连续流复现验证：界面在推理和答案流式阶段均可交互，
-  任务完成后不再持续占满一个 CPU 核心，最终文本、事件顺序与重连结果不丢失；
-- 实现前先用性能采样确认主线程热点，再确定最小改动，不顺带修改模型、Runtime 协议或
-  公式分析逻辑。
+待验证：SwiftMath 已由 Xcode 自动解析并生成 `Package.resolved`；修复
+`CGFloat.greatestFiniteMagnitude` 类型歧义后，Debug/Release arm64 构建均通过。仍需在
+完成报告中检查上述定界符、现有多行 `latex` 代码块、深浅色、长公式横向滚动、链接点击和
+解析失败降级。

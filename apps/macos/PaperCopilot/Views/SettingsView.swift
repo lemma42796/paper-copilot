@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 struct SettingsView: View {
@@ -6,6 +7,8 @@ struct SettingsView: View {
     @State private var editorContext: ModelEditorContext?
     @State private var pendingDeletion: ModelConfiguration?
     @State private var errorMessage: String?
+    @State private var selectedStressPreset: ClientStressTestPreset =
+        .regression3278
 
     var body: some View {
         Form {
@@ -76,6 +79,90 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
 
+            Section("客户端压测") {
+                Picker("测试预设", selection: $selectedStressPreset) {
+                    ForEach(ClientStressTestPreset.allCases) { preset in
+                        Text(preset.displayName).tag(preset)
+                    }
+                }
+                .disabled(appModel.clientStressTestStatus.isRunning)
+
+                Text(selectedStressPreset.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                LabeledContent(
+                    "状态",
+                    value: stressStatusTitle
+                )
+
+                if appModel.clientStressTestStatus.isRunning {
+                    ProgressView(
+                        value: appModel.clientStressTestStatus.progress
+                    )
+                    Text(
+                        "\(appModel.clientStressTestStatus.deliveredEvents.formatted()) / \(appModel.clientStressTestStatus.totalEvents.formatted()) 条事件"
+                    )
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                }
+
+                if
+                    let cpu = appModel.clientStressTestStatus.currentCPUPercent
+                {
+                    LabeledContent(
+                        "当前 CPU",
+                        value: String(format: "%.1f%%", cpu)
+                    )
+                }
+
+                if let bytes = appModel.clientStressTestStatus.residentBytes {
+                    LabeledContent(
+                        "当前内存",
+                        value: ByteCountFormatter.string(
+                            fromByteCount: Int64(bytes),
+                            countStyle: .memory
+                        )
+                    )
+                }
+
+                Text(appModel.clientStressTestStatus.message)
+                    .font(.caption)
+                    .foregroundStyle(stressStatusColor)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if
+                    let outputPath = appModel.clientStressTestStatus.outputPath
+                {
+                    LabeledContent("结果目录") {
+                        Text(outputPath)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                    }
+                }
+
+                if appModel.clientStressTestStatus.isRunning {
+                    Button("停止测试", role: .destructive) {
+                        appModel.stopClientStressTest()
+                    }
+                } else {
+                    Button("开始测试") {
+                        appModel.startClientStressTest(selectedStressPreset)
+                    }
+                    .disabled(appModel.hasActiveJobs || appModel.isSubmitting)
+                }
+
+                Text(
+                    "全部事件、回答和公式都由客户端本地生成；不调用模型、不连接 Runtime、不读取 API Key，模型费用始终为 0。"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section("本地与云端数据边界") {
                 Text(
                     "PDF、索引和 session 保存在本机。为了完成分析，本地检索选出的必要文本片段可能发送给你配置的云端模型。Paper Copilot 不提供论文上传接口或云端论文库。"
@@ -92,7 +179,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 620, height: 560)
+        .frame(width: 640, height: 660)
         .sheet(item: $editorContext) { context in
             ModelEditorView(context: context) { configuration, apiKey in
                 try appModel.saveModelConfiguration(
@@ -111,6 +198,38 @@ struct SettingsView: View {
                 },
                 secondaryButton: .cancel()
             )
+        }
+    }
+
+    private var stressStatusTitle: String {
+        switch appModel.clientStressTestStatus.phase {
+        case .idle:
+            return "未运行"
+        case .preparing:
+            return "准备中"
+        case .replaying:
+            return "事件回放中"
+        case .coolingDown:
+            return "观察回落中"
+        case .completed:
+            return "已完成"
+        case .cancelled:
+            return "已停止"
+        case .failed:
+            return "失败"
+        }
+    }
+
+    private var stressStatusColor: Color {
+        switch appModel.clientStressTestStatus.phase {
+        case .failed:
+            return .red
+        case .cancelled:
+            return .orange
+        case .completed:
+            return .green
+        default:
+            return .secondary
         }
     }
 

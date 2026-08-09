@@ -240,6 +240,7 @@ papers/<standalone_session_id>/session.jsonl
 jobs/<job_id>/{job.json,events.jsonl,attempts/<n>/{manifest.json,trace.jsonl,state.json,payloads/}}
 cache/<pdf_sha256>/<extractor_fingerprint>/revisions/<revision_id>/layout.txt
 optional-components/formula-ocr/{active.json,downloads/,artifacts/,versions/<version>/}
+stress-tests/<run_id>/{run.json,summary.json,samples.json}
 ```
 
 论文目录本身是论文清单的唯一事实源。Core 不保存论文结构化字段、全文索引、向量索引或
@@ -255,6 +256,13 @@ PaddlePaddle、PaddleOCR、PaddleX、OpenCV 或公式模型权重；模型悬浮
 缓存；只下载缺失产物。任意 Python 环境中的零散依赖不得拼装为可信 Runtime。全部校验通过后
 才原子激活 `active.json`。Runtime 工具调用本身禁止下载，只执行当前 `active.json` 指向且位于
 应用数据根内的 helper。
+
+客户端压测是 macOS 设置中的本地诊断入口。它只在 Swift 进程内确定性生成 job 事件、回答
+文本和公式，并复用现有事件归约、conversation timeline 与完成报告渲染路径；不调用
+`PaperCopilotAPI`、Python Runtime、模型或凭据存储。运行期间禁止提交真实任务，结果只写入
+`stress-tests/<run_id>/`：`run.json` 在回放前立即保存预设和零模型边界，`samples.json` 在
+运行中按检查点原子更新 CPU、常驻内存与主 actor 采样间隔，`summary.json` 在正常结束时
+保存完整性哈希和聚合指标。诊断会话不写入正常 `jobs/` 或 session 历史。
 
 PDF 的 `paper_id = SHA1(PDF bytes)[:12]`，移动或重命名不改变 ID；它与 chat
 conversation session ID 是不同命名空间。模型凭据由 macOS 客户端保存在权限受限的

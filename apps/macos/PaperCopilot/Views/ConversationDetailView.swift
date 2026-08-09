@@ -496,7 +496,7 @@ private struct ConversationTimeline: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(spacing: 20) {
+                LazyVStack(spacing: 20) {
                     ForEach(conversation.jobs) { job in
                         JobTurnView(
                             job: job,
@@ -594,7 +594,10 @@ private struct JobTurnView: View {
 
             if job.result == nil, let answer = streamingAnswer,
                !answer.text.isEmpty {
-                StreamingActivityText(text: answer.text)
+                StreamingActivityText(
+                    text: streamingAnswerPreview(answer.text),
+                    selectionEnabled: !job.status.isActive
+                )
             }
 
             if let approval = job.pendingApproval {
@@ -669,7 +672,7 @@ private struct JobTurnView: View {
     }
 
     private var lifecycleEvents: [ChatJobEvent] {
-        events.filter { $0.activityID == nil }
+        activityAccumulator.lifecycleEvents
     }
 
     private var executionActivities: [JobActivity] {
@@ -678,6 +681,18 @@ private struct JobTurnView: View {
 
     private var streamingAnswer: JobActivity? {
         activityAccumulator.activities.last { $0.kind == .assistant }
+    }
+
+    private func streamingAnswerPreview(_ text: String) -> String {
+        guard job.status.isActive else {
+            return text
+        }
+        let maximumCharacters = 4_000
+        guard text.count > maximumCharacters else {
+            return text
+        }
+        return "生成中仅显示最近 \(maximumCharacters) 个字符；完成报告保留全文。\n\n…\n"
+            + String(text.suffix(maximumCharacters))
     }
 
     private var formalAnswerHasStarted: Bool {
@@ -1523,10 +1538,14 @@ private struct JobActivity: Identifiable {
     var title: String
     var text: String
     var detail: String
+    var liveReasoningTitle: String?
+    var completedReasoningPresentation: ReasoningPresentation?
+    var reasoningHeaderProbe: String
 }
 
 private struct JobActivityAccumulator {
     private(set) var activities: [JobActivity] = []
+    private(set) var lifecycleEvents: [ChatJobEvent] = []
     private var indicesByID: [String: Int] = [:]
     private var processedEventCount = 0
     private var lastSequence = 0
@@ -1547,6 +1566,10 @@ private struct JobActivityAccumulator {
                 continue
             }
             lastSequence = event.seq
+            guard event.activityID != nil else {
+                lifecycleEvents.append(event)
+                continue
+            }
             guard
                 let id = event.activityID,
                 let kindValue = event.activityKind,
@@ -1556,35 +1579,73 @@ private struct JobActivityAccumulator {
             else {
                 continue
             }
-            let existingIndex = indicesByID[id]
-            var activity = existingIndex.map { activities[$0] } ?? JobActivity(
-                id: id,
-                kind: kind,
-                phase: phase,
-                title: event.title ?? defaultTitle(for: kind),
-                text: "",
-                detail: ""
-            )
-            activity.phase = phase
+            let activityIndex: Int
+            if let existingIndex = indicesByID[id] {
+                activityIndex = existingIndex
+            } else {
+                activityIndex = activities.count
+                indicesByID[id] = activityIndex
+                activities.append(JobActivity(
+                    id: id,
+                    kind: kind,
+                    phase: phase,
+                    title: event.title ?? defaultTitle(for: kind),
+                    text: "",
+                    detail: "",
+                    liveReasoningTitle: nil,
+                    completedReasoningPresentation: nil,
+                    reasoningHeaderProbe: ""
+                ))
+            }
+            activities[activityIndex].phase = phase
             if let title = event.title {
-                activity.title = title
+                activities[activityIndex].title = title
             }
             if let delta = event.delta {
-                activity.text += delta
+                activities[activityIndex].text.append(delta)
+                updateReasoningHeaderProbe(
+                    at: activityIndex,
+                    appending: delta
+                )
             }
             if let detail = event.detail, !detail.isEmpty {
-                if !activity.detail.isEmpty {
-                    activity.detail += "\n"
+                if !activities[activityIndex].detail.isEmpty {
+                    activities[activityIndex].detail.append("\n")
                 }
-                activity.detail += detail
+                activities[activityIndex].detail.append(detail)
             }
-            if let existingIndex {
-                activities[existingIndex] = activity
-            } else {
-                indicesByID[id] = activities.count
-                activities.append(activity)
+            if
+                kind == .reasoning,
+                phase == .completed || phase == .failed || phase == .cancelled
+            {
+                activities[activityIndex].completedReasoningPresentation =
+                    completedReasoningPresentation(
+                        for: activities[activityIndex].text
+                    )
+                activities[activityIndex].reasoningHeaderProbe = ""
             }
         }
+    }
+
+    private mutating func updateReasoningHeaderProbe(
+        at index: Int,
+        appending delta: String
+    ) {
+        guard
+            activities[index].kind == .reasoning,
+            activities[index].liveReasoningTitle == nil,
+            activities[index].reasoningHeaderProbe.count < 512
+        else {
+            return
+        }
+        let remainingCount = 512
+            - activities[index].reasoningHeaderProbe.count
+        activities[index].reasoningHeaderProbe.append(
+            contentsOf: delta.prefix(remainingCount)
+        )
+        activities[index].liveReasoningTitle = firstBoldReasoningHeader(
+            in: activities[index].reasoningHeaderProbe
+        )
     }
 
     private func defaultTitle(for kind: JobActivity.Kind) -> String {
@@ -1609,10 +1670,6 @@ private struct ActivityRow: View {
         self.formalAnswerHasStarted = formalAnswerHasStarted
         _isExpanded = State(
             initialValue: activity.kind != .reasoning
-                || (
-                    activity.phase != .completed
-                        && !formalAnswerHasStarted
-                )
         )
     }
 
@@ -1645,7 +1702,7 @@ private struct ActivityRow: View {
 
     @ViewBuilder
     private var activityContent: some View {
-        let displayedReasoning = reasoningPresentation
+        let displayedReasoning = activity.completedReasoningPresentation
         let displayedText = displayedReasoning?.transcript ?? activity.text
         if !displayedText.isEmpty {
             if activity.kind == .assistant {
@@ -1695,16 +1752,10 @@ private struct ActivityRow: View {
             return activity.title
         }
         if isLiveReasoning {
-            return firstBoldReasoningHeader(in: activity.text) ?? "正在思考"
+            return activity.liveReasoningTitle ?? "正在思考"
         }
-        return reasoningPresentation?.title ?? activity.title
-    }
-
-    private var reasoningPresentation: ReasoningPresentation? {
-        guard activity.kind == .reasoning else {
-            return nil
-        }
-        return completedReasoningPresentation(for: activity.text)
+        return activity.completedReasoningPresentation?.title
+            ?? activity.title
     }
 
     private var systemImage: String {
@@ -1811,12 +1862,21 @@ private struct ReasoningTranscriptText: View {
 
 private struct StreamingActivityText: View {
     let text: String
+    var selectionEnabled = true
 
     var body: some View {
+        if selectionEnabled {
+            streamingText
+                .textSelection(.enabled)
+        } else {
+            streamingText
+        }
+    }
+
+    private var streamingText: some View {
         Text(text)
             .font(.body)
             .foregroundStyle(.primary)
-            .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 4)
     }
