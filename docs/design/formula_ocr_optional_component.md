@@ -179,10 +179,14 @@ explicit artifact-persistence design rather than prompt wording.
 `scripts/build_formula_ocr_component.sh` builds the optional macOS ARM64 helper,
 signs the executable, and emits separate Runtime and model ZIPs plus a schema-v2
 release manifest. It also assembles a complete development Helper under `dist/`
-using the supplied local model directory. Both archives and the manifest must be
-published at the pinned GitHub Release URL before the Settings download can
-succeed. Production publication also requires Developer ID signing and
-notarization; an ad-hoc signed local build is development-only.
+using the supplied local model directory. The manifest, Runtime `1.1.0`, and
+`PP-FormulaNet_plus-M-1.0.0` model archive are now published at the pinned
+[`formula-ocr-v1`](https://github.com/lemma42796/paper-copilot/releases/tag/formula-ocr-v1)
+URL. The public manifest URLs, byte lengths, and SHA-256 values match the GitHub
+Release assets. A fresh Settings download, installation, activation, and first
+recognition from these public assets remain unverified. The current archives are
+ad-hoc signed development artifacts; Developer ID signing and notarization would
+still be required for a Gatekeeper-trusted production distribution.
 
 The ARM64 build requires LLVM `libomp`. The script locates Homebrew's `libomp`
 or accepts an explicit `FORMULA_OCR_LIBOMP` path, copies it under the GOMP ABI

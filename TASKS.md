@@ -6,15 +6,15 @@
 > 当前接力状态见 [STATUS.md](STATUS.md)，当前架构见
 > [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-更新于 2026-08-09。
+更新于 2026-08-10。
 
 ## 未完成任务
 
 ### 1. 完成 PDF 字体乱码恢复产品级验证
 
-状态：`source_cache_validation_all_three_paths_complete_packaging_pending`，Cambria Math、
-Symbol MT 和 ReaderEx 三条源码缓存路径均已用代表性真实学位论文验证；打包 App 仍未
-验证。
+状态：`source_cache_validation_all_three_paths_complete_preview_published_product_path_pending`，
+Cambria Math、Symbol MT 和 ReaderEx 三条源码缓存路径均已用代表性真实学位论文验证；
+预览 DMG 已公开发布，但安装后产品缓存路径仍未验证。
 
 已完成：
 
@@ -42,12 +42,17 @@ Symbol MT 和 ReaderEx 三条源码缓存路径均已用代表性真实学位论
   均首次生成、第二次命中同一 revision，原 PDF 未修改且没有遗留临时修复 PDF；
 - 定向测试 `tests/shared/test_pdf_font_repair.py` 共 8 项通过，覆盖完整 CMap 展开、间接
   后代数组、显式 CID→GID 映射、观测 GID 门槛、空轮廓删除和正文顺序保持。
+- Apple Silicon App 开发预览
+  [`v0.1.0-preview.1`](https://github.com/lemma42796/paper-copilot/releases/tag/v0.1.0-preview.1)
+  已公开发布；Release 包含 70,614,645 字节的 `PaperCopilot-arm64.dmg` 和 SHA-256 文件，
+  GitHub API 报告的 DMG 摘要与校验文件一致。
 
 尚未完成：
 
 - 找到真实使用显式 `CIDToGIDMap` 流的代表 PDF 做集成验证；当前流解析与 CID→GID 应用
   已有定向测试，但本轮真实样本覆盖的是间接数组中的 `/Identity` 与缺失映射的 ReaderEx；
-- 构建并运行 macOS App，确认 PyInstaller 打包 fontTools 且产品缓存路径结果一致。
+- 从 GitHub Release 全新下载、安装并运行 macOS App，确认内嵌 Python Runtime 包含
+  fontTools，且产品缓存路径结果与源码验证一致。
 
 ### 2. 验证主动坐标探索式公式 OCR
 
@@ -106,7 +111,7 @@ overlay 页面回读和新会话零 OCR 复用均已验证；原样 OCR 缓存�
 
 ### 3. 构建并验证 Plus-M Formula OCR 可选组件
 
-状态：`local_adhoc_install_and_real_ocr_complete_release_validation_pending`。
+状态：`public_adhoc_assets_published_fresh_install_validation_pending`。
 
 生产源码默认模型已从 `PP-FormulaNet_plus-S` 切换为
 `PP-FormulaNet_plus-M`。Runtime 已改为首次请求按需启动 Helper、串行复用同一已加载模型，
@@ -120,12 +125,17 @@ overlay 页面回读和新会话零 OCR 复用均已验证；原样 OCR 缓存�
   `versions/1.1.0/FormulaOCRHelper/FormulaOCRHelper`；旧 `1.0.0` 只作为本机回滚版本保留；
 - 同一真实任务连续调用两次 Plus-M Helper，公式 (2-9) 与 (4.10) 均首次识别成功，证明
   当前本机安装与主动 region OCR 主链路可用；
-- 当前没有 Developer ID，不把 Developer ID 签名或 Apple 公证列为本地验收前提；正式
-  对外分发如需绕过 Gatekeeper，必须另行设计可承担的签名或用户自构建方案。
+- [`formula-ocr-v1`](https://github.com/lemma42796/paper-copilot/releases/tag/formula-ocr-v1)
+  已公开发布 schema-v2 manifest、`1.1.0` ARM64 Runtime 和
+  `PP-FormulaNet_plus-M-1.0.0` 模型归档；公开 manifest 的 URL、字节数和 SHA-256 与
+  GitHub Release 资产一致；
+- 当前没有 Developer ID；公开资产明确使用 ad-hoc 签名并定位为开发测试版本，不把 Apple
+  公证列为本地验收前提。
 
 尚未完成：
 
-- 未把 `1.1.0` manifest 与归档发布到公开下载端；
+- 尚未从全新 App 安装中点击设置页下载，验证公开 manifest、Runtime 和模型归档的下载、
+  校验、安装、原子激活及首次识别全链路；
 - 未专项验证 Helper 超时、崩溃重启和一小时空闲释放；本次两次连续真实调用只覆盖正常
   启动、复用与识别路径；
 - 尚未决定何时删除旧 Plus-S 兼容代码；本机旧 `1.0.0` 暂时保留为可恢复版本。

@@ -30,10 +30,13 @@ Current product surfaces:
 - **Python Core:** Agent, on-demand PDF text cache, sessions, job recovery,
   and observability.
 
-M20–M24 are complete, including a self-contained Apple Silicon app, a
-development-preview DMG, and retirement of the old Next.js UI. Developer ID
-signing and notarization are deferred until public release. See
-[TASKS.md](TASKS.md).
+M20–M24 are complete. The ad-hoc-signed, unnotarized
+[v0.1.0 Preview 1](https://github.com/lemma42796/paper-copilot/releases/tag/v0.1.0-preview.1)
+DMG is publicly available for Apple Silicon, and the optional
+[Formula OCR v1.1.0](https://github.com/lemma42796/paper-copilot/releases/tag/formula-ocr-v1)
+assets are published separately. Their public metadata, manifest, and hashes
+have been checked; a fresh install and Settings download from the Releases have
+not yet been validated. See [TASKS.md](TASKS.md).
 
 ## Capabilities
 
@@ -81,6 +84,10 @@ The client starts the Python Runtime on a dynamic local port. Distribution
 builds bundle the Runtime, so end users do not need Python, uv, or Node.js.
 
 ## Build the macOS Preview
+
+Download the current public preview from
+[GitHub Releases](https://github.com/lemma42796/paper-copilot/releases/tag/v0.1.0-preview.1),
+or build the same artifact locally:
 
 ```bash
 ./scripts/build_macos_dmg.sh

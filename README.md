@@ -133,10 +133,17 @@ PDF 的逐字符几何信息，自主选择裁剪区域。系统仅渲染选定�
 | --- | --- |
 | ![模型菜单](screenshot/截屏2026-08-09%2023.27.05.png) | ![设置界面](screenshot/截屏2026-08-09%2023.28.28.png) |
 
-## 安装状态
+## 安装
 
-当前尚未提供经过完整发布验证的 DMG，Formula OCR v1.1.0 也尚未发布到公开下载端。面向
-Apple Silicon 的本机构建使用 ad-hoc 签名，公开分发方式仍待确定。现阶段请从源码运行。
+面向 Apple Silicon 的
+[Paper Copilot v0.1.0 Preview 1](https://github.com/lemma42796/paper-copilot/releases/tag/v0.1.0-preview.1)
+已经发布。下载 `PaperCopilot-arm64.dmg`，打开后将 Paper Copilot 拖入“应用程序”。该预览版
+使用 ad-hoc 签名且未经 Apple 公证；首次启动若被 macOS 阻止，请先尝试打开一次，再到
+“系统设置 → 隐私与安全性”选择“仍要打开”。
+
+[Formula OCR v1.1.0](https://github.com/lemma42796/paper-copilot/releases/tag/formula-ocr-v1)
+已作为独立可选组件公开发布，可在设置中按需安装。当前已核对两个 Release 的公开资产、manifest
+和摘要；尚未从 GitHub Release 执行一次全新 App 安装及 Formula OCR 下载链路验证。
 
 ## 从源码运行
 

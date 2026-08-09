@@ -3,7 +3,7 @@
 > 当前任务的跨会话接力快照。每次更新覆盖旧内容，不追加历史流水；详细设计与实验结果
 > 保存在各自产物中。
 
-更新于 2026-08-09。
+更新于 2026-08-10。
 
 私有历史实验已迁移为单层当前值结构：每个实验根目录直接保存 `experiment.md`、Query、
 私有标签、rubric、metrics、包含逐项裁决的 `scores.yaml` 与 `evidence.yaml`。相同协议的
@@ -39,10 +39,20 @@ Q2、Q3 均为 12/12，三个 query 的 macro weighted 为 88.89%。Q2 前误发
 Token 和 83.8% 成本。结论只适用于当前论文、模型与完整 Agent 配置，不是 OCR 组件的
 单变量因果结论。
 
+Apple Silicon App 开发预览
+[`v0.1.0-preview.1`](https://github.com/lemma42796/paper-copilot/releases/tag/v0.1.0-preview.1)
+已公开发布，包含 70,614,645 字节的 `PaperCopilot-arm64.dmg` 和 SHA-256 文件；GitHub API
+报告的 DMG 摘要
+`9f7f0d09b70b73c24870b66302ed46b95924762a3f3ab1d592ea4898fb08b540` 与公开校验文件一致。
+这只验证了 Release 元数据和资产存在，尚未从 GitHub 全新下载安装并运行。
+
 Plus-M 可选组件 `1.1.0` 已在本机构建、ad-hoc 签名并安装，`active.json` 当前指向
-`versions/1.1.0/FormulaOCRHelper/FormulaOCRHelper`。旧 Plus-S `1.0.0` 只作为回滚版本保留。
-当前没有 Developer ID；本地验收不要求 Developer ID 或 Apple 公证，对外发布路径仍需
-单独决定。
+`versions/1.1.0/FormulaOCRHelper/FormulaOCRHelper`。公开
+[`formula-ocr-v1`](https://github.com/lemma42796/paper-copilot/releases/tag/formula-ocr-v1)
+已包含 schema-v2 manifest、`1.1.0` ARM64 Runtime 和 `PP-FormulaNet_plus-M-1.0.0`
+模型归档；manifest 的 URL、字节数和 SHA-256 与 GitHub Release 资产一致。旧 Plus-S
+`1.0.0` 只作为本机回滚版本保留。当前没有 Developer ID，App 与 Formula OCR 均为
+ad-hoc 签名、未经 Apple 公证的开发预览；设置页全新下载与安装仍未验证。
 
 真实运行首次暴露两个协议错误，当前工作区源码已修复：
 
@@ -117,8 +127,9 @@ Plus-M 可选组件 `1.1.0` 已在本机构建、ad-hoc 签名并安装，`activ
 - 回滚版本：同目录 `versions/1.0.0/`，另有 `active.plus-s-1.0.0.json` 备份；
 - 两次连续真实调用均使用 `PP-FormulaNet_plus-M`，分别 8.7 秒、3.126 秒。
 
-这只验证了本机正常启动、连续调用和真实识别。尚未专项验证 Helper 超时、崩溃重启、
-一小时空闲退出，也没有把 manifest/归档发布到公开下载端。
+这只验证了本机正常启动、连续调用和真实识别。公开 manifest、Runtime 与模型归档的元数据和
+摘要已核对，但尚未从全新 App 安装中执行设置页下载、校验、安装、激活与首次识别。Helper
+超时、崩溃重启和一小时空闲退出也未专项验证。
 
 ## PDF 字体乱码恢复
 
@@ -152,30 +163,17 @@ SwiftMath `1.7.3` 已锁定，Debug/Release arm64 构建通过；完成报告支
 
 ## 下一步
 
-1. 决定 `m a x` / `e x p` 等局部 OCR 拼写间距的安全处理方式，不允许模型重写完整公式；
-2. 用无编号公式覆盖 v4 accept 与跨会话复用；
-3. 验证三次 recognize 上限、失败计数、Helper 超时/崩溃重启和一小时空闲退出；
-4. 做完整 App 打包与 SwiftMath 视觉验证；
+1. 从 GitHub Release 全新下载安装 App，验证 Gatekeeper 手动放行、内嵌 Runtime、产品缓存
+   字体恢复、SwiftMath 视觉效果，以及设置页 Formula OCR 下载与首次识别；
+2. 决定 `m a x` / `e x p` 等局部 OCR 拼写间距的安全处理方式，不允许模型重写完整公式；
+3. 用无编号公式覆盖 v4 accept 与跨会话复用；
+4. 验证三次 recognize 上限、失败计数、Helper 超时/崩溃重启和一小时空闲退出；
 5. 继续寻找真实显式 `CIDToGIDMap` 流 PDF，补上字体修复集成覆盖。
 
 ## 本次文件边界与验证
 
-当前变更包含：
-
-- `src/paper_copilot/shared/pdf_cache.py`：v4 formula overlay artifact 与页面合并读取；
-- `src/paper_copilot/agents/formula_ocr_tool.py`：移除替换目标参数，accept 改写公式文档；
-- `src/paper_copilot/agents/skills/formula-ocr/SKILL.md`：模型只定位、识别与接受；
-- `ARCHITECTURE.md`、`docs/design/formula_ocr_optional_component.md`：同步新存储与边界；
-- `tests/shared/test_pdf_cache_formula_hints.py`：移除旧替换目标断言，未执行；
-- `src/paper_copilot/agents/page_geometry_tool.py`：净化孤立 surrogate；
-- `docs/stories/active_formula_localization.md`：真实主动定位展示与边界；
-- `docs/assets/formula-ocr-active-localization/`：6 张稳定证据图片；
-- `TASKS.md`、`STATUS.md`：同步最新任务与接力状态。
-- `eval/experiments/codex-vs-pc-deepseek-font-repair-ocr-v2/`：冻结 Query、rubric、metrics
-  与最终跨系统结论；私有标签、评分和证据索引仍只位于私有实验根目录。
-- `docs/design/experiment_index.md` 及既有实验入口：同步单层实验目录结构与最新入口。
-
-本轮没有运行 Python 测试、Ruff、mypy 或新 App 构建。真实 accept、overlay 回读和新会话
-复用证据来自 `job-20260809T135954-c9e77a8e9f` 与
-`job-20260809T140329-8a85fbd21b`；21:55 的缓存失效前额外运行只进入成本审计。
-`output/` 中两张重复的临时裁图不是交付文件，不应提交。
+本轮只同步发布状态文档：`README.md`、`README.en.md`、`TASKS.md`、`STATUS.md` 与
+`docs/design/formula_ocr_optional_component.md`。没有修改产品代码，也没有运行 Python 测试、
+Ruff、mypy、App 构建或发布后安装。公开状态通过 GitHub Release API 与 manifest 读取核对；
+没有下载 70.6 MB DMG 做本地独立哈希，只确认 GitHub API 报告的摘要与公开 SHA-256 文件一致。
+`output/` 中两张重复的临时裁图仍不是交付文件，不应提交。
