@@ -140,6 +140,10 @@ PDF 的逐字符几何信息，自主选择裁剪区域。系统仅渲染选定�
 研究报告展示。App 设计为通过内嵌的 Python 运行时（Python Runtime）调用 Python 核心
 （Python Core）。
 
+![研究报告与原 PDF 对照](screenshot/截屏2026-08-10%2018.11.05.png)
+
+![任务诊断与调用耗时](screenshot/截屏2026-08-10%2018.17.39.png)
+
 ![Paper Copilot 研究报告](screenshot/截屏2026-08-09%2023.25.23.png)
 
 | 模型切换 | 设置与本地 Formula OCR |
