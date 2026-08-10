@@ -1330,7 +1330,7 @@ private struct RolloutDiagnosticsView: View {
             operationList(
                 title: "慢操作（≥ 1 秒）",
                 systemImage: "timer",
-                operations: diagnostics.slowOperations,
+                operations: detailedSlowOperations,
                 emptyMessage: "未检测到慢操作。"
             )
             operationList(
@@ -1377,26 +1377,63 @@ private struct RolloutDiagnosticsView: View {
 
     private var phaseDurations: some View {
         diagnosticSection(
-            title: "各类操作累计耗时",
+            title: "耗时层级",
             systemImage: "chart.bar.xaxis"
         ) {
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(TraceEntityType.allCases, id: \.rawValue) { entityType in
-                    if
-                        let duration = diagnostics.phaseDurationMS[
-                            entityType.rawValue
-                        ]
-                    {
-                        HStack {
-                            Text(entityType.displayName)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(formattedDuration(duration))
-                                .font(.caption.monospacedDigit())
-                        }
+                durationRow(for: .runtimeOperation)
+                durationRow(for: .turn, label: "Agent 轮次")
+
+                if hasTurnOperationDurations {
+                    Divider()
+                    Text("轮次内操作累计")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(turnOperationTypes, id: \.rawValue) { entityType in
+                        durationRow(for: entityType, indented: true)
                     }
                 }
+
+                Divider()
+                Text("父级耗时包含其子流程；不同操作也可能嵌套，不能把这些数值相加推算总耗时。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    private var turnOperationTypes: [TraceEntityType] {
+        [.llmCall, .toolCall, .compaction]
+    }
+
+    private var hasTurnOperationDurations: Bool {
+        turnOperationTypes.contains { entityType in
+            diagnostics.phaseDurationMS[entityType.rawValue] != nil
+        }
+    }
+
+    private var detailedSlowOperations: [OperationDiagnostic] {
+        diagnostics.slowOperations.filter { operation in
+            operation.entityType != .rollout && operation.entityType != .turn
+        }
+    }
+
+    @ViewBuilder
+    private func durationRow(
+        for entityType: TraceEntityType,
+        label: String? = nil,
+        indented: Bool = false
+    ) -> some View {
+        if let duration = diagnostics.phaseDurationMS[entityType.rawValue] {
+            HStack {
+                Text(label ?? entityType.displayName)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(formattedDuration(duration))
+                    .font(.caption.monospacedDigit())
+            }
+            .padding(.leading, indented ? 12 : 0)
         }
     }
 
