@@ -887,6 +887,14 @@ private struct JobTurnView: View {
     }
 
     private func approvalTitle(_ approval: ToolApprovalRequest) -> String {
+        if approval.toolName == "library_exec" {
+            if let permission = approval.toolInput?["sandbox_permissions"],
+               case .string(let value) = permission,
+               value == "require_escalated" {
+                return "允许在沙箱外执行这条命令？"
+            }
+            return "允许扩大这条命令的沙箱权限？"
+        }
         let count = approvalPathCount(approval)
         switch approvalOperation(approval) {
         case "trash":
@@ -913,6 +921,9 @@ private struct JobTurnView: View {
     private func approvalActionLabel(
         _ approval: ToolApprovalRequest
     ) -> String {
+        if approval.toolName == "library_exec" {
+            return "允许执行一次"
+        }
         switch approvalOperation(approval) {
         case "trash":
             return "移到废纸篓"
@@ -1015,6 +1026,22 @@ private struct JobTurnView: View {
             return "笔记"
         case "content":
             return "内容"
+        case "cmd":
+            return "命令"
+        case "sandbox_permissions":
+            return "沙箱权限"
+        case "additional_permissions":
+            return "额外权限"
+        case "justification":
+            return "申请理由"
+        case "administrator_privileges":
+            return "管理员权限"
+        case "timeout_ms":
+            return "超时"
+        case "yield_time_ms":
+            return "返回等待"
+        case "max_output_tokens":
+            return "输出上限"
         default:
             return key
         }
@@ -1028,6 +1055,16 @@ private struct JobTurnView: View {
             return "更新论文索引"
         case "spend_llm_budget":
             return "使用模型额度"
+        case "execute_command":
+            return "执行命令"
+        case "access_network":
+            return "访问网络"
+        case "write_external":
+            return "写入论文库外的文件"
+        case "execute_unsandboxed":
+            return "在默认沙箱外执行"
+        case "use_administrator_privileges":
+            return "请求 macOS 管理员权限"
         default:
             return effect
         }

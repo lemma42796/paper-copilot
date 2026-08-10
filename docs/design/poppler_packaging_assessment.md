@@ -1,7 +1,8 @@
 # Poppler 打包与许可证评估
 
-状态：已选择用户授权后单独安装，不随 `.app` 分发  
-日期：2026-07-27  
+状态：已选择 Agent 经精确审批后单独安装，不随 `.app` 分发；已有 Homebrew、缺少
+Poppler 的开发 App 路径已真实验证，Homebrew 缺失路径与新 DMG 待验证
+日期：2026-08-10
 保真度复核：2026-08-02  
 范围：工具系统 v2 Slice 1
 
@@ -126,11 +127,13 @@ PyMuPDF 官方文档说明其采用 AGPL 或商业双许可证。因此它不是
 和可重建发布流程。该方向会改变当前 MIT 分发政策，需要项目所有者明确批准，并建议先
 获得专业法律意见。
 
-### C. 要求用户自行安装 Poppler
+### C. Agent 经审批安装 Homebrew 与 Poppler
 
-代码只发现系统中的 `pdfinfo`/`pdftotext`，`.app` 不分发它们。环境缺少 Poppler 时，
-Skill 先询问用户是否同意执行 `brew install poppler`；只有明确同意后才安装。Homebrew
-本身缺失时不自动安装 Homebrew。
+`.app` 不分发 Poppler。环境缺少 Poppler 时，Research Skill 先检查
+`pdfinfo/pdftotext/pdftoppm`；若 Homebrew 已存在，经单次精确审批执行
+`brew install poppler`。Homebrew 也缺失时，经另一项精确审批从官方安装脚本安装；需要
+`sudo` 时由 macOS 隐藏输入 helper 收集密码，密码不进入模型、session 或 trace。安装后
+回到默认 sandbox 验证三项命令，成功后才重试论文操作。
 
 ### D. 选择其他 PDF substrate
 
@@ -140,9 +143,15 @@ Skill 先询问用户是否同意执行 `brew install poppler`；只有明确同
 
 ## 建议
 
-项目所有者已选择 C：Poppler 不随 `.app` 分发，只在环境缺失且用户明确同意后通过
-Homebrew 单独安装。当前 Slice 1 不实现通用系统安装工具，也不放宽 `library_exec` 的
-无网络和只读边界；安装执行能力留到论文研究 Skill 落地时按当时宿主能力接入。
+项目所有者已选择 C：Poppler 不随 `.app` 分发；Research Skill 通过 Codex 式
+`library_exec` 权限请求、用户或独立 Reviewer 审批、sandbox override、超时/取消和进程组
+终止来安装 Homebrew/Poppler。默认无网络和只读边界保持不变，只有获批的精确命令获得
+相应权限。Xcode 开发 App 已在卸载 Poppler 后真实完成自动审批、sandbox 外
+`brew install poppler`、默认 sandbox 版本检查及真实 PDF 的元数据读取、文本提取和页面
+渲染；Trace 为 `trace-ce7fccb047d24934b9ffa339bbeda742`。审批输出预算已由 300 调整为
+1000 Token，实际三次审批分别使用 601、686、838 Token；shell wrapper 也已启用
+`pipefail`，其成功/失败退出码完成定向验证。完全没有 Homebrew 时的官方安装脚本、管理员
+密码输入/取消路径、新 DMG 打包及 Release 安装仍未验证。
 
 现有 PyMuPDF 的 AGPL/商业双许可证仍是独立的既有分发问题，不因 Poppler 改为单独安装
 而自动解决。

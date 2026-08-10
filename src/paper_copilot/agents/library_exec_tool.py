@@ -15,9 +15,16 @@ import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 from paper_copilot.agents.tools.runtimes import (
     LibraryEnvironment,
@@ -45,12 +52,16 @@ _DEFAULT_YIELD_TIME_MS = 10_000
 _DEFAULT_STDIN_YIELD_TIME_MS = 5_000
 _MIN_YIELD_TIME_MS = 250
 _MAX_YIELD_TIME_MS = 30_000
+_DEFAULT_TIMEOUT_MS = 20 * 60 * 1_000
+_MAX_TIMEOUT_MS = 60 * 60 * 1_000
 _CPU_LIMIT_SECONDS = 35
 _FILE_SIZE_LIMIT = "64m"
 _SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 _OTOOL = Path("/usr/bin/otool")
-_SCHEMA_VERSION = 4
-_SANDBOX_POLICY_ID = "library_workspace_v3"
+_SCHEMA_VERSION = 5
+_SANDBOX_POLICY_ID = "library_workspace_v4"
+_ADDITIONAL_SANDBOX_POLICY_ID = "library_workspace_additional_v1"
+_ESCALATED_POLICY_ID = "library_require_escalated_v1"
 _BROKER_POLICY_ID = "paper_cache_broker_v2"
 _BROKER_TIMEOUT_SECONDS = 120
 _RESOURCE_WRAPPER = (
@@ -59,9 +70,71 @@ _RESOURCE_WRAPPER = (
     f"limit cputime {_CPU_LIMIT_SECONDS}; "
     f"limit -h filesize {_FILE_SIZE_LIMIT}; "
     f"limit filesize {_FILE_SIZE_LIMIT}; "
-    'exec /bin/zsh -f -c "$1"'
+    'exec /bin/zsh -f -o pipefail -c "$1"'
 )
+_ESCALATED_WRAPPER = 'exec /bin/zsh -f -o pipefail -c "$1"'
 _LOGGER = get_logger(__name__)
+
+SandboxPermissions = Literal[
+    "use_default",
+    "with_additional_permissions",
+    "require_escalated",
+]
+
+
+class NetworkPermissions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        default=False,
+        description="True requests network access; false or omitted requests none.",
+    )
+
+
+class FileSystemPermissions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    read: list[str] = Field(
+        default_factory=list,
+        max_length=16,
+        description="Absolute paths to grant read access; omit when none are needed.",
+    )
+    write: list[str] = Field(
+        default_factory=list,
+        max_length=16,
+        description="Absolute paths to grant write access; omit when none are needed.",
+    )
+
+    @field_validator("read", "write")
+    @classmethod
+    def _paths_are_absolute(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            path = Path(value)
+            if not path.is_absolute():
+                raise ValueError(
+                    f"additional permission path must be absolute: {value}"
+                )
+            if "\x00" in value:
+                raise ValueError(
+                    "additional permission path must not contain NUL bytes"
+                )
+            normalized.append(str(path.resolve()))
+        return list(dict.fromkeys(normalized))
+
+
+class AdditionalPermissionProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    network: NetworkPermissions = Field(default_factory=NetworkPermissions)
+    file_system: FileSystemPermissions = Field(default_factory=FileSystemPermissions)
+
+    def is_empty(self) -> bool:
+        return not (
+            self.network.enabled
+            or self.file_system.read
+            or self.file_system.write
+        )
 
 
 class LibraryExecInput(BaseModel):
@@ -91,6 +164,47 @@ class LibraryExecInput(BaseModel):
             "capped by policy."
         ),
     )
+    timeout_ms: StrictInt = Field(
+        default=_DEFAULT_TIMEOUT_MS,
+        ge=1_000,
+        le=_MAX_TIMEOUT_MS,
+        description=(
+            "Hard wall-clock timeout for the original process. The entire process "
+            "group is terminated when the timeout expires."
+        ),
+    )
+    sandbox_permissions: SandboxPermissions = Field(
+        default="use_default",
+        description=(
+            "Per-command sandbox override. Defaults to use_default; use "
+            "with_additional_permissions with additional_permissions, or "
+            "require_escalated for execution outside the sandbox. Overrides are "
+            "bound to an exact approval."
+        ),
+    )
+    additional_permissions: AdditionalPermissionProfile | None = Field(
+        default=None,
+        description=(
+            "Sandboxed filesystem or network access for this command; only with "
+            "sandbox_permissions=with_additional_permissions."
+        ),
+    )
+    justification: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=500,
+        description=(
+            "User-facing reason for a permission override; omit with use_default."
+        ),
+    )
+    administrator_privileges: bool = Field(
+        default=False,
+        description=(
+            "Use a macOS hidden password dialog for sudo. Only valid with "
+            "require_escalated. The password is never returned to the model, "
+            "session, or trace."
+        ),
+    )
 
     @field_validator("cmd")
     @classmethod
@@ -100,6 +214,42 @@ class LibraryExecInput(BaseModel):
         if "\x00" in value:
             raise ValueError("cmd must not contain NUL bytes")
         return value
+
+    @model_validator(mode="after")
+    def _permission_request_is_consistent(self) -> LibraryExecInput:
+        if self.sandbox_permissions == "use_default":
+            if (
+                self.additional_permissions is not None
+                or self.justification is not None
+            ):
+                raise ValueError(
+                    "use_default must omit additional_permissions and justification"
+                )
+            if self.administrator_privileges:
+                raise ValueError(
+                    "administrator_privileges requires require_escalated"
+                )
+            return self
+        if self.justification is None or not self.justification.strip():
+            raise ValueError("permission overrides require a justification")
+        if self.sandbox_permissions == "with_additional_permissions":
+            if (
+                self.additional_permissions is None
+                or self.additional_permissions.is_empty()
+            ):
+                raise ValueError(
+                    "with_additional_permissions requires at least one additional permission"
+                )
+            if self.administrator_privileges:
+                raise ValueError(
+                    "administrator_privileges requires require_escalated"
+                )
+            return self
+        if self.additional_permissions is not None:
+            raise ValueError(
+                "require_escalated must omit additional_permissions"
+            )
+        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,11 +339,17 @@ def library_exec_tool_description() -> str:
         "commands return page text or matching lines as model-visible evidence; "
         "text preparation and consistency checks are handled automatically. "
         "`paper read`/`paper search` must occupy the whole cmd and cannot be "
-        "chained. The environment contains no user "
-        "credentials; sandboxing "
+        "chained. The environment contains no user credentials; the default sandbox "
         "blocks network access, library/cache writes, and reads outside authorized "
-        "roots. A command still running after yield_time_ms returns a session_id; "
-        "continue it with library_write_stdin. The tool has no permission-escalation path."
+        "roots. If a required operation fails at this boundary, retry the exact "
+        "command with either with_additional_permissions and the smallest filesystem "
+        "or network grant, or require_escalated for execution outside the sandbox. "
+        "Every override is evaluated and approved against the exact command, fixed "
+        "cwd, permissions, and input hash. Use administrator_privileges only when "
+        "sudo is required; macOS collects the password outside model-visible I/O. "
+        "A command still running after yield-time_ms returns a session_id; continue "
+        "it with library_write_stdin. Timeout, cancellation, and conversation "
+        "teardown terminate the original process group."
     )
 
 
@@ -203,6 +359,24 @@ def library_write_stdin_tool_description() -> str:
         "opaque session_id returned by library_exec. An empty chars value polls for "
         "new output. The original command keeps the same sandbox and authorization."
     )
+
+
+def library_exec_approval_snapshot(
+    args: LibraryExecInput,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "cwd": _execution_cwd_id(args.sandbox_permissions),
+            "sandbox_permissions": args.sandbox_permissions,
+            "additional_permissions": (
+                args.additional_permissions.model_dump(mode="json")
+                if args.additional_permissions is not None
+                else None
+            ),
+            "administrator_privileges": args.administrator_privileges,
+            "command_segments": _shell_command_segments(args.cmd),
+        }
+    ]
 
 
 async def run_library_exec(
@@ -219,9 +393,17 @@ async def run_library_exec(
         if cache_root is None
         else cache_root.expanduser().resolve()
     )
-    resolved_command = _resolve_command(args.cmd)
+    resolved_command = _resolve_command(
+        args.cmd,
+        apply_resource_limits=args.sandbox_permissions != "require_escalated",
+    )
     paper_command = _intercept_paper_read(resolved_command)
     if paper_command is not None:
+        if args.sandbox_permissions != "use_default":
+            raise KnowledgeError(
+                "paper read/search uses its dedicated broker and cannot request "
+                "sandbox overrides"
+            )
         return await _run_paper_read_command(
             paper_command,
             resolved_command=resolved_command,
@@ -250,6 +432,12 @@ async def run_library_exec(
         cache_root=resolved_cache_root,
         external_commands=external_commands.commands,
     )
+    additional_read_roots, additional_write_roots, network_access = (
+        _additional_permission_roots(
+            args,
+            protected_roots=(root, resolved_cache_root, environment.root),
+        )
+    )
     sandbox_policy = _SandboxPolicy(
         file_system=_FileSystemSandboxPolicy(
             readable_roots=(
@@ -257,23 +445,49 @@ async def run_library_exec(
                 visible_cache_root,
                 environment.root,
                 *external_commands.readable_directories,
+                *additional_read_roots,
+                *additional_write_roots,
             ),
-            writable_roots=(environment.scratch,),
+            writable_roots=(environment.scratch, *additional_write_roots),
             external_executable_files=external_commands.sandbox_files,
             external_dependency_directories=external_commands.sandbox_directories,
             denied_directories=external_commands.denied_directories,
         ),
-        network_access=False,
+        network_access=network_access,
     )
-    profile = _render_macos_seatbelt(sandbox_policy)
-    profile_sha256 = hashlib.sha256(profile.encode("utf-8")).hexdigest()
-    command_ref = _command_ref(resolved_command, _SANDBOX_POLICY_ID)
+    profile = (
+        None
+        if args.sandbox_permissions == "require_escalated"
+        else _render_macos_seatbelt(sandbox_policy)
+    )
+    profile_sha256 = (
+        hashlib.sha256(profile.encode("utf-8")).hexdigest()
+        if profile is not None
+        else None
+    )
+    sandbox_policy_id = _sandbox_policy_id(args.sandbox_permissions)
+    execution_cwd_id = _execution_cwd_id(args.sandbox_permissions)
+    command_ref = _command_ref(
+        resolved_command,
+        sandbox_policy_id,
+        cwd_id=execution_cwd_id,
+    )
+    command_environment = _command_environment(
+        environment.scratch,
+        environment.tool_bin,
+        sandbox_permissions=args.sandbox_permissions,
+    )
+    if args.administrator_privileges:
+        command_environment["SUDO_ASKPASS"] = str(
+            environment.administrator_askpass()
+        )
     process_output = await environment.exec(
         argv=resolved_command.argv,
         command=args.cmd,
         profile=profile,
-        env=_command_environment(environment.scratch, environment.tool_bin),
+        env=command_environment,
         yield_time_ms=args.yield_time_ms,
+        timeout_ms=args.timeout_ms,
     )
     if temporary_directory is not None:
         if process_output.session_id is not None:
@@ -281,6 +495,7 @@ async def run_library_exec(
             raise KnowledgeError(
                 "yielded library commands require a persistent LibraryEnvironment"
             )
+        environment.terminate_all()
         temporary_directory.cleanup()
     effective_max_output_tokens = min(
         args.max_output_tokens,
@@ -290,6 +505,18 @@ async def run_library_exec(
         process_output,
         effective_max_output_tokens,
     )
+    sandbox_denied = (
+        profile is not None
+        and process_output.exit_code not in {None, 0}
+        and _sandbox_denial_detected(process_output.output)
+    )
+    if sandbox_denied:
+        output_text = (
+            "Sandbox denied this operation. If it is required for the user's "
+            "request, retry with the smallest explicit sandbox_permissions override "
+            "and a user-facing justification; the retry requires a fresh approval.\n\n"
+            f"{output_text}"
+        )
     _LOGGER.debug(
         "library_command_finished",
         exit_code=process_output.exit_code,
@@ -302,6 +529,7 @@ async def run_library_exec(
         output=_model_output(
             output=output_text,
             exit_code=process_output.exit_code,
+            timed_out=process_output.timed_out,
             wall_time_seconds=process_output.wall_time_seconds,
             session_id=process_output.session_id,
             chunk_id=process_output.chunk_id,
@@ -312,12 +540,23 @@ async def run_library_exec(
             "command": args.cmd,
             "resolved_command": list(resolved_command.argv),
             "command_ref": command_ref,
-            "cwd": "workspace",
-            "sandbox_policy": _SANDBOX_POLICY_ID,
+            "cwd": execution_cwd_id,
+            "sandbox_policy": sandbox_policy_id,
             "sandbox_profile_sha256": profile_sha256,
-            "network_access": False,
+            "sandbox_permissions": args.sandbox_permissions,
+            "additional_permissions": (
+                args.additional_permissions.model_dump(mode="json")
+                if args.additional_permissions is not None
+                else None
+            ),
+            "network_access": network_access,
+            "administrator_privileges": args.administrator_privileges,
+            "command_segments": _shell_command_segments(args.cmd),
             "yield_time_ms": args.yield_time_ms,
+            "timeout_ms": args.timeout_ms,
             "yielded": process_output.session_id is not None,
+            "timed_out": process_output.timed_out,
+            "sandbox_denied": sandbox_denied,
             "session_id": process_output.session_id,
             "chunk_id": process_output.chunk_id,
             "exit_code": process_output.exit_code,
@@ -354,6 +593,7 @@ async def run_library_write_stdin(
         output=_model_output(
             output=output_text,
             exit_code=process_output.exit_code,
+            timed_out=process_output.timed_out,
             wall_time_seconds=process_output.wall_time_seconds,
             session_id=process_output.session_id,
             chunk_id=process_output.chunk_id,
@@ -366,6 +606,7 @@ async def run_library_write_stdin(
             "chunk_id": process_output.chunk_id,
             "yield_time_ms": args.yield_time_ms,
             "yielded": process_output.session_id is not None,
+            "timed_out": process_output.timed_out,
             "exit_code": process_output.exit_code,
             "output_bytes": process_output.total_output_bytes,
             "output_omitted_bytes": process_output.output_omitted_bytes,
@@ -393,13 +634,18 @@ def _require_macos_sandbox() -> None:
         raise KnowledgeError(f"command shell is missing: {_SHELL}")
 
 
-def _resolve_command(command: str) -> _ResolvedCommand:
+def _resolve_command(
+    command: str,
+    *,
+    apply_resource_limits: bool,
+) -> _ResolvedCommand:
+    wrapper = _RESOURCE_WRAPPER if apply_resource_limits else _ESCALATED_WRAPPER
     return _ResolvedCommand(
         argv=(
             str(_SHELL),
             "-f",
             "-c",
-            _RESOURCE_WRAPPER,
+            wrapper,
             "--",
             command,
         ),
@@ -407,8 +653,22 @@ def _resolve_command(command: str) -> _ResolvedCommand:
     )
 
 
-def _command_environment(scratch: Path, tool_bin: Path) -> dict[str, str]:
-    return {
+def _command_environment(
+    scratch: Path,
+    tool_bin: Path,
+    *,
+    sandbox_permissions: SandboxPermissions,
+) -> dict[str, str]:
+    path_entries: list[str] = []
+    if sandbox_permissions != "require_escalated":
+        path_entries.append(str(tool_bin))
+    if sandbox_permissions != "use_default":
+        path_entries.extend(("/opt/homebrew/bin", "/usr/local/bin"))
+    path_entries.append(_SYSTEM_PATH)
+    temporary_directory = str(scratch)
+    if sandbox_permissions == "require_escalated":
+        temporary_directory = os.environ.get("TMPDIR", "/private/tmp")
+    environment = {
         "NO_COLOR": "1",
         "TERM": "dumb",
         "LANG": "C.UTF-8",
@@ -418,11 +678,129 @@ def _command_environment(scratch: Path, tool_bin: Path) -> dict[str, str]:
         "PAGER": "cat",
         "GIT_PAGER": "cat",
         "GH_PAGER": "cat",
-        "PATH": f"{tool_bin}:{_SYSTEM_PATH}",
-        "TMPDIR": str(scratch),
+        "PATH": ":".join(path_entries),
+        "TMPDIR": temporary_directory,
         "PYTHONNOUSERSITE": "1",
         "PYTHONDONTWRITEBYTECODE": "1",
+        "HOMEBREW_NO_ANALYTICS": "1",
+        "HOMEBREW_NO_ENV_HINTS": "1",
     }
+    if sandbox_permissions != "use_default":
+        for name in ("HOME", "USER", "LOGNAME"):
+            value = os.environ.get(name)
+            if value:
+                environment[name] = value
+    return environment
+
+
+def _additional_permission_roots(
+    args: LibraryExecInput,
+    *,
+    protected_roots: tuple[Path, ...],
+) -> tuple[tuple[Path, ...], tuple[Path, ...], bool]:
+    if args.sandbox_permissions == "require_escalated":
+        return (), (), True
+    profile = args.additional_permissions
+    if profile is None:
+        return (), (), False
+    read_roots = tuple(Path(value).resolve() for value in profile.file_system.read)
+    write_roots = tuple(
+        Path(value).resolve() for value in profile.file_system.write
+    )
+    for write_root in write_roots:
+        if any(_paths_overlap(write_root, root) for root in protected_roots):
+            raise KnowledgeError(
+                "library_exec additional write permissions cannot overlap the "
+                "library, PDF cache, or conversation environment; use a dedicated "
+                "application tool for those writes"
+            )
+    return read_roots, write_roots, profile.network.enabled
+
+
+def _paths_overlap(left: Path, right: Path) -> bool:
+    try:
+        left.relative_to(right)
+        return True
+    except ValueError:
+        pass
+    try:
+        right.relative_to(left)
+        return True
+    except ValueError:
+        return False
+
+
+def _sandbox_policy_id(permissions: SandboxPermissions) -> str:
+    if permissions == "use_default":
+        return _SANDBOX_POLICY_ID
+    if permissions == "with_additional_permissions":
+        return _ADDITIONAL_SANDBOX_POLICY_ID
+    return _ESCALATED_POLICY_ID
+
+
+def _execution_cwd_id(permissions: SandboxPermissions) -> str:
+    return "system-temp" if permissions == "require_escalated" else "workspace"
+
+
+def _shell_command_segments(command: str) -> list[str]:
+    segments: list[str] = []
+    current: list[str] = []
+    quote: str | None = None
+    escaped = False
+    depth = 0
+    index = 0
+    while index < len(command):
+        character = command[index]
+        if escaped:
+            current.append(character)
+            escaped = False
+            index += 1
+            continue
+        if character == "\\" and quote != "'":
+            current.append(character)
+            escaped = True
+            index += 1
+            continue
+        if quote is not None:
+            current.append(character)
+            if character == quote:
+                quote = None
+            index += 1
+            continue
+        if character in {"'", '"'}:
+            current.append(character)
+            quote = character
+            index += 1
+            continue
+        if character == "(":
+            depth += 1
+            current.append(character)
+            index += 1
+            continue
+        if character == ")" and depth > 0:
+            depth -= 1
+            current.append(character)
+            index += 1
+            continue
+        operator_length = 0
+        if depth == 0:
+            if command[index : index + 2] in {"&&", "||"}:
+                operator_length = 2
+            elif character in {";", "|", "\n"}:
+                operator_length = 1
+        if operator_length:
+            segment = "".join(current).strip()
+            if segment:
+                segments.append(segment)
+            current.clear()
+            index += operator_length
+            continue
+        current.append(character)
+        index += 1
+    segment = "".join(current).strip()
+    if segment:
+        segments.append(segment)
+    return segments[:32]
 
 
 def _resolve_external_commands() -> _ExternalCommandSet:
@@ -431,10 +809,16 @@ def _resolve_external_commands() -> _ExternalCommandSet:
     sandbox_directories: set[Path] = set()
     readable_directories: set[Path] = set()
     denied_directories: set[Path] = set()
-    for command_name in ("rg", "pdfinfo", "python"):
+    for command_name in (
+        "rg",
+        "pdfinfo",
+        "pdftotext",
+        "pdftoppm",
+        "python",
+    ):
         executable = (
             find_poppler_executable(command_name)
-            if command_name == "pdfinfo"
+            if command_name in {"pdfinfo", "pdftotext", "pdftoppm"}
             else (
                 Path(sys.executable).expanduser().resolve()
                 if command_name == "python"
@@ -473,6 +857,11 @@ def _resolve_external_commands() -> _ExternalCommandSet:
                     denied_directories.add(
                         Path(scheme_path).expanduser().resolve()
                     )
+    brew = _first_external_command_candidate("brew")
+    if brew is not None:
+        commands.append(("brew", brew))
+        sandbox_files.update(_path_resolution_chain(brew))
+        readable_directories.add(_homebrew_prefix(brew))
     return _ExternalCommandSet(
         commands=tuple(commands),
         sandbox_files=tuple(sorted(sandbox_files)),
@@ -480,6 +869,16 @@ def _resolve_external_commands() -> _ExternalCommandSet:
         readable_directories=tuple(sorted(readable_directories)),
         denied_directories=tuple(sorted(denied_directories)),
     )
+
+
+def _homebrew_prefix(brew: Path) -> Path:
+    for prefix in (Path("/opt/homebrew"), Path("/usr/local")):
+        try:
+            brew.relative_to(prefix)
+            return prefix
+        except ValueError:
+            continue
+    return brew.parent
 
 
 def _first_external_command_candidate(command_name: str) -> Path | None:
@@ -774,6 +1173,7 @@ async def _run_paper_read_command(
         output=_model_output(
             output=output,
             exit_code=exit_code,
+            timed_out=exit_code is None,
             wall_time_seconds=wall_time_seconds,
             session_id=None,
             chunk_id=command_ref[:16],
@@ -987,6 +1387,7 @@ def _model_output(
     *,
     output: str,
     exit_code: int | None,
+    timed_out: bool,
     wall_time_seconds: float,
     session_id: str | None,
     chunk_id: str,
@@ -998,6 +1399,8 @@ def _model_output(
     ]
     if exit_code is not None:
         sections.append(f"Process exited with code {exit_code}")
+    if timed_out:
+        sections.append("Process timed out and was terminated")
     if session_id is not None:
         sections.append(f"Process running with session ID {session_id}")
     sections.extend(
@@ -1024,6 +1427,22 @@ def _bounded_process_output(
         original_token_count=original_token_count,
     )
     return output_text, original_token_count
+
+
+def _sandbox_denial_detected(output: bytes) -> bool:
+    normalized = output.lower()
+    return any(
+        marker in normalized
+        for marker in (
+            b"operation not permitted",
+            b"sandbox-exec:",
+            b"deny file-",
+            b"deny network",
+            b"could not resolve host",
+            b"couldn't connect to server",
+            b"network is unreachable",
+        )
+    )
 
 
 def _truncate_for_token_budget(
@@ -1054,12 +1473,14 @@ def _approx_tokens_from_bytes(byte_count: int) -> int:
 def _command_ref(
     resolved_command: _ResolvedCommand,
     sandbox_policy_id: str,
+    *,
+    cwd_id: str = "workspace",
 ) -> str:
     payload = json.dumps(
         {
             "schema_version": _SCHEMA_VERSION,
             "command": resolved_command.argv,
-            "cwd": "workspace",
+            "cwd": cwd_id,
             "sandbox_policy_id": sandbox_policy_id,
         },
         ensure_ascii=True,

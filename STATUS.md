@@ -13,58 +13,30 @@
 
 ## 新会话从这里继续
 
-主动坐标探索式公式 OCR 已完成第一次真实 recognize 长链路验证。随后按用户批准简化
-accept：模型不再提交 `repair_span_id`、`replacement_text` 或乱码原文，只负责从原 PDF
-确定物理页与 `region`、检查候选并接受。cache manifest 源码已升到 v4，每个 revision 新增
-`formulas.jsonl`；accept 追加已接受 LaTeX 记录，原 `layout.txt` 不变，页面读取自动在末尾
-附加该页公式。多数有编号公式把编号作为辅助 `formula_ref`；无编号公式用附近短语，定位
-仍绑定 PDF SHA、页码和 region。它是按需积累的公式文档，不是全文预 OCR。
+PDF 工具链自动恢复已按 Codex 的命令审批与 sandbox override 结构移植到 Python Runtime。
+`library_exec` 默认仍无网络且只允许论文逻辑 workspace 的既有读写边界；模型只能为一条精确
+命令申请附加网络/文件权限或 sandbox 外执行，审批绑定命令、固定 cwd、权限和输入哈希。
+管理员路径使用受限 `SUDO_ASKPASS` 和 macOS 隐藏输入框，密码不进入模型、session 或 trace；
+每条命令有独立硬超时，超时、取消和 conversation teardown 都终止原进程组。
 
-新 overlay 已在张耀斌论文的正式 Q2/Q3 重跑中验证。Q2 完成 4 次 recognize 和 2 次
-`refined=false` accept；Q3 在全新 conversation 中直接读取两条 accepted 记录，OCR 为 0。
-两个最终答案各 12/12 标签正确，但缓存原始 LaTeX 仍含 `m a x` / `e x p`，所以跨会话复用
-有效而缓存公式精确匹配 Gold 失败。当前私有评分与逐项裁决保存在实验根目录
-`scores.yaml`，原始回答和 trace 由 `evidence.yaml` 索引。
+Research Skill 已升到 v29：首次读取论文前检查 `pdfinfo`、`pdftotext`、`pdftoppm`；缺少
+Poppler 时先检查 Homebrew，按审批分别安装 Homebrew 和 Poppler，最后回到默认 sandbox
+复验工具并重试原论文操作。已有工具链路径由
+`trace-5287b51caa264d7eae63cfe065cd7521` 验证，没有重复安装或申请权限。
 
-同模型 Codex CLI 基线也已交付并完成正式评分。Q1 为 6 correct、4 partial、2 incorrect，
-weighted 66.67%；主要错误是公式（3-4）时间差方向和公式（3-9）条件概率锚点/候选方向。
-Q2、Q3 均为 12/12，三个 query 的 macro weighted 为 88.89%。Q2 前误发的 Q1 在任何工具
-调用或可用答案产生前即终止，没有向 Q2 注入论文证据，按用户裁决只作为排除运行计入
-运营损耗；正式跨系统比较已经完成。
+缺少 Poppler 的真实开发 App 验收由 `trace-ce7fccb047d24934b9ffa339bbeda742`
+完成：独立 Reviewer 三次均把精确 `brew install poppler` 判定为 high risk、high
+authorization、allow；最终在 sandbox 外安装 Poppler 26.07.0，未使用管理员权限，随后在
+默认 sandbox 确认三个命令版本，并用真实《FaceNet》PDF 完成元数据读取、首页文本提取和
+页面 PNG 渲染。测试 PNG 已清理。
 
-正式运营汇总（均排除各系统已明确标记的非正式运行）：Paper Copilot 用时 387.708 秒、
-736,319 Token、36 次模型调用、55 次工具调用且 0 次失败，成本 ¥0.16953724；Codex CLI
-用时 1,947.231 秒、19,271,592 Token、216 次模型调用、227 次工具调用尝试且 27 次失败，
-成本 ¥1.04421308。相对 Codex CLI，Paper Copilot 在本次实验减少约 80.1% 耗时、96.2%
-Token 和 83.8% 成本。结论只适用于当前论文、模型与完整 Agent 配置，不是 OCR 组件的
-单变量因果结论。
+首次验收暴露审批模型 300 Token 输出预算不足，现已提高到 1000；上述三次真实审批分别使用
+601、686、838 Token。安装命令使用 `| tail` 时还会掩盖 Homebrew 的失败退出码，默认与升级
+shell wrapper 现已启用 `pipefail`；定向验证中失败管道返回 1，成功管道返回 0。
 
-Apple Silicon App 开发预览
-[`v0.1.0-preview.1`](https://github.com/lemma42796/paper-copilot/releases/tag/v0.1.0-preview.1)
-已公开发布，包含 70,614,645 字节的 `PaperCopilot-arm64.dmg` 和 SHA-256 文件；GitHub API
-报告的 DMG 摘要
-`9f7f0d09b70b73c24870b66302ed46b95924762a3f3ab1d592ea4898fb08b540` 与公开校验文件一致。
-这只验证了 Release 元数据和资产存在，尚未从 GitHub 全新下载安装并运行。
-
-Plus-M 可选组件 `1.1.0` 已在本机构建、ad-hoc 签名并安装，`active.json` 当前指向
-`versions/1.1.0/FormulaOCRHelper/FormulaOCRHelper`。公开
-[`formula-ocr-v1`](https://github.com/lemma42796/paper-copilot/releases/tag/formula-ocr-v1)
-已包含 schema-v2 manifest、`1.1.0` ARM64 Runtime 和 `PP-FormulaNet_plus-M-1.0.0`
-模型归档；manifest 的 URL、字节数和 SHA-256 与 GitHub Release 资产一致。旧 Plus-S
-`1.0.0` 只作为本机回滚版本保留。当前没有 Developer ID，App 与 Formula OCR 均为
-ad-hoc 签名、未经 Apple 公证的开发预览；设置页全新下载与安装仍未验证。
-
-真实运行首次暴露两个协议错误，当前工作区源码已修复：
-
-- `formula_ocr_tool.py` 将工具 schema 2 错写为 `PageEvidence.schema_version`，导致首次 OCR
-  后在证据校验阶段中断；现在证据 schema 独立固定为 1。
-- `page_geometry_tool.py` 可能从 PyMuPDF 收到孤立 UTF-16 surrogate，JSON/UTF-8 序列化会
-  中断；现在在提取边界统一替换为 `U+FFFD`。
-
-用于 README 展示的 6 张稳定图片保存在
-[案例图片目录](docs/assets/formula-ocr-active-localization/)。README 明确区分缓存文本、模型
-实际裁图与可读 OCR 渲染，不宣称“零算法定位”或“任意公式都能一次成功”。两张模型裁图的
-文件 SHA-256 与真实 trace 中的 `render_sha256` 完全一致。
+这仍不是发布包验收：完全没有 Homebrew 时的官方安装脚本、管理员密码输入/取消、新 DMG
+打包和 Release 下载后运行尚未验证。公开 App 仍是 `v0.1.0-preview.1`，不包含本次工作区
+改动。
 
 ## 主动公式 OCR 真实验证
 
@@ -159,17 +131,19 @@ SwiftMath `1.7.3` 已锁定，Debug/Release arm64 构建通过；完成报告支
 
 ## 下一步
 
-1. 从 GitHub Release 全新下载安装 App，验证 Gatekeeper 手动放行、内嵌 Runtime、产品缓存
-   字体恢复、SwiftMath 视觉效果，以及设置页 Formula OCR 下载与首次识别；
-2. 决定 `m a x` / `e x p` 等局部 OCR 拼写间距的安全处理方式，不允许模型重写完整公式；
-3. 用无编号公式覆盖 v4 accept 与跨会话复用；
+1. 构建新的 Apple Silicon DMG，发布下一版 Preview，再从 Release 下载运行并复验 Poppler
+   恢复、产品缓存字体修复、SwiftMath 与 Formula OCR 下载；
+2. 在完全没有 Homebrew 的 macOS 上验证官方安装脚本、管理员密码输入和取消路径；
+3. 决定 `m a x` / `e x p` 等局部 OCR 拼写间距的安全处理方式，并用无编号公式覆盖 v4
+   accept 与跨会话复用；
 4. 验证三次 recognize 上限、失败计数、Helper 超时/崩溃重启和一小时空闲退出；
 5. 继续寻找真实显式 `CIDToGIDMap` 流 PDF，补上字体修复集成覆盖。
 
 ## 本次文件边界与验证
 
-本轮只同步发布状态文档：`README.md`、`README.en.md`、`TASKS.md`、`STATUS.md` 与
-`docs/design/formula_ocr_optional_component.md`。没有修改产品代码，也没有运行 Python 测试、
-Ruff、mypy、App 构建或发布后安装。公开状态通过 GitHub Release API 与 manifest 读取核对；
-没有下载 70.6 MB DMG 做本地独立哈希，只确认 GitHub API 报告的摘要与公开 SHA-256 文件一致。
-`output/` 中两张重复的临时裁图仍不是交付文件，不应提交。
+本轮实现修改 `library_exec` schema、sandbox policy、命令审批、自动 Reviewer、进程超时与
+`SUDO_ASKPASS`，同步 Research Skill v29、macOS 审批展示、架构和两份设计文档。真实开发
+App trace 覆盖已有工具链与“已有 Homebrew、缺少 Poppler”两条路径；后者完成安装和真实 PDF
+三工具复验。审批预算修复在真实 trace 中验证，`pipefail` 只做了两种 wrapper 的定向命令
+验证。未运行 Python 测试、Ruff、mypy、完整分发构建或新 Release 安装；Homebrew 缺失与
+管理员路径未验证。`output/` 仍是用户未跟踪产物，不提交。

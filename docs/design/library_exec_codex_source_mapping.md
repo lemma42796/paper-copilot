@@ -1,8 +1,9 @@
 # `library_exec` Codex 源码映射
 
-状态：Codex 执行反馈、按需 manifest 发现与上下文职责去重已写入工作区，尚未验证或重跑
-日期：2026-08-01
-Codex source ref：`61a44880a85d2fd0d8770908dea5733495e571c8`  
+状态：Codex 权限申请、审批、sandbox override 与进程生命周期语义已移植；已有 Homebrew、
+缺少 Poppler 的恢复路径已在 Xcode 开发 App 中真实验证，Homebrew 缺失路径与分发包待验证
+日期：2026-08-10
+Codex source ref：`8cabf5a6cf103cebe338d46346e43e3201e64f41`
 Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地修改
 
 ## 1. 目的
@@ -20,13 +21,13 @@ Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地�
 
 | 需求 | Codex source | Codex 机制 | Paper Copilot 分类 | 结论 |
 |---|---|---|---|---|
-| 工具输入 | `core/src/tools/handlers/shell_spec.rs`、`unified_exec.rs` | 必填 `cmd`；可选 `workdir`、`shell`、`tty`、`yield_time_ms`、`max_output_tokens` 和权限参数 | 直接采用 + 必要适配 | 保留 `cmd`；输出预算改用 `max_output_tokens`。论文工具不开放 `workdir`、`shell`、`tty` 和权限参数 |
+| 工具输入 | `core/src/tools/handlers/shell_spec.rs`、`unified_exec.rs` | 必填 `cmd`；可选 `workdir`、`shell`、`tty`、`yield_time_ms`、`max_output_tokens` 和权限参数 | 直接采用 + 必要适配 | 保留 `cmd/yield_time_ms/max_output_tokens`，增加硬 `timeout_ms` 与 Codex 同名 sandbox 权限参数；仍不开放 `workdir`、shell 或 PTY |
 | 命令解析 | `unified_exec.rs::get_command` | 由选定 shell 将 `cmd` 解析为实际 argv；登录 shell 由配置控制 | 直接采用 + 必要适配 | 使用固定非登录 zsh 生成实际 argv，不允许模型选择 shell |
-| cwd | `unified_exec/exec_command.rs` | 相对 `workdir` 基于 environment cwd 解析，并验证本机路径约定 | 必要适配 | environment cwd 固定为论文逻辑 workspace，不接受模型提供的 cwd |
+| cwd | `unified_exec/exec_command.rs` | 相对 `workdir` 基于 environment cwd 解析，并验证本机路径约定 | 必要适配 | 不接受模型提供 cwd；默认与附加 sandbox 权限使用论文逻辑 workspace，`require_escalated` 使用固定系统临时目录，避免从 cwd 暴露论文库链接 |
 | 环境变量 | `core/src/exec_env.rs`、`unified_exec/process_manager.rs` | 通过 `ShellEnvironmentPolicy` 构造环境，再叠加非交互执行变量 | 直接采用 + 必要适配 | 引入窄化环境策略；不继承用户凭据，并采用 Codex 的 `NO_COLOR`、`TERM`、locale 和 pager 语义 |
 | sandbox 选择 | `sandboxing/src/manager.rs` | `SandboxManager` 根据文件系统、网络策略和平台选择 sandbox，再把声明式权限转换为平台命令 | 直接采用 | handler 不直接拥有安全规则；先构造声明式策略，再由 macOS renderer 生成 Seatbelt 命令 |
 | macOS sandbox | `sandboxing/src/seatbelt.rs` | 基础策略 + readable roots + writable roots + network policy，最终包装 `/usr/bin/sandbox-exec` | 直接采用 + 必要适配 | readable roots 为 library/cache；writable root 仅 scratch；网络 restricted |
-| 权限审批 | `tools/runtimes/shell.rs` | canonical command、cwd、sandbox permissions 和 additional permissions 共同组成 approval key；策略允许时可审批或升级 | 必要适配 | `library_exec` 不开放额外权限，也不在 sandbox 失败后升级；用户可见写操作继续由 `library_edit` 承担 |
+| 权限审批 | `exec_policy.rs`、`tools/orchestrator.rs`、`tools/handlers/mod.rs` | compound command、cwd、sandbox permissions 和 additional permissions 共同进入审批；sandbox 拒绝后只经新的受控申请升级 | 直接采用 + 必要适配 | 支持 `use_default`、`with_additional_permissions`、`require_escalated`；审批绑定精确 command/cwd/permissions/input hash，默认拒绝不会静默升级 |
 | 特殊命令拦截 | `unified_exec/exec_command.rs` 中的 `intercept_apply_patch` | 命令解析后、通用进程启动前，把一个窄化命令交给专用 handler | 直接采用 + Codex 缺失 | `paper read/search` 采用相同拦截位置和失败语义，仅接受占据整个 `cmd` 的直接命令；复合使用明确拒绝，缓存操作由专用 broker 内部完成 |
 | 进程生命周期 | `unified_exec/process_manager.rs` | 分配 process id、启动、yield、取消、退出 watcher、并发上限和持续进程存储 | 必要适配 | Slice 2 仅实现一次性有界进程、取消和进程组终止；不实现 PTY、yield session 或 `write_stdin` |
 | 执行时限 | `tools/runtimes/shell.rs`、`unified_exec/process_manager.rs` | request 携带 expiration/cancellation；长进程可 yield 后继续 | 必要适配 | 因不提供持续进程，`timeout_ms` 作为硬 deadline，超时终止整个进程组 |
@@ -64,8 +65,9 @@ Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地�
    只接受占据整个命令的直接调用；复合使用明确拒绝，不在入口处用独立解析路径抢先执行；
 7. 环境策略补齐 Codex 的非交互输出约束。
 8. 补齐 Codex restricted platform defaults 中用于获取 cwd 的根目录项读取规则；
-9. 不开放 Homebrew PATH，只把三个批准命令和精确 Mach-O 依赖加入声明式 Seatbelt
-   policy；可用命令名称进入权威 trace，外部真实路径不进入模型输出协议。
+9. 默认 PATH 只链接 Runtime 已解析的命令；Homebrew 存在时把 `brew` 脚本和其只读 prefix
+   加入受控命令视图，Poppler 安装后在同一 conversation 动态补入
+   `pdfinfo/pdftotext/pdftoppm`，无需重建环境。
 10. cache、命令 sandbox 和页渲染统一使用同一 Poppler resolver，避免“命令可用但
     cache 报缺失”的分裂判断。
 
@@ -74,7 +76,12 @@ Codex worktree：`/Users/a123/Documents/agent学习/codex`，审计时无本地�
 - 不开放 Codex 的 `workdir`、模型可选 shell、login shell、PTY 和远程 environment；
 - Slice 2 不实现 `yield_time_ms`、持续 session 和 `write_stdin`；该历史限制已由 E3
   conversation 级环境取代；
-- 不开放 sandbox/additional permissions，也不在 sandbox 失败后升级；
+- 默认 sandbox 不变；附加路径/网络与 sandbox 外执行均为单次精确审批。sandbox 外命令的
+  cwd、PATH 和 TMPDIR 不暴露 conversation workspace。sandbox 失败只返回
+  可审计提示，模型必须带权限和理由发起新调用，不自动放行；
+- `administrator_privileges` 只与 `require_escalated` 同时使用。Runtime 生成只响应真实
+  `/usr/bin/sudo -A -v` 认证父进程的 `SUDO_ASKPASS` helper，由 macOS 隐藏输入框把密码
+  直接交给 `sudo`，不进入模型可见 I/O；
 - 保留 Paper Copilot 专用 `paper read/search` broker；
 - Slice 2 保留一次性命令的硬 `timeout_ms`；E3 改为 bounded `yield_time_ms`，整体
   deadline 继续由 Agent/job Runtime 强制；
@@ -110,7 +117,7 @@ Paper Copilot 的必要适配：
 - `library_exec` 公开 `cmd/yield_time_ms/max_output_tokens`；
   `library_write_stdin` 公开 `session_id/chars/yield_time_ms/max_output_tokens`；
 - 用户中断或删除 conversation 时终止全部进程组；
-- 不开放 PTY、login shell、shell/workdir/environment 选择、网络或权限升级；
+- 不开放 PTY、login shell 或 shell/workdir 选择；网络或权限只可通过新的精确审批参数申请；
 - 受控 Python 留给 E4，不在本 slice 扩大 PATH。
 
 ## 5. Codex 式跨论文批量研究视图
@@ -193,8 +200,8 @@ schema 上限都不能验证 Codex 式批量读取；底层收集和模型侧截
    限制，不在 Pydantic schema 中把最大值固定为默认值；
 3. 联动调整原始 output collection，使其容量与模型侧 token budget 一致，并继续
    暴露准确的 `original_token_count`、collection omitted bytes 和截断 marker；
-4. 保留 PC 的必要领域边界：固定 logical cwd、只读 `library/cache/papers`、仅
-   `scratch` 可写、无网络、无权限升级、无 PTY/login shell/任意 workdir；
+4. 保留 PC 的必要领域边界：固定 logical cwd、默认只读 `library/cache/papers`、仅
+   `scratch` 可写且无网络；任何扩大都绑定单次精确审批，无 PTY/login shell/任意 workdir；
 5. 用简洁环境事实声明现有受控 Python 可用于批处理，不增加论文专用
    搜索、待办或 Query 模板。
 6. 停止向 World State 预注入逐论文 `research_cache_index`；把准备完整性、PDF
@@ -217,9 +224,9 @@ Definition of Done：
 - completed、yielded 和 poll 的模型可见字段与固定 Codex 语义逐项映射；
 - 大批量命令不会在模型侧 token policy 之前被未说明的 64 KB 上限静默截断；
 - collection omission 与模型侧 token truncation 可在 trace 和模型反馈中区分；
-- 现有授权、网络和写入边界不扩大；
-- 代码状态记录为“已写入、未验证”；经用户要求的验证和隔离评测仍分别记录，不把未运行
-  项标为完成。
+- 默认授权、网络和写入边界不扩大；获批 override 的边界进入 trace 且只作用于一次调用；
+- 状态区分源码实现、定向包装器验证、开发 App 真实 trace、分发包与全新安装；不把未运行
+  的 Homebrew bootstrap 或发布安装标为完成。
 
 评测主门槛为二选一：质量超过 Codex CLI，或在质量不下降时 total tokens 低于 Codex
 CLI。工具调用数和平均输出/调用只作为机制诊断；单次运行不作显著性结论。

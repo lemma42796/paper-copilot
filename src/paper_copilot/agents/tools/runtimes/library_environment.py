@@ -5,8 +5,10 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 from collections import deque
@@ -30,6 +32,7 @@ class LibraryProcessOutput:
     wall_time_seconds: float
     output_omitted_bytes: int
     total_output_bytes: int
+    timed_out: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,11 +98,14 @@ class _ManagedProcess:
         process: subprocess.Popen[bytes],
         session_id: str,
         command: str,
+        timeout_ms: int,
     ) -> None:
         self.process = process
         self.session_id = session_id
         self.command = command
         self.started = time.monotonic()
+        self.deadline = self.started + timeout_ms / 1_000
+        self.timed_out = False
         self.condition = threading.Condition()
         self.interaction_lock = threading.Lock()
         self.output = _ChunkBuffer(_RAW_OUTPUT_MAX_BYTES)
@@ -109,6 +115,12 @@ class _ManagedProcess:
             daemon=True,
         )
         self.reader.start()
+        self.timeout_watcher = threading.Thread(
+            target=self._enforce_timeout,
+            name=f"paper-copilot-library-timeout-{session_id}",
+            daemon=True,
+        )
+        self.timeout_watcher.start()
 
     def _read_output(self) -> None:
         stream = self.process.stdout
@@ -121,14 +133,31 @@ class _ManagedProcess:
         with self.condition:
             self.condition.notify_all()
 
+    def _enforce_timeout(self) -> None:
+        remaining = max(self.deadline - time.monotonic(), 0)
+        try:
+            self.process.wait(timeout=remaining)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        self.timed_out = True
+        self.terminate()
+        with self.condition:
+            self.condition.notify_all()
+
     def collect(self, *, yield_time_ms: int) -> LibraryProcessOutput:
-        deadline = time.monotonic() + yield_time_ms / 1_000
+        yield_deadline = time.monotonic() + yield_time_ms / 1_000
         with self.condition:
             while self.process.poll() is None:
-                remaining = deadline - time.monotonic()
+                now = time.monotonic()
+                remaining = min(yield_deadline, self.deadline) - now
                 if remaining <= 0:
                     break
                 self.condition.wait(timeout=remaining)
+        if self.process.poll() is None and time.monotonic() >= self.deadline:
+            self.timed_out = True
+            self.terminate()
+            self.process.wait()
         exit_code = self.process.poll()
         if exit_code is not None:
             self.reader.join()
@@ -142,11 +171,21 @@ class _ManagedProcess:
             wall_time_seconds=time.monotonic() - self.started,
             output_omitted_bytes=omitted,
             total_output_bytes=total,
+            timed_out=self.timed_out,
         )
 
     def terminate(self) -> None:
         if self.process.poll() is not None:
             return
+        try:
+            os.killpg(self.process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        try:
+            self.process.wait(timeout=0.5)
+            return
+        except subprocess.TimeoutExpired:
+            pass
         try:
             os.killpg(self.process.pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -164,6 +203,7 @@ class LibraryEnvironment:
         self._process_lock = threading.Lock()
         self._processes: dict[str, _ManagedProcess] = {}
         self._configured_roots: tuple[Path, Path] | None = None
+        self._temporary_directories: list[Path] = []
 
     def configure_research_view(
         self,
@@ -242,9 +282,9 @@ class LibraryEnvironment:
                     raise KnowledgeError(
                         "library environment roots cannot change within a conversation"
                     )
-                return (
-                    cache_root if cache_root.is_dir() else self.empty_cache
-                )
+                for command_name, executable in external_commands:
+                    self._ensure_symlink(self.tool_bin / command_name, executable)
+                return cache_root if cache_root.is_dir() else self.empty_cache
             self._ensure_directory(self.root)
             self._ensure_directory(self.workspace)
             self._ensure_directory(self.scratch)
@@ -260,14 +300,40 @@ class LibraryEnvironment:
             self._configured_roots = (library_root, cache_root)
             return visible_cache
 
+    def administrator_askpass(self) -> Path:
+        with self._configuration_lock:
+            helper_directory = Path(
+                tempfile.mkdtemp(prefix="paper-copilot-askpass-")
+            )
+            self._temporary_directories.append(helper_directory)
+            helper = helper_directory / "askpass"
+            content = """#!/bin/sh
+parent_executable=$(/bin/ps -p \"$PPID\" -o comm= 2>/dev/null)
+parent_command=$(/bin/ps -p \"$PPID\" -o command= 2>/dev/null)
+case \"$parent_executable\" in
+  /usr/bin/sudo|sudo) ;;
+  *) exit 1 ;;
+esac
+case \"$parent_command\" in
+  *"/usr/bin/sudo -A -v"|*"sudo -A -v") ;;
+  *) exit 1 ;;
+esac
+exec /usr/bin/osascript \\
+  -e 'display dialog "Paper Copilot 需要管理员权限来执行你刚批准的命令。请输入 Mac 登录密码；密码只会交给 sudo，且不会被保存。" default answer "" with hidden answer buttons {"取消", "继续"} default button "继续" with icon caution' \\
+  -e 'text returned of result'
+""".encode("utf-8")
+            self._ensure_executable_file(helper, content)
+            return helper
+
     async def exec(
         self,
         *,
         argv: tuple[str, ...],
         command: str,
-        profile: str,
+        profile: str | None,
         env: dict[str, str],
         yield_time_ms: int,
+        timeout_ms: int,
     ) -> LibraryProcessOutput:
         managed = await asyncio.to_thread(
             self._spawn,
@@ -275,6 +341,7 @@ class LibraryEnvironment:
             command=command,
             profile=profile,
             env=env,
+            timeout_ms=timeout_ms,
         )
         try:
             output = await asyncio.to_thread(
@@ -322,23 +389,34 @@ class LibraryEnvironment:
                 managed.process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 continue
+        with self._configuration_lock:
+            temporary_directories = tuple(self._temporary_directories)
+            self._temporary_directories.clear()
+        for directory in temporary_directories:
+            shutil.rmtree(directory, ignore_errors=True)
 
     def _spawn(
         self,
         *,
         argv: tuple[str, ...],
         command: str,
-        profile: str,
+        profile: str | None,
         env: dict[str, str],
+        timeout_ms: int,
     ) -> _ManagedProcess:
         with self._process_lock:
             if len(self._processes) >= _MAX_ACTIVE_PROCESSES:
                 raise KnowledgeError(
                     "library environment reached its active process limit"
                 )
+        execution_argv = (
+            ["/usr/bin/sandbox-exec", "-p", profile, *argv]
+            if profile is not None
+            else list(argv)
+        )
         process = subprocess.Popen(
-            ["/usr/bin/sandbox-exec", "-p", profile, *argv],
-            cwd=self.workspace,
+            execution_argv,
+            cwd=(self.workspace if profile is not None else Path("/private/tmp")),
             env=env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -349,6 +427,7 @@ class LibraryEnvironment:
             process=process,
             session_id=uuid4().hex,
             command=command,
+            timeout_ms=timeout_ms,
         )
         with self._process_lock:
             self._processes[managed.session_id] = managed
@@ -435,6 +514,22 @@ class LibraryEnvironment:
             return
         with path.open("xb") as stream:
             stream.write(content)
+
+    @staticmethod
+    def _ensure_executable_file(path: Path, content: bytes) -> None:
+        if path.is_symlink():
+            raise KnowledgeError(
+                f"library environment executable must not be a symlink: {path.name}"
+            )
+        if path.exists():
+            if not path.is_file() or path.read_bytes() != content:
+                raise KnowledgeError(
+                    f"library environment executable content changed: {path.name}"
+                )
+        else:
+            with path.open("xb") as stream:
+                stream.write(content)
+        path.chmod(0o700)
 
     @staticmethod
     def _ensure_directory(path: Path) -> None:

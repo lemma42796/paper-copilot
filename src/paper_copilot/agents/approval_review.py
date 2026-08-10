@@ -27,14 +27,23 @@ Assess:
 3. whether this exact action may run.
 
 Allow low-risk actions. Allow medium-risk actions only when authorization is at
-least medium and the action is narrow and reversible. Deny high and critical
-risk. Deny credential access, external disclosure, permanent deletion, path
-escape, overwrite, or security weakening. A library move, copy, or directory
-creation involving a small explicit set of paths is normally low or medium.
+least medium and the action is narrow. A high-risk action may be allowed only
+when the user clearly gave high authorization for this exact target and side
+effect, the command and permission request are explicit and bounded, and the
+action is necessary for the request. High authorization may come from explicitly
+naming the action, or from asking for an objective whose declared local
+prerequisite is exactly the named dependency being installed. Deny critical risk. Deny credential
+collection by the model, credential disclosure, unrelated external disclosure,
+permanent deletion, path escape, or persistent security weakening. A one-command
+sandbox override is not security weakening by itself; assess the exact command
+that would run. Installing an explicitly requested, named package from its
+official source is normally high risk and requires high authorization.
 
 Return strict JSON only:
 {"risk_level":"low|medium|high|critical","user_authorization":"unknown|low|medium|high","outcome":"allow|deny","rationale":"one concise sentence"}
 """
+
+_MAX_OUTPUT_TOKENS = 1_000
 
 
 class ApprovalAssessment(BaseModel):
@@ -79,7 +88,7 @@ async def review_tool_approval(
             ],
             tools=[],
             system=_SYSTEM_PROMPT,
-            max_tokens=300,
+            max_tokens=_MAX_OUTPUT_TOKENS,
         )
     text = "".join(
         block.text for block in response.content if isinstance(block, TextBlock)

@@ -107,7 +107,7 @@ rollout deadline。
 | 工具 | 当前职责与边界 |
 |---|---|
 | `load_skill` | 从可信 Skill catalog 按需加载固定版本领域指令；当前含 `research-papers` 与独立 `formula-ocr`，同一 conversation 同版本只首次返回正文 |
-| `library_exec` | 在 conversation 级逻辑 workspace 中执行有界命令；`library/`、`cache/`、`papers/`、`research-manifests/` 只读，持久 `scratch/` 可写；长命令可 yield |
+| `library_exec` | 默认在 conversation 级逻辑 workspace 中执行有界命令，`library/`、`cache/`、`papers/`、`research-manifests/` 只读，持久 `scratch/` 可写且无网络；可按单次精确审批申请附加 sandbox 权限，sandbox 外执行改用固定系统临时目录；长命令可 yield |
 | `library_write_stdin` | 以不透明 session ID 写入或轮询已 yield 的 `library_exec` 进程；继承原命令 sandbox |
 | `inspect_page` | 按授权 PDF SHA-256、页码和可选 region 渲染单页图像；不做 OCR、批量处理或文本回退 |
 | `query_page_geometry` | 仅在纯文本模型且 Formula OCR 可用时，搜索页面文字或枚举限定 region 的行与逐字符坐标；只返回弱几何证据，不自动构造 crop |
@@ -203,18 +203,26 @@ prompt、Runtime context、Pydantic tool schema 和应用策略能够定义行�
 ```text
 model request
   → schema validation
-  → capability and canonical path policy
+  → command segmentation, capability and canonical path policy
   → allow / deny / require approval
-  → exact approval binding
-  → tool execution
+  → exact command/cwd/permission/input binding
+  → sandboxed execution or approved override
+  → timeout/cancel process-group termination
   → bounded untrusted output
   → authoritative state refresh
 ```
 
 - dispatch 前创建 lifecycle trace；schema/payload 失败记录 failed 终态。
 - approval 绑定 tool call、已校验参数、目标快照和预览；执行前变化会使批准失效。
+- `library_exec` 默认权限不变；`with_additional_permissions` 只把审批中的绝对路径和网络
+  权限加入本次 Seatbelt policy，`require_escalated` 只对审批中的单条命令取消 sandbox。
+  sandbox 拒绝不会静默放行，模型必须带最小权限和理由重新申请，并产生新的审批。
+- 管理员命令只能在 `require_escalated` 中显式声明；Runtime 以只响应真实
+  `/usr/bin/sudo -A -v` 认证父进程的 macOS 隐藏输入 helper 提供密码，密码不进入工具
+  参数、模型输出、session 或 trace。
 - 拒绝不修改磁盘；中断、失败和恢复不自动重放缺少结果的副作用工具。
-- 高影响操作必须由用户明确确认，不能由自动审核替代。
+- 自动审批由独立 Reviewer 执行并失败关闭；高风险操作只有在用户对精确目标和副作用已有
+  高强度授权时才可放行，critical 风险、凭据披露和持久安全弱化始终拒绝。
 - 模型自报工具调用不是权威 trace。
 
 ## 7. 状态、恢复与存储
@@ -298,7 +306,10 @@ Application Support 中，经 Runtime 环境变量传入，不进入论文库、
   `library/`/`cache/`/`papers/`/`research-manifests/`、跨命令 `scratch/` 和进程表。
   `library_exec` 在 yield 窗口后返回
   session/chunk ID；`library_write_stdin` 写入或轮询同一进程。用户中断和 conversation
-  删除会终止环境内全部进程组；无 PTY、任意 workdir、shell 选择、网络或权限升级。
+  删除会终止环境内全部进程组；每条原始命令另有硬 wall-clock timeout。无 PTY、任意
+  workdir 或 shell 选择；sandbox 外命令改用固定系统临时目录，不从 cwd/PATH/TMPDIR 暴露
+  论文逻辑 workspace。默认无网络和权限升级，但模型可通过上述审批协议申请单次精确
+  附加权限或 sandbox 外执行。
   受控 `python` 与 `python3` 指向同一解释器，只开放标准库读取和 `scratch/` 写入，
   关闭网络、user site、第三方 site-packages 和 bytecode 写入。
 - 一次任务使用客户端选择的同一模型，不做模型分层。

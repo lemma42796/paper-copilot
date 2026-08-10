@@ -161,3 +161,30 @@ overlay 页面回读和新会话零 OCR 复用均已验证；原样 OCR 缓存�
 `CGFloat.greatestFiniteMagnitude` 类型歧义后，Debug/Release arm64 构建均通过。仍需在
 完成报告中检查上述定界符、现有多行 `latex` 代码块、深浅色、长公式横向滚动、链接点击和
 解析失败降级。
+
+### 5. 发布并补全 PDF 工具链自动恢复验证
+
+状态：`poppler_recovery_with_existing_homebrew_validated_homebrew_bootstrap_and_release_pending`。
+
+已完成：
+
+- `library_exec` 支持单次精确审批的附加网络/文件权限与 sandbox 外执行；审批绑定命令、
+  固定 cwd、权限和输入哈希，默认 sandbox 边界不变；
+- 管理员路径使用受限 `SUDO_ASKPASS` 与 macOS 隐藏输入框，密码不进入模型、session 或
+  trace；所有命令具有硬超时，取消和超时终止原进程组；
+- Research Skill v29 在首次论文读取前检查 `pdfinfo`、`pdftotext`、`pdftoppm`；缺少
+  Poppler 时先恢复 Homebrew，再安装 Poppler，随后回到默认 sandbox 复验；
+- 已有工具链路径由 `trace-5287b51caa264d7eae63cfe065cd7521` 验证，不重复安装或申请权限；
+- 卸载 Poppler 后，`trace-ce7fccb047d24934b9ffa339bbeda742` 通过独立自动审批，在 sandbox
+  外执行 `brew install poppler`，安装 26.07.0，并在默认 sandbox 用真实 PDF 验证元数据
+  读取、文本提取和页面渲染；未使用管理员权限；
+- 自动审批输出预算已从 300 提高到 1000 Token；三次真实审批分别使用 601、686、838
+  Token 并返回 `allow`；shell wrapper 已启用 `pipefail`，默认和升级包装器的失败/成功
+  管道退出码定向验证为 1/0。
+
+尚未完成：
+
+- 在完全没有 Homebrew 的 macOS 上验证官方安装脚本、管理员密码输入和取消路径；
+- 构建新的 Apple Silicon DMG，验证内嵌 Runtime 后发布下一版 Preview；
+- 从新 Release 下载并运行，复验 Poppler 自动恢复和论文解析；
+- 未运行 Python 测试、Ruff 或 mypy；`pipefail` 修复目前只有定向命令验证。
