@@ -101,6 +101,14 @@
 			path = Views;
 			sourceTree = "<group>";
 		};
+		040000000000000000000005 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				020000000000000000000006 /* PaperCopilot.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
 		040000000000000000000006 /* Storage */ = {
 			isa = PBXGroup;
 			children = (
@@ -126,14 +134,6 @@
 				020000000000000000000011 /* ClientStressTest.swift */,
 			);
 			path = Diagnostics;
-			sourceTree = "<group>";
-		};
-		040000000000000000000005 /* Products */ = {
-			isa = PBXGroup;
-			children = (
-				020000000000000000000006 /* PaperCopilot.app */,
-			);
-			name = Products;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -280,7 +280,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -290,7 +290,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = local.paper-copilot;
+				PRODUCT_BUNDLE_IDENTIFIER = "local.paper-copilot";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -301,7 +301,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -311,7 +311,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = local.paper-copilot;
+				PRODUCT_BUNDLE_IDENTIFIER = "local.paper-copilot";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
