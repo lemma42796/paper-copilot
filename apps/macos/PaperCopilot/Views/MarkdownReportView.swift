@@ -8,17 +8,19 @@ struct MarkdownReportView: View {
     let markdown: String
     let pdfDirectory: String?
     let citationTargets: [String: String]
+    let onOpenCitation: (PaperCitationDestination) -> Void
     @State private var document: MarkdownDocument
-    @State private var citationDestination: PaperCitationDestination?
 
     init(
         markdown: String,
         pdfDirectory: String?,
-        citationTargets: [String: String]
+        citationTargets: [String: String],
+        onOpenCitation: @escaping (PaperCitationDestination) -> Void
     ) {
         self.markdown = markdown
         self.pdfDirectory = pdfDirectory
         self.citationTargets = citationTargets
+        self.onOpenCitation = onOpenCitation
         _document = State(
             initialValue: MarkdownDocument(markdown: markdown)
         )
@@ -60,9 +62,6 @@ struct MarkdownReportView: View {
         .environment(\.openURL, OpenURLAction { url in
             openCitation(url)
         })
-        .sheet(item: $citationDestination) { destination in
-            PaperCitationPreview(destination: destination)
-        }
     }
 
     private func openCitation(_ url: URL) -> OpenURLAction.Result {
@@ -104,12 +103,12 @@ struct MarkdownReportView: View {
             return .discarded
         }
 
-        citationDestination = PaperCitationDestination(url: target, page: page)
+        onOpenCitation(PaperCitationDestination(url: target, page: page))
         return .handled
     }
 }
 
-private struct PaperCitationDestination: Identifiable {
+struct PaperCitationDestination: Identifiable {
     let url: URL
     let page: Int
 
@@ -118,9 +117,10 @@ private struct PaperCitationDestination: Identifiable {
     }
 }
 
-private struct PaperCitationPreview: View {
+struct PaperCitationPanel: View {
     let destination: PaperCitationDestination
-    @Environment(\.dismiss) private var dismiss
+    let onClose: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
@@ -128,19 +128,35 @@ private struct PaperCitationPreview: View {
                 Text("\(destination.url.deletingPathExtension().lastPathComponent) · 第 \(destination.page) 页")
                     .font(.headline)
                     .lineLimit(1)
+                    .id(destination.id)
+                    .transition(.opacity)
                 Spacer()
-                Button("关闭") {
-                    dismiss()
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark")
                 }
+                .buttonStyle(.plain)
                 .keyboardShortcut(.cancelAction)
+                .help("关闭论文预览")
             }
             .padding()
 
             Divider()
 
-            PaperPDFView(url: destination.url, page: destination.page)
+            ZStack {
+                PaperPDFView(url: destination.url, page: destination.page)
+                    .id(destination.id)
+                    .transition(.opacity)
+            }
         }
-        .frame(minWidth: 760, minHeight: 640)
+        .frame(minWidth: 300, idealWidth: 460)
+        .background(.background)
+        .animation(citationChangeAnimation, value: destination.id)
+    }
+
+    private var citationChangeAnimation: Animation? {
+        reduceMotion ? nil : .easeInOut(duration: 0.16)
     }
 }
 

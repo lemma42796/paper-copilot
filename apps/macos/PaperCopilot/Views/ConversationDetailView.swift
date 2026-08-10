@@ -7,11 +7,15 @@ struct ConversationDetailView: View {
     @EnvironmentObject private var appModel: AppModel
     @State private var draft = ""
     @State private var showsContextUsage = false
+    let onOpenCitation: (PaperCitationDestination) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
             if let conversation = appModel.selectedConversation {
-                ConversationTimeline(conversation: conversation)
+                ConversationTimeline(
+                    conversation: conversation,
+                    onOpenCitation: onOpenCitation
+                )
             } else {
                 emptyState
             }
@@ -474,6 +478,7 @@ private final class SubmitTextView: NSTextView {
 private struct ConversationTimeline: View {
     @EnvironmentObject private var appModel: AppModel
     let conversation: ChatConversation
+    let onOpenCitation: (PaperCitationDestination) -> Void
 
     private var latestActivityBoundary: String {
         for job in conversation.jobs.reversed() {
@@ -500,7 +505,8 @@ private struct ConversationTimeline: View {
                     ForEach(conversation.jobs) { job in
                         JobTurnView(
                             job: job,
-                            events: appModel.jobEvents[job.id, default: []]
+                            events: appModel.jobEvents[job.id, default: []],
+                            onOpenCitation: onOpenCitation
                         )
                         .id(job.id)
                     }
@@ -561,10 +567,16 @@ private struct JobTurnView: View {
     @State private var progressDetailsExpanded: Bool
     let job: ChatJobRecord
     let events: [ChatJobEvent]
+    let onOpenCitation: (PaperCitationDestination) -> Void
 
-    init(job: ChatJobRecord, events: [ChatJobEvent]) {
+    init(
+        job: ChatJobRecord,
+        events: [ChatJobEvent],
+        onOpenCitation: @escaping (PaperCitationDestination) -> Void
+    ) {
         self.job = job
         self.events = events
+        self.onOpenCitation = onOpenCitation
         let accumulator = JobActivityAccumulator(events: events)
         _activityAccumulator = State(initialValue: accumulator)
         _progressDetailsExpanded = State(
@@ -609,7 +621,8 @@ private struct JobTurnView: View {
                     MarkdownReportView(
                         markdown: report,
                         pdfDirectory: job.spec.pdfDir,
-                        citationTargets: job.result?.citationTargets ?? [:]
+                        citationTargets: job.result?.citationTargets ?? [:],
+                        onOpenCitation: onOpenCitation
                     )
                     CopyMessageButton(text: report)
                 }
