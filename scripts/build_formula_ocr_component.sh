@@ -48,6 +48,10 @@ uv run --group dev --group formula-ocr pyinstaller \
     --specpath "$BUILD_ROOT/spec" \
     "$REPO_ROOT/src/paper_copilot/formula_ocr_helper.py"
 
+mkdir -p "$HELPER_DIST/licenses/paper-copilot"
+cp "$REPO_ROOT/LICENSE" "$HELPER_DIST/licenses/paper-copilot/LICENSE"
+cp "$REPO_ROOT/NOTICE" "$HELPER_DIST/licenses/paper-copilot/NOTICE"
+
 SIGN_IDENTITY=${PAPER_COPILOT_SIGN_IDENTITY:--}
 if [ -z "$LIBOMP_SOURCE" ] && command -v brew >/dev/null 2>&1; then
     LIBOMP_SOURCE="$(brew --prefix libomp)/lib/libomp.dylib"

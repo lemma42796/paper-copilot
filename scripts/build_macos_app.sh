@@ -63,6 +63,13 @@ xcodebuild \
     CODE_SIGN_IDENTITY=-
 
 mkdir -p "$BUILT_APP/Contents/Resources"
+mkdir -p "$BUILT_APP/Contents/Resources/licenses/paper-copilot"
+cp \
+    "$REPO_ROOT/LICENSE" \
+    "$BUILT_APP/Contents/Resources/licenses/paper-copilot/LICENSE"
+cp \
+    "$REPO_ROOT/NOTICE" \
+    "$BUILT_APP/Contents/Resources/licenses/paper-copilot/NOTICE"
 ditto "$HELPER_DIST" "$BUILT_APP/Contents/Resources/$HELPER_NAME"
 if [ "$SIGN_IDENTITY" = "-" ]; then
     codesign --force --sign - "$BUILT_APP"

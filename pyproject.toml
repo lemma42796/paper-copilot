@@ -7,6 +7,8 @@ name = "paper-copilot"
 version = "0.0.0"
 description = "Personal paper reading copilot (local-first)."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12"
 dependencies = [
     "fonttools>=4.0",

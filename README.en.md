@@ -5,7 +5,7 @@
 > drafts.
 
 ![Python](https://img.shields.io/badge/python-3.12+-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
+![License](https://img.shields.io/badge/license-Apache--2.0-green)
 ![Code style](https://img.shields.io/badge/code_style-ruff-purple)
 ![Package manager](https://img.shields.io/badge/package-uv-orange)
 
@@ -237,4 +237,7 @@ improvements.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Original Paper Copilot code in this version is licensed under the
+[Apache License 2.0](LICENSE); see [NOTICE](NOTICE) for attribution. Third-party
+components remain subject to their respective licenses. Versions previously
+released under MIT remain available under the MIT license that accompanied them.

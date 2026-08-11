@@ -29,7 +29,7 @@ macOS 客户端负责论文目录授权、模型与可选 OCR 组件设置、任
 
 ![Python](https://img.shields.io/badge/Python-3.12+-blue)
 ![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-black)
-![License](https://img.shields.io/badge/License-MIT-green)
+![License](https://img.shields.io/badge/License-Apache--2.0-green)
 
 ![Paper Copilot 主界面](screenshot/截屏2026-08-09%2023.22.52.png)
 
@@ -186,4 +186,6 @@ PaddleX · PP-FormulaNet_plus-M
 
 ## License
 
-MIT，详见 [LICENSE](LICENSE)。
+本版本中的 Paper Copilot 原创代码采用 [Apache License 2.0](LICENSE)，版权归属见
+[NOTICE](NOTICE)。第三方组件仍适用各自的许可证；此前已经按 MIT 发布的版本继续适用其
+发布时附带的 MIT 许可证。
