@@ -142,9 +142,11 @@ Codex 没有 Paper Copilot 的论文授权、内容寻址 cache 和应用内引�
 - Skill 对多论文任务优先建议有明确标签的批量发现，但不强制固定搜索顺序。
 
 这保留了 Paper Copilot 的确定性普通正文（prose）搜索缓存、物理页定位和引用边界，
-同时避免首次对话批量生成所有论文缓存。`layout.txt` 对提取乱码建立公式 OCR slot；只有
-任务确实需要该乱码公式时才调用 OCR，模型接受候选后发布含 LaTeX 的新 revision，并自动
-删除同一缓存键的旧 revision；它仍不能单独保证复杂表格
+同时避免首次对话批量生成所有论文缓存。`layout.txt` 只对符合条件的损坏非正文行记录弱
+定位提示，不建立公式 OCR 写入槽。只有任务确实需要公式级准确性且缓存文本不足时才调用
+OCR；模型接受候选后，Runtime 在新 revision 的 `formulas.jsonl` 中保存独立 overlay，
+保持 `layout.txt` 不变，原子发布 `current`，并自动删除同一缓存键的旧 revision。该机制
+仍不能单独保证复杂表格
 或二维布局的语义保真。原始 PDF 和必要的视觉或结构化复核边界见
 `poppler_packaging_assessment.md`。是否实际降低工具调用和
 token，仍需在同一冻结问题集上做受控评测；本实现本身不把预期收益记为已验证结论。

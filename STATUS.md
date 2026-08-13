@@ -40,49 +40,20 @@ shell wrapper 现已启用 `pipefail`；定向验证中失败管道返回 1，�
 
 ## 主动公式 OCR 真实验证
 
-成功任务：`job-20260809T092725-b68b814a53`。
+当前协议使用 manifest v4。`recognize_formula` 只接受模型明确给出的 `region`，返回进程内
+候选且不修改缓存；`accept` 重新验证 PDF 哈希，把页码、`region`、`formula_ref`、LaTeX、
+模型与证据哈希写入新 revision 的 `formulas.jsonl`。`layout.txt` 原样复制，完成文件与
+manifest 校验后原子发布 `current`，页面读取和搜索把已接受公式作为独立 overlay 附加。
 
-- 状态：`completed`，单次 attempt，终止原因 `end_turn`；
-- 费用：`0.07822684 CNY`；事件数：49；
-- 报告：
-  `/Users/a123/.paper-copilot/papers/conversation-20260809T092725-a73177d1a1/research-report.md`；
-- Trace：
-  `/Users/a123/.paper-copilot/jobs/job-20260809T092725-b68b814a53/attempts/1/trace.jsonl`；
-- 没有失败的工具调用，未调用 accept，当前 v3 缓存没有 accepted formula OCR record。
+Skill v3 的真实重跑已完成：Q2 共执行 4 次 recognize 和 2 次 `refined=false` accept；
+`formulas.jsonl` 保存 2 条记录，原 `layout.txt` 哈希保持不变。Q3 在全新 conversation 中
+直接读取到 accepted overlay，recognize/accept 均为 0，证明跨会话零 OCR 复用有效；
+Q2/Q3 最终答案各 12/12 标签正确。验证产物位于
+`docs/assets/formula-ocr-active-localization/`。
 
-### 公式 (2-9)
-
-论文：《基于多模态信息融合的行人轨迹追踪方法研究》（项莘泽，2025），物理页 28。
-
-- 当时旧协议记录了 `repair_span_id=page-0028-repair-0001`；新协议不再使用该字段；
-- region：`{"x1":0.38,"y1":0.09,"x2":0.73,"y2":0.148}`；
-- 第 1/3 次成功，用时 8.7 秒；
-- candidate：`formula-candidate-77c211087abb4fd3bb2e5e21b166ed3d`；
-- render SHA-256：
-  `dd2b793aa171b651e36ca67e1f6e70af5bfcd61c979528ed9d9a2fe5e6de0a0b`；
-- OCR 恢复向量箭头、根号、求和上下限和平方上标；原始输出的 `\boxed` / `array` 是包装
-  产物，裁图顶部横线可能是诱因；
-- 候选属于旧 Runtime 进程，后续需重新 recognize，再验证 overlay accept 与缓存回读。
-
-### Rank-3 内联式
-
-论文：《基于多粒度特征融合的多模态行人重识别研究》（彭思懿，2025），物理页 39。
-
-- 通过上下文、`60%` 文本锚点和逐字符坐标确认
-  `Rank-3 = 3 / 5 × 100% = 60%`；
-- 属于正文内联表达式，缓存信息足够，没有调用 OCR，也没有 candidate 或裁图。
-
-### 公式 (4.10)
-
-论文：《基于低秩融合与动态增强的多模态行人重识别研究》（何子玲，2023），物理页 46。
-
-- region：`{"x1":0.36,"y1":0.545,"x2":0.88,"y2":0.63}`；
-- 第 1/3 次成功，用时 3.126 秒；
-- candidate：`formula-candidate-4cec34d2168f41419e805509f1d9eeaa`；
-- render SHA-256：
-  `1ae5b33808fdab6a3e67a431f2454603312904d8cc1de630834da980af2c212a`；
-- OCR 恢复两组分段左花括号和二维结构，裁图包含编号，所以原始结果尾部带 `(4.10)`；
-- 旧协议因没有写入目标快照而不能 accept；新协议已取消该前提，但旧进程 candidate 不复用。
+当前剩余缺口是原样 OCR 记录仍含 `\operatorname*{m a x}` 与 `e x p`，缓存公式与 Gold 的
+精确匹配为 false；不得用最终回答中的正确规范化反推缓存 LaTeX 已准确。无编号公式的 v4
+accept 与跨会话复用、同一公式三次 recognize 上限、Helper 失败计数和恢复仍待验证。
 
 ## Plus-M 本机组件状态
 

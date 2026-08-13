@@ -4,6 +4,7 @@
 Poppler 的开发 App 路径已真实验证，Homebrew 缺失路径与新 DMG 待验证
 日期：2026-08-10
 保真度复核：2026-08-02  
+公式 OCR 机制复核：2026-08-12
 范围：工具系统 v2 Slice 1
 
 ## 结论
@@ -81,16 +82,18 @@ Homebrew Poppler keg 本身约 33 MB，动态库 install name 指向
 
 1. `layout.txt` 按模型实际需要生成，承担普通正文搜索和物理页定位；
 2. 原始 PDF 是公式、复杂表格和视觉布局的权威来源；
-3. 图像输入模型可通过 `inspect_page` 检查原页；纯文本（text-only）模型当前没有可靠
-   回退，必须显式报告证据限制；
+3. 图像输入模型可通过 `inspect_page` 检查原页；纯文本（text-only）模型在任务确实依赖
+   公式级准确性时，可通过 `query_page_geometry` 主动定位明确 `region`，再调用
+   `recognize_formula`，但 OCR 结果仍不是真值；
 4. 不能只把 TXT 改名为 Markdown，也不能把损坏字符直接替换成 LaTeX。PDF 通常只保存
    字形和坐标而非源 LaTeX；识别器还可能生成“语法合法但数学含义错误”的公式。
 
-当前 `layout.txt` 保留正文和来源映射（provenance）。Unicode 替换字符（replacement
-character）或私用区字形所在行变成稳定公式 OCR 占位符；`recognize_formula` 先返回候选，
-模型显式接受后才把 LaTeX 写入新的不可变 TXT revision。原 PDF 页、region、提取器版本、
-OCR 模型与 render hash 保留在缓存 manifest 或 TXT provenance 中。
-复杂表格恢复和没有可靠 region 的行内公式仍未实现。
+当前 `layout.txt` 保留正文和来源映射（provenance）。缓存只对包含损坏字符且没有中英正文
+的连续行记录弱定位提示，不生成可执行裁剪框或替换目标。`recognize_formula` 只返回进程内
+候选，不修改缓存；模型显式接受后，Runtime 把 LaTeX、原 PDF 页、明确 `region`、
+`formula_ref`、OCR 模型与证据哈希写入新 revision 的 `formulas.jsonl`，原样复制
+`layout.txt`，再原子发布 `current`。页面读取和搜索将已接受公式作为 `verified=false` 的
+独立 overlay 附加。复杂表格恢复和无法建立可靠 region 的公式仍没有强制识别路径。
 
 ### Codex 源码对照
 
