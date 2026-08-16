@@ -12,9 +12,27 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("语言") {
+                Picker(
+                    "界面语言",
+                    selection: Binding(
+                        get: { appModel.appLanguage },
+                        set: { appModel.selectAppLanguage($0) }
+                    )
+                ) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.displayName).tag(language)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
             Section("论文目录") {
                 LabeledContent("当前目录") {
-                    Text(appModel.libraryURL?.path ?? "尚未选择")
+                    Text(
+                        appModel.libraryURL?.path
+                            ?? appLocalized("尚未选择")
+                    )
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .truncationMode(.middle)
@@ -101,7 +119,10 @@ struct SettingsView: View {
                         value: appModel.clientStressTestStatus.progress
                     )
                     Text(
-                        "\(appModel.clientStressTestStatus.deliveredEvents.formatted()) / \(appModel.clientStressTestStatus.totalEvents.formatted()) 条事件"
+                        appModel.clientStressTestStatus.deliveredEvents.formatted()
+                            + " / "
+                            + appModel.clientStressTestStatus.totalEvents.formatted()
+                            + (AppLanguage.current == .english ? " events" : " 条事件")
                     )
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -191,12 +212,16 @@ struct SettingsView: View {
         }
         .alert(item: $pendingDeletion) { configuration in
             Alert(
-                title: Text("删除“\(configuration.displayName)”？"),
+                title: Text(
+                    AppLanguage.current == .english
+                        ? "Delete “\(configuration.displayName)”?"
+                        : "删除“\(configuration.displayName)”？"
+                ),
                 message: Text("模型配置及其本地 API Key 将被删除。"),
                 primaryButton: .destructive(Text("删除")) {
                     delete(configuration)
                 },
-                secondaryButton: .cancel()
+                secondaryButton: .cancel(Text(appLocalized("取消")))
             )
         }
     }
@@ -204,19 +229,19 @@ struct SettingsView: View {
     private var stressStatusTitle: String {
         switch appModel.clientStressTestStatus.phase {
         case .idle:
-            return "未运行"
+            return appLocalized("未运行")
         case .preparing:
-            return "准备中"
+            return appLocalized("准备中")
         case .replaying:
-            return "事件回放中"
+            return appLocalized("事件回放中")
         case .coolingDown:
-            return "观察回落中"
+            return appLocalized("观察回落中")
         case .completed:
-            return "已完成"
+            return appLocalized("已完成")
         case .cancelled:
-            return "已停止"
+            return appLocalized("已停止")
         case .failed:
-            return "失败"
+            return appLocalized("失败")
         }
     }
 
@@ -237,14 +262,20 @@ struct SettingsView: View {
     private var formulaOCRStatus: some View {
         switch appModel.formulaOCRStatus {
         case .notInstalled:
-            LabeledContent("状态", value: "未下载")
+            LabeledContent("状态", value: appLocalized("未下载"))
         case .downloading:
-            LabeledContent("状态", value: "正在复用或下载并校验…")
+            LabeledContent(
+                "状态",
+                value: appLocalized("正在复用或下载并校验…")
+            )
         case .installed(let version):
-            LabeledContent("状态", value: "已安装 · \(version)")
+            LabeledContent(
+                "状态",
+                value: appLocalized("已安装") + " · \(version)"
+            )
         case .failed(let message):
             VStack(alignment: .leading, spacing: 4) {
-                LabeledContent("状态", value: "下载失败")
+                LabeledContent("状态", value: appLocalized("下载失败"))
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(.red)
@@ -349,7 +380,9 @@ struct SettingsView: View {
             )
             errorMessage = nil
         } catch {
-            errorMessage = "无法读取模型 API Key：\(error.localizedDescription)"
+            errorMessage = AppLanguage.current == .english
+                ? "Could not read the model API key: \(error.localizedDescription)"
+                : "无法读取模型 API Key：\(error.localizedDescription)"
         }
     }
 
@@ -364,7 +397,9 @@ struct SettingsView: View {
             )
             errorMessage = nil
         } catch {
-            errorMessage = "无法更新模型：\(error.localizedDescription)"
+            errorMessage = AppLanguage.current == .english
+                ? "Could not update the model: \(error.localizedDescription)"
+                : "无法更新模型：\(error.localizedDescription)"
         }
     }
 
@@ -373,7 +408,63 @@ struct SettingsView: View {
             try appModel.deleteModelConfiguration(configuration)
             errorMessage = nil
         } catch {
-            errorMessage = "无法删除模型：\(error.localizedDescription)"
+            errorMessage = AppLanguage.current == .english
+                ? "Could not delete the model: \(error.localizedDescription)"
+                : "无法删除模型：\(error.localizedDescription)"
+        }
+    }
+}
+
+private enum ModelPreset: String, CaseIterable, Identifiable {
+    case choose
+    case deepSeekV4Flash
+    case deepSeekV4Pro
+    case qwen37Flash
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .choose:
+            return appLocalized("请选择…")
+        case .custom:
+            return appLocalized("自定义")
+        case .deepSeekV4Flash:
+            return appLocalized("DeepSeek V4 Flash（推荐）")
+        case .deepSeekV4Pro:
+            return "DeepSeek V4 Pro"
+        case .qwen37Flash:
+            return "Qwen 3.7 Flash"
+        }
+    }
+
+    static func matching(_ configuration: ModelConfiguration) -> ModelPreset {
+        if configuration.modelID.isEmpty && configuration.baseURL.isEmpty {
+            return .choose
+        }
+        switch configuration.modelID.lowercased() {
+        case "deepseek-v4-flash":
+            return .deepSeekV4Flash
+        case "deepseek-v4-pro":
+            return .deepSeekV4Pro
+        case "qwen3.7-flash":
+            return .qwen37Flash
+        default:
+            return .custom
+        }
+    }
+
+    func configuration(id: UUID) -> ModelConfiguration? {
+        switch self {
+        case .choose, .custom:
+            return nil
+        case .deepSeekV4Flash:
+            return .deepSeekV4Flash(id: id)
+        case .deepSeekV4Pro:
+            return .deepSeekV4Pro(id: id)
+        case .qwen37Flash:
+            return .qwen37Flash(id: id)
         }
     }
 }
@@ -414,6 +505,8 @@ private struct ModelEditorView: View {
     @State private var configuration: ModelConfiguration
     @State private var apiKey: String
     @State private var errorMessage: String?
+    @State private var selectedPreset: ModelPreset
+    @State private var showsAdvancedSettings: Bool
 
     let onSave: (ModelConfiguration, String) throws -> Void
 
@@ -423,72 +516,64 @@ private struct ModelEditorView: View {
     ) {
         _configuration = State(initialValue: context.configuration)
         _apiKey = State(initialValue: context.apiKey)
+        let preset = ModelPreset.matching(context.configuration)
+        _selectedPreset = State(initialValue: preset)
+        _showsAdvancedSettings = State(initialValue: preset == .custom)
         self.onSave = onSave
     }
 
     var body: some View {
         VStack(spacing: 0) {
             Form {
-                Section("模型信息") {
-                    TextField("显示名称", text: $configuration.displayName)
-                    TextField("厂商名称", text: $configuration.providerName)
-                    TextField("Model ID", text: $configuration.modelID)
-                    TextField("API Base URL", text: $configuration.baseURL)
-                    if configuration.baseURL.contains("{WorkspaceId}") {
-                        Text("请将 {WorkspaceId} 替换为阿里云百炼业务空间 ID")
+                Section(appLocalized("模型信息")) {
+                    Picker(
+                        appLocalized("服务预设"),
+                        selection: $selectedPreset
+                    ) {
+                        ForEach(ModelPreset.allCases) { preset in
+                            Text(preset.title).tag(preset)
+                        }
+                    }
+                    .onChange(of: selectedPreset) { preset in
+                        apply(preset)
+                    }
+
+                    if selectedPreset == .choose {
+                        Text(appLocalized("选择预设后，只需填写 API Key；其余参数会自动配置。"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+
+                    TextField(
+                        appLocalized("显示名称"),
+                        text: $configuration.displayName
+                    )
                     SecureField("API Key", text: $apiKey)
-                    LabeledContent("Thinking 协议") {
-                        Text(
-                            configuration.effectiveThinkingProtocol?
-                                .displayName
-                                ?? "根据 Model ID 和 Base URL 自动识别"
-                        )
-                        .foregroundStyle(
-                            configuration.effectiveThinkingProtocol == nil
-                                ? .secondary
-                                : .primary
-                        )
-                    }
-                    Picker(
-                        configuration.reasoningControlTitle,
-                        selection: reasoningEffortBinding
-                    ) {
-                        ForEach(configuration.availableReasoningEfforts) { effort in
-                            Text(reasoningOptionTitle(effort))
-                            .tag(effort)
+
+                    if !configuration.availableReasoningEfforts.isEmpty {
+                        Picker(
+                            appLocalized(configuration.reasoningControlTitle),
+                            selection: reasoningEffortBinding
+                        ) {
+                            ForEach(configuration.availableReasoningEfforts) { effort in
+                                Text(reasoningOptionTitle(effort))
+                                    .tag(effort)
+                            }
                         }
                     }
+
                     Toggle(
-                        "支持图像输入",
-                        isOn: supportsImageInputBinding
+                        appLocalized("启用此模型"),
+                        isOn: $configuration.isEnabled
                     )
-                    Toggle("启用此模型", isOn: $configuration.isEnabled)
 
-                    Button("填入 Qwen 3.6 Flash 预设") {
-                        applyQwenPreset()
+                    DisclosureGroup(
+                        isExpanded: $showsAdvancedSettings
+                    ) {
+                        advancedSettings
+                    } label: {
+                        Text(appLocalized("高级设置"))
                     }
-                }
-
-                Section("价格（元 / 百万 Token）") {
-                    priceField(
-                        "输入",
-                        value: $configuration.inputPricePerMillion
-                    )
-                    priceField(
-                        "缓存创建",
-                        value: $configuration.cacheCreationPricePerMillion
-                    )
-                    priceField(
-                        "缓存命中",
-                        value: $configuration.cacheHitPricePerMillion
-                    )
-                    priceField(
-                        "输出",
-                        value: $configuration.outputPricePerMillion
-                    )
                 }
 
                 if let errorMessage {
@@ -507,10 +592,10 @@ private struct ModelEditorView: View {
 
             HStack {
                 Spacer()
-                Button("取消") {
+                Button(appLocalized("取消")) {
                     dismiss()
                 }
-                Button("保存") {
+                Button(appLocalized("保存")) {
                     save()
                 }
                 .buttonStyle(.borderedProminent)
@@ -519,6 +604,62 @@ private struct ModelEditorView: View {
             .padding()
         }
         .frame(width: 560, height: 590)
+    }
+
+    private var advancedSettings: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            TextField(
+                appLocalized("厂商名称"),
+                text: $configuration.providerName
+            )
+            TextField("Model ID", text: $configuration.modelID)
+            TextField("API Base URL", text: $configuration.baseURL)
+            if configuration.baseURL.contains("{WorkspaceId}") {
+                Text(appLocalized("请将 {WorkspaceId} 替换为阿里云百炼业务空间 ID"))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            LabeledContent(appLocalized("Thinking 协议")) {
+                Text(
+                    configuration.effectiveThinkingProtocol?
+                        .displayName
+                        ?? appLocalized("根据 Model ID 和 Base URL 自动识别")
+                )
+                .foregroundStyle(
+                    configuration.effectiveThinkingProtocol == nil
+                        ? .secondary
+                        : .primary
+                )
+            }
+            Toggle(
+                appLocalized("支持图像输入"),
+                isOn: supportsImageInputBinding
+            )
+
+            Divider()
+            Text(appLocalized("价格（元 / 百万 Token）"))
+                .font(.headline)
+            Text(appLocalized("预设价格来自厂商公开价目；如厂商调价，请在这里更新。"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            priceField(
+                "输入",
+                value: $configuration.inputPricePerMillion
+            )
+            priceField(
+                "缓存创建",
+                value: $configuration.cacheCreationPricePerMillion
+            )
+            priceField(
+                "缓存命中",
+                value: $configuration.cacheHitPricePerMillion
+            )
+            priceField(
+                "输出",
+                value: $configuration.outputPricePerMillion
+            )
+        }
+        .padding(.top, 8)
     }
 
     private var canSave: Bool {
@@ -557,15 +698,20 @@ private struct ModelEditorView: View {
         _ label: String,
         value: Binding<Double>
     ) -> some View {
-        LabeledContent(label) {
+        LabeledContent(appLocalized(label)) {
             TextField("", value: value, format: .number)
                 .multilineTextAlignment(.trailing)
                 .frame(width: 140)
         }
     }
 
-    private func applyQwenPreset() {
-        let preset = ModelConfiguration.qwen36Flash(id: configuration.id)
+    private func apply(_ selectedPreset: ModelPreset) {
+        guard
+            let preset = selectedPreset.configuration(id: configuration.id)
+        else {
+            showsAdvancedSettings = selectedPreset == .custom
+            return
+        }
         configuration.displayName = preset.displayName
         configuration.providerName = preset.providerName
         configuration.modelID = preset.modelID
@@ -579,6 +725,8 @@ private struct ModelEditorView: View {
         configuration.thinkingProtocol = preset.thinkingProtocol
         configuration.reasoningEffort = preset.reasoningEffort
         configuration.inputModalities = preset.inputModalities
+        configuration.isEnabled = preset.isEnabled
+        showsAdvancedSettings = selectedPreset == .qwen37Flash
     }
 
     private func save() {

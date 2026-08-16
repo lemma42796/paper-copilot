@@ -43,8 +43,8 @@ Runtime preflight 只建立授权论文 inventory；`library_exec` 通过窄化 
 命令按模型当前任务所需自动生成和读取 cache。模型只读取命令返回的页文本，实际命令输出
 随完整会话历史保留，不再使用模型可见的文本页面专用工具。
 
-旧 `read_paper`、`paper_search`、query/compare/related、Composer 专用工具、
-`library_files` 和 `notes_patch` 已从模型工具表面移除，但回滚代码尚未删除。
+旧 `read_paper`、`paper_search`、query/compare/related、专用方案编排工具、
+`library_files` 和 `notes_patch` 已从模型工具表面移除。
 
 当前架构真源是 `ARCHITECTURE.md`。本计划中的候选接口只有在实施并验收后才能写入
 架构文档。

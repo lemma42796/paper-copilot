@@ -64,7 +64,7 @@ def test_approved_library_mutation_executes_once(tmp_path: Path) -> None:
         dispatch_paper_copilot_tool_async(
             ToolUseRequest(
                 id="mkdir-1",
-                name="library_files",
+                name="library_edit",
                 input={"operation": "mkdir", "destination": "new"},
             ),
             context,
@@ -76,5 +76,5 @@ def test_approved_library_mutation_executes_once(tmp_path: Path) -> None:
     )
 
     assert tool_result.is_error is False
-    assert approvals == ["library_files"]
+    assert approvals == ["library_edit"]
     assert (tmp_path / "new").is_dir()

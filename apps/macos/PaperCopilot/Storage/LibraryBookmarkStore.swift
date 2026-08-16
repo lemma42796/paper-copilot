@@ -8,7 +8,7 @@ final class LibraryBookmarkStore {
         var errorDescription: String? {
             switch self {
             case .bookmarkUnavailable:
-                return "无法恢复论文目录授权，请重新选择目录。"
+                return appLocalized("无法恢复论文目录授权，请重新选择目录。")
             }
         }
     }

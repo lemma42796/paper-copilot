@@ -3,7 +3,7 @@
 > 当前任务的跨会话接力快照。每次更新覆盖旧内容，不追加历史流水；详细设计与实验结果
 > 保存在各自产物中。
 
-更新于 2026-08-10。
+更新于 2026-08-16。
 
 私有历史实验已迁移为单层当前值结构：每个实验根目录直接保存 `experiment.md`、Query、
 私有标签、rubric、metrics、包含逐项裁决的 `scores.yaml` 与 `evidence.yaml`。相同协议的
@@ -12,6 +12,22 @@
 保存在私有根目录 `legacy_experiment_artifacts/`；原始 runs、session、job 和 trace 未删除。
 
 ## 新会话从这里继续
+
+macOS 中英本地化、模型配置简化和旧 Composer proposal 功能删除已经实现。界面语言可在设置
+中切换并持久化；模型回答由生产提示要求跟随用户提问语种。添加模型页现在以 DeepSeek V4
+Flash/Pro、Qwen 3.7 Flash 或自定义预设为入口，预设用户只需填写 API Key；高级字段仍可展开
+编辑。聊天输入区菜单会把当前模型与思考强度/思考预算写入原生菜单标题，避免 macOS 忽略
+自定义 `HStack` 的第二列。
+
+Qwen 预设已从 3.6 更新为 `qwen3.7-flash`，使用北京区不超过 32K Token 档的输入 0.2、输出
+0.8、显式缓存创建 0.25、显式缓存命中 0.02 元/百万 Token，并保留图像输入。已有用户保存的
+Qwen 3.6 自定义配置不被静默覆盖。API Key 仍以 `0600` 权限保存在用户 Application Support
+的 `PaperCopilot/auth.json`，没有改用 Keychain。
+
+Composer proposal/plan 的生产模块、chat/job/runtime 字段与专用测试已经删除；旧持久数据在
+读取边界丢弃遗留字段。删除后的 Python 全量 pytest 曾通过 199 项并报告 5 条第三方 SWIG
+deprecation warning；之后的改动仅涉及 SwiftUI、本地化与模型预设，尚未运行 Xcode build，
+也未完成 App 内视觉验收。
 
 PDF 工具链自动恢复已按 Codex 的命令审批与 sandbox override 结构移植到 Python Runtime。
 `library_exec` 默认仍无网络且只允许论文逻辑 workspace 的既有读写边界；模型只能为一条精确
@@ -102,19 +118,20 @@ SwiftMath `1.7.3` 已锁定，Debug/Release arm64 构建通过；完成报告支
 
 ## 下一步
 
-1. 构建新的 Apple Silicon DMG，发布下一版 Preview，再从 Release 下载运行并复验 Poppler
+1. 在 Xcode 选择 `PaperCopilot` scheme 与 `My Mac`，构建并逐页视觉验收中英文切换、添加
+   模型页和聊天区模型菜单；
+2. 构建新的 Apple Silicon DMG，发布下一版 Preview，再从 Release 下载运行并复验 Poppler
    恢复、产品缓存字体修复、SwiftMath 与 Formula OCR 下载；
-2. 在完全没有 Homebrew 的 macOS 上验证官方安装脚本、管理员密码输入和取消路径；
-3. 决定 `m a x` / `e x p` 等局部 OCR 拼写间距的安全处理方式，并用无编号公式覆盖 v4
+3. 在完全没有 Homebrew 的 macOS 上验证官方安装脚本、管理员密码输入和取消路径；
+4. 决定 `m a x` / `e x p` 等局部 OCR 拼写间距的安全处理方式，并用无编号公式覆盖 v4
    accept 与跨会话复用；
-4. 验证三次 recognize 上限、失败计数、Helper 超时/崩溃重启和一小时空闲退出；
-5. 继续寻找真实显式 `CIDToGIDMap` 流 PDF，补上字体修复集成覆盖。
+5. 验证三次 recognize 上限、失败计数、Helper 超时/崩溃重启和一小时空闲退出；
+6. 继续寻找真实显式 `CIDToGIDMap` 流 PDF，补上字体修复集成覆盖。
 
 ## 本次文件边界与验证
 
-本轮实现修改 `library_exec` schema、sandbox policy、命令审批、自动 Reviewer、进程超时与
-`SUDO_ASKPASS`，同步 Research Skill v29、macOS 审批展示、架构和两份设计文档。真实开发
-App trace 覆盖已有工具链与“已有 Homebrew、缺少 Poppler”两条路径；后者完成安装和真实 PDF
-三工具复验。审批预算修复在真实 trace 中验证，`pipefail` 只做了两种 wrapper 的定向命令
-验证。未运行 Python 测试、Ruff、mypy、完整分发构建或新 Release 安装；Homebrew 缺失与
-管理员路径未验证。`output/` 仍是用户未跟踪产物，不提交。
+当前工作区同时包含：Composer proposal 删除及兼容清理；Python 测试适配；macOS 中英
+本地化；模型配置页预设化；DeepSeek V4 与 Qwen 3.7 Flash 配置；聊天区当前模型/思考强度
+展示；以及对应架构和设计文档更新。Python 全量 pytest 在 Composer 删除后为 199 passed、
+5 warnings；后续 SwiftUI 修改只做了 `git diff --check`，没有运行 Xcode build、App 视觉验收、
+Ruff、mypy、完整分发构建或新 Release 安装。工作区没有新增 `output/` 变更。

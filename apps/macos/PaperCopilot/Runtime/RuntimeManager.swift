@@ -21,13 +21,13 @@ final class RuntimeManager {
         var errorDescription: String? {
             switch self {
             case .runtimeAlreadyRunning:
-                return "Python Runtime 已在运行。"
+                return appLocalized("Python Runtime 已在运行。")
             case .runtimeUnavailable:
-                return "找不到应用内 Python Runtime，源码开发模式也无法使用 uv。"
+                return appLocalized("找不到应用内 Python Runtime，源码开发模式也无法使用 uv。")
             case .handshakeEnded:
-                return "Python Runtime 在发送 ready 握手前退出。"
+                return appLocalized("Python Runtime 在发送 ready 握手前退出。")
             case .invalidHandshake:
-                return "Python Runtime 返回了无效的 ready 握手。"
+                return appLocalized("Python Runtime 返回了无效的 ready 握手。")
             }
         }
     }

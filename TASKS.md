@@ -6,7 +6,7 @@
 > 当前接力状态见 [STATUS.md](STATUS.md)，当前架构见
 > [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-更新于 2026-08-10。
+更新于 2026-08-16。
 
 ## 未完成任务
 
@@ -188,3 +188,28 @@ overlay 页面回读和新会话零 OCR 复用均已验证；原样 OCR 缓存�
 - 构建新的 Apple Silicon DMG，验证内嵌 Runtime 后发布下一版 Preview；
 - 从新 Release 下载并运行，复验 Poppler 自动恢复和论文解析；
 - 未运行 Python 测试、Ruff 或 mypy；`pipefail` 修复目前只有定向命令验证。
+
+### 6. 验证 macOS 中英本地化与模型配置界面
+
+状态：`implementation_complete_xcode_build_and_visual_validation_pending`。
+
+已完成：
+
+- 新增简体中文/英文界面切换，语言偏好保存在 `UserDefaults`，切换后由根视图注入 locale；
+- 覆盖聊天、设置、模型配置、审批、诊断与常见运行状态的动态文案；模型系统提示要求回答
+  跟随用户提问语种，不绑定界面语言；
+- 删除不再需要的 Composer proposal/plan 生产代码、协议字段、测试和评测脚本依赖，并保留
+  旧 session/config 中相关字段的兼容清理；
+- 添加模型页改为服务预设优先：DeepSeek V4 Flash、DeepSeek V4 Pro、Qwen 3.7 Flash 和
+  自定义；预设自动填写 Model ID、Base URL、能力与价格，只要求用户填写 API Key；
+- Qwen 3.7 Flash 使用 `qwen3.7-flash`，北京区不超过 32K Token 的公开价为输入 0.2、
+  输出 0.8、显式缓存创建 0.25、显式缓存命中 0.02 元/百万 Token；
+- 聊天输入区模型菜单直接显示当前模型和当前思考强度/思考预算；API Key 继续保存到权限为
+  `0600` 的 Application Support `auth.json`，与 Codex 默认文件存储语义一致。
+
+尚未完成：
+
+- 尚未执行本轮 Swift 变更后的 Xcode build；
+- 尚未在运行中的 App 里逐页检查中英文切换、添加模型表单、菜单宽度及当前值显示；
+- Python 全量 pytest 在删除 Composer 后曾通过 199 项并产生 5 条 SWIG 警告，但该结果早于
+  后续仅限 macOS SwiftUI/本地化的修改。

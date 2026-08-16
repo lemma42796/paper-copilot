@@ -13,26 +13,26 @@ enum ClientStressTestPreset: String, CaseIterable, Hashable, Identifiable {
     var displayName: String {
         switch self {
         case .regression3278:
-            return "3,278 条回归"
+            return appLocalized("3,278 条回归")
         case .burst10000:
-            return "10,000 条突发"
+            return appLocalized("10,000 条突发")
         case .endurance50000:
-            return "50,000 条耐久"
+            return appLocalized("50,000 条耐久")
         case .formulas500:
-            return "500 个公式"
+            return appLocalized("500 个公式")
         }
     }
 
     var detail: String {
         switch self {
         case .regression3278:
-            return "接近已复现故障的事件规模，约 35 秒。"
+            return appLocalized("接近已复现故障的事件规模，约 35 秒。")
         case .burst10000:
-            return "快速批量灌入 10,000 条事件，约 15 秒。"
+            return appLocalized("快速批量灌入 10,000 条事件，约 15 秒。")
         case .endurance50000:
-            return "持续灌入 50,000 条事件，约 20 秒。"
+            return appLocalized("持续灌入 50,000 条事件，约 20 秒。")
         case .formulas500:
-            return "先回放 5,000 条事件，再渲染 500 个展示公式。"
+            return appLocalized("先回放 5,000 条事件，再渲染 500 个展示公式。")
         }
     }
 
@@ -115,18 +115,20 @@ struct ClientStressTestStatus: Equatable {
     let outputPath: String?
     let message: String
 
-    static let idle = ClientStressTestStatus(
-        phase: .idle,
-        preset: nil,
-        runID: nil,
-        deliveredEvents: 0,
-        totalEvents: 0,
-        progress: 0,
-        currentCPUPercent: nil,
-        residentBytes: nil,
-        outputPath: nil,
-        message: "尚未运行"
-    )
+    static var idle: ClientStressTestStatus {
+        ClientStressTestStatus(
+            phase: .idle,
+            preset: nil,
+            runID: nil,
+            deliveredEvents: 0,
+            totalEvents: 0,
+            progress: 0,
+            currentCPUPercent: nil,
+            residentBytes: nil,
+            outputPath: nil,
+            message: appLocalized("尚未运行")
+        )
+    }
 
     var isRunning: Bool {
         phase == .preparing || phase == .replaying || phase == .coolingDown
@@ -272,9 +274,15 @@ struct ClientStressEventGenerator {
             }
             let event: ChatJobEvent
             if stageIndex == 0 {
-                event = lifecycleEvent(type: "created", message: "已创建客户端压测任务")
+                event = lifecycleEvent(
+                    type: "created",
+                    message: appLocalized("已创建客户端压测任务")
+                )
             } else if stageIndex == 1 {
-                event = lifecycleEvent(type: "started", message: "客户端压测开始")
+                event = lifecycleEvent(
+                    type: "started",
+                    message: appLocalized("客户端压测开始")
+                )
             } else {
                 event = lifecycleEvent(
                     type: "progress",
@@ -288,7 +296,7 @@ struct ClientStressEventGenerator {
             return activityEvent(
                 kind: "reasoning",
                 phase: "started",
-                title: "思考过程",
+                title: appLocalized("思考过程"),
                 delta: nil
             )
         case .reasoningDelta:
@@ -299,20 +307,25 @@ struct ClientStressEventGenerator {
             }
             let index = stageIndex + 1
             stageIndex += 1
-            let prefix = index == 1 ? "**客户端压测推理**\n" : ""
+            let prefix = index == 1
+                ? (AppLanguage.current == .english
+                    ? "**Client stress-test reasoning**\n"
+                    : "**客户端压测推理**\n")
+                : ""
             return activityEvent(
                 kind: "reasoning",
                 phase: "delta",
                 title: nil,
-                delta: prefix
-                    + "推理片段 \(index)：检查事件累计、主线程发布和滚动布局。\n"
+                delta: prefix + (AppLanguage.current == .english
+                    ? "Reasoning fragment \(index): checking event accumulation, main-thread publishing, and scrolling layout.\n"
+                    : "推理片段 \(index)：检查事件累计、主线程发布和滚动布局。\n")
             )
         case .reasoningCompleted:
             stage = .assistantStarted
             return activityEvent(
                 kind: "reasoning",
                 phase: "completed",
-                title: "思考过程",
+                title: appLocalized("思考过程"),
                 delta: nil
             )
         case .assistantStarted:
@@ -320,7 +333,7 @@ struct ClientStressEventGenerator {
             return activityEvent(
                 kind: "assistant",
                 phase: "started",
-                title: "回答",
+                title: appLocalized("回答"),
                 delta: nil
             )
         case .assistantDelta:
@@ -335,19 +348,24 @@ struct ClientStressEventGenerator {
                 kind: "assistant",
                 phase: "delta",
                 title: nil,
-                delta: "回答片段 \(index)：这是用于验证流式文本完整性的合成内容。\n"
+                delta: AppLanguage.current == .english
+                    ? "Answer fragment \(index): synthetic content for validating streaming text integrity.\n"
+                    : "回答片段 \(index)：这是用于验证流式文本完整性的合成内容。\n"
             )
         case .assistantCompleted:
             stage = .jobCompleted
             return activityEvent(
                 kind: "assistant",
                 phase: "completed",
-                title: "回答",
+                title: appLocalized("回答"),
                 delta: nil
             )
         case .jobCompleted:
             stage = .finished
-            return lifecycleEvent(type: "completed", message: "客户端压测事件回放完成")
+            return lifecycleEvent(
+                type: "completed",
+                message: appLocalized("客户端压测事件回放完成")
+            )
         case .finished:
             return nil
         }
@@ -387,7 +405,9 @@ struct ClientStressEventGenerator {
             type: "progress",
             status: .running,
             attempt: 1,
-            message: kind == "reasoning" ? "正在思考" : "正在生成回答",
+            message: appLocalized(
+                kind == "reasoning" ? "正在思考" : "正在生成回答"
+            ),
             activityID: "stress-\(kind)",
             activityKind: kind,
             activityPhase: phase,
@@ -517,17 +537,29 @@ enum ClientStressReportBuilder {
         runID: String
     ) -> String {
         var lines = [
-            "# 客户端压测报告",
+            AppLanguage.current == .english
+                ? "# Client Stress Test Report"
+                : "# 客户端压测报告",
             "",
-            "运行：`\(runID)`",
+            AppLanguage.current == .english
+                ? "Run: `\(runID)`"
+                : "运行：`\(runID)`",
             "",
-            "预设：**\(preset.displayName)**",
+            AppLanguage.current == .english
+                ? "Preset: **\(preset.displayName)**"
+                : "预设：**\(preset.displayName)**",
             "",
-            "下列内容全部为本地合成数据，不调用模型或网络。",
+            AppLanguage.current == .english
+                ? "All content below is locally synthesized without model or network calls."
+                : "下列内容全部为本地合成数据，不调用模型或网络。",
             "",
         ]
         for index in 1...preset.formulaCount {
-            lines.append("### 合成公式 \(index)")
+            lines.append(
+                AppLanguage.current == .english
+                    ? "### Synthetic Formula \(index)"
+                    : "### 合成公式 \(index)"
+            )
             lines.append("")
             lines.append("```latex")
             lines.append(

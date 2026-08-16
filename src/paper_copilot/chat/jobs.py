@@ -108,9 +108,17 @@ class ChatJobResult(BaseModel):
     events_count: int
     paper_budget: dict[str, object]
     citation_targets: dict[str, str] = Field(default_factory=dict)
-    composer_plan: dict[str, object] | None
-    proposal_check: dict[str, object] | None
     conversation_compaction: CompactionSummary | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _discard_removed_result_fields(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        migrated = dict(value)
+        migrated.pop("composer_plan", None)
+        migrated.pop("proposal_check", None)
+        return migrated
 
     @classmethod
     def from_run(cls, run: ChatRunResult) -> ChatJobResult:
@@ -130,8 +138,6 @@ class ChatJobResult(BaseModel):
             events_count=run.events_count,
             paper_budget=run.paper_budget,
             citation_targets=run.citation_targets,
-            composer_plan=run.composer_plan,
-            proposal_check=run.proposal_check,
             conversation_compaction=run.conversation_compaction,
         )
 

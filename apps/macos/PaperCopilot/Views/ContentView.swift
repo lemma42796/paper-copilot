@@ -52,7 +52,10 @@ struct ContentView: View {
                     } label: {
                         Label("选择论文目录", systemImage: "folder")
                     }
-                    .help(appModel.libraryURL?.path ?? "选择论文目录")
+                    .help(
+                        appModel.libraryURL?.path
+                            ?? appLocalized("选择论文目录")
+                    )
 
                     settingsEntry
                 }
@@ -68,16 +71,20 @@ struct ContentView: View {
                             )
                         } label: {
                             Label(
-                                citationPanelIsPresented
-                                    ? "收起论文预览"
-                                    : "展开论文预览",
+                                appLocalized(
+                                    citationPanelIsPresented
+                                        ? "收起论文预览"
+                                        : "展开论文预览"
+                                ),
                                 systemImage: "sidebar.right"
                             )
                         }
                         .help(
-                            citationPanelIsPresented
-                                ? "收起论文预览"
-                                : "展开论文预览"
+                            appLocalized(
+                                citationPanelIsPresented
+                                    ? "收起论文预览"
+                                    : "展开论文预览"
+                            )
                         )
                     }
                 }

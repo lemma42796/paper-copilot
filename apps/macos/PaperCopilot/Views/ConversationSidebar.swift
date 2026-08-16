@@ -57,14 +57,18 @@ struct ConversationSidebar: View {
         }
         .alert(item: $pendingDeletion) { conversation in
             Alert(
-                title: Text("永久删除“\(conversation.title)”？"),
+                title: Text(
+                    AppLanguage.current == .english
+                        ? "Permanently delete “\(conversation.title)”?"
+                        : "永久删除“\(conversation.title)”？"
+                ),
                 message: Text(
                     "该会话的消息、任务记录、执行轨迹和报告将从本机彻底删除，且无法恢复。论文原文件与共享知识索引不会被删除。"
                 ),
                 primaryButton: .destructive(Text("删除")) {
                     appModel.deleteConversation(conversation)
                 },
-                secondaryButton: .cancel()
+                secondaryButton: .cancel(Text(appLocalized("取消")))
             )
         }
     }
@@ -112,9 +116,11 @@ private struct ConversationRow: View {
                 )
                 .disabled(hasActiveJob)
                 .help(
-                    hasActiveJob
-                        ? "请先停止正在运行的任务"
-                        : "删除会话"
+                    appLocalized(
+                        hasActiveJob
+                            ? "请先停止正在运行的任务"
+                            : "删除会话"
+                    )
                 )
                 .onHover { hovering in
                     withAnimation(.easeOut(duration: 0.1)) {

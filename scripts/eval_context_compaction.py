@@ -23,17 +23,15 @@ _RECENT_HISTORY_TOKENS = 40_000
 _MAX_OUTPUT_TOKENS = 8_000
 _MAX_COMPACTED_TOKENS = 80_000
 
-_BASELINE_ID = "baseline-a"
-_MODULE_IDS = ("module-b", "module-c", "module-d")
+_PAPER_IDS = ("paper-a", "paper-b", "paper-c", "paper-d")
 _EVIDENCE_REFS = (
-    "[baseline-a:chunks[10]]",
-    "[module-b:chunks[20]]",
-    "[module-c:chunks[30]]",
-    "[module-d:chunks[40]]",
+    "[paper-a:chunks[10]]",
+    "[paper-b:chunks[20]]",
+    "[paper-c:chunks[30]]",
+    "[paper-d:chunks[40]]",
 )
 _REQUIRED_IDENTIFIERS = {
-    _BASELINE_ID,
-    *_MODULE_IDS,
+    *_PAPER_IDS,
     *_EVIDENCE_REFS,
     "max_papers=5",
     "budget_cny=2.0",
@@ -58,9 +56,8 @@ async def _run(root: Path) -> None:
         client,
         history=history,
         original_request=(
-            "Design a grounded research proposal using baseline-a and exactly three "
-            "compatible modules. Preserve evidence and clearly separate verified facts "
-            "from hypotheses."
+            "Compare four papers' methods and findings. Preserve evidence and clearly "
+            "separate verified facts from unresolved questions."
         ),
         build_runtime_context=_runtime_context,
         previous_summary=None,
@@ -98,22 +95,27 @@ def _build_history() -> list[dict[str, Any]]:
             "role": "user",
             "content": [
                 {"type": "text", "text": _runtime_context()},
-                {"type": "text", "text": "Build the grounded Composer proposal."},
+                {
+                    "type": "text",
+                    "text": "Compare the four papers using grounded evidence.",
+                },
             ],
         }
     ]
     facts = [
         {
-            "event": "baseline_selected",
-            "decision": "Use baseline-a as the baseline because its limitations are explicit.",
-            "paper_id": _BASELINE_ID,
+            "event": "paper_compared",
+            "decision": (
+                "Use paper-a as the reference because its limitations are explicit."
+            ),
+            "paper_id": _PAPER_IDS[0],
             "evidence_ref": _EVIDENCE_REFS[0],
             "constraints": ["max_papers=5", "budget_cny=2.0"],
         },
         {
-            "event": "modules_accepted",
-            "decision": "Accept module-b, module-c, and module-d as three distinct modules.",
-            "paper_ids": list(_MODULE_IDS),
+            "event": "papers_compared",
+            "decision": "Compare paper-b, paper-c, and paper-d against the reference.",
+            "paper_ids": list(_PAPER_IDS[1:]),
             "evidence_refs": list(_EVIDENCE_REFS[1:]),
         },
         {
@@ -123,8 +125,8 @@ def _build_history() -> list[dict[str, Any]]:
         },
         {
             "event": "remaining_work",
-            "open_question": "Whether the three modules remain compatible when combined.",
-            "next_action": "Draft the proposal with risks marked as hypotheses.",
+            "open_question": "Whether the reported results are directly comparable.",
+            "next_action": "Draft the comparison with unresolved gaps marked clearly.",
         },
     ]
     for index, payload in enumerate(facts, start=1):
@@ -182,14 +184,9 @@ def _runtime_context() -> str:
         "latest_state_is_authoritative": True,
         "paper_budget": {
             "max_papers": 5,
-            "touched_paper_ids": [_BASELINE_ID, *_MODULE_IDS],
+            "touched_paper_ids": list(_PAPER_IDS),
         },
         "llm_budget": {"max_cost_cny": 2.0},
-        "composer_plan": {
-            "baseline": _BASELINE_ID,
-            "accepted_modules": list(_MODULE_IDS),
-            "report_ready": True,
-        },
     }
     return (
         "<runtime_context>\n"
@@ -201,9 +198,9 @@ def _runtime_context() -> str:
 def _fidelity_errors(summary: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     field_requirements = {
-        "decisions": (_BASELINE_ID, *_MODULE_IDS),
+        "decisions": _PAPER_IDS,
         "failed_attempts": ("reranker-decision=rejected",),
-        "next_actions": ("Draft the proposal",),
+        "next_actions": ("Draft the comparison",),
     }
     for field, required_values in field_requirements.items():
         text = json.dumps(summary.get(field, []), ensure_ascii=False)

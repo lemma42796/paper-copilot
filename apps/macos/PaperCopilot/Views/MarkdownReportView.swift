@@ -125,7 +125,12 @@ struct PaperCitationPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("\(destination.url.deletingPathExtension().lastPathComponent) · 第 \(destination.page) 页")
+                Text(
+                    destination.url.deletingPathExtension().lastPathComponent
+                        + (AppLanguage.current == .english
+                            ? " · Page \(destination.page)"
+                            : " · 第 \(destination.page) 页")
+                )
                     .font(.headline)
                     .lineLimit(1)
                     .id(destination.id)

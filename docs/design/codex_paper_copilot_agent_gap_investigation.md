@@ -404,8 +404,8 @@ Paper Copilot 领域适配：
 
 - `agents/context/world_state.py` 实现 root-object snapshot、RFC 7386 create/apply、
   full/patch render 和 session baseline reconstruction；
-- section 为 authorization、paper library、cache inventory、model、budgets、tools、
-  skill catalog，以及仅在启用时出现的 Composer state；
+- section 为 authorization、paper library、cache inventory、model、budgets、tools 和
+  skill catalog；
 - `world_state` 作为 append-only session entry 持久化 `mode/state/rendered`，恢复 history
   使用当时实际给模型的 rendered fragment；
 - 首次进入旧 session 若没有 world-state baseline，追加 full；之后只有真实变化才追加

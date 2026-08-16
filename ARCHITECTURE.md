@@ -30,7 +30,7 @@ Local MCP Server ──────► bounded MCP services ──────�
 
 | 表面 | 所有权 |
 |---|---|
-| `apps/macos/` | UI、security-scoped 目录、凭据、模型设置、审批、可选组件安装、完成报告渲染和 Runtime 生命周期 |
+| `apps/macos/` | UI、中英本地化与语言偏好、security-scoped 目录、凭据、模型设置、审批、可选组件安装、完成报告渲染和 Runtime 生命周期 |
 | `api/` | 本地 JSON/HTTP、SSE 和 diagnostics transport |
 | `mcp/` | 本地 stdio 查询及长任务协议 |
 | Python Core | Agent、PDF、按需缓存与读取、job、session、恢复、eval 和 observability |
@@ -297,9 +297,9 @@ Application Support 中，经 Runtime 环境变量传入，不进入论文库、
 - `agents/context/` 按稳定 section 构建模型可见 World State。一个 context window 首次
   注入 `full`，后续 turn 和工具 batch 只在状态变化时追加 RFC 7386 merge patch；
   session 同步持久化 full/patch，恢复时从最后 full 顺序应用 patch 重建 baseline。
-- 当前 section 包含论文授权摘要、模型、静态预算、模型可见工具、Skill catalog 和
-  可选 Composer 状态；逐论文 inventory 不再进入 World State。费用、deadline、授权与
-  工具策略仍由 Runtime 强制；World State 不是授权边界。
+- 当前 section 包含论文授权摘要、模型、静态预算、模型可见工具和 Skill catalog；
+  逐论文 inventory 不再进入 World State。费用、deadline、授权与工具策略仍由 Runtime
+  强制；World State 不是授权边界。
 - Compaction 删除旧窗口中的 World State fragment，并在 replacement history 与 session
   中重新建立 full baseline。
 - 一个 conversation 拥有一个持久 `LibraryEnvironment`：固定 logical cwd、只读

@@ -11,18 +11,18 @@ enum ApprovalMode: String, Codable, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .ask:
-            return "请求批准"
+            return appLocalized("请求批准")
         case .autoReview:
-            return "替我审批"
+            return appLocalized("替我审批")
         }
     }
 
     var detail: String {
         switch self {
         case .ask:
-            return "修改论文文件时始终询问"
+            return appLocalized("修改论文文件时始终询问")
         case .autoReview:
-            return "仅对检测到的高风险操作请求确认"
+            return appLocalized("仅对检测到的高风险操作请求确认")
         }
     }
 
@@ -86,7 +86,7 @@ enum JSONValue: Codable, Equatable {
         case .number(let value):
             return value.formatted()
         case .bool(let value):
-            return value ? "是" : "否"
+            return appLocalized(value ? "是" : "否")
         case .object(let value):
             return value.keys.sorted().map {
                 "\($0): \(value[$0]?.displayText ?? "")"
@@ -94,7 +94,7 @@ enum JSONValue: Codable, Equatable {
         case .array(let value):
             return value.map(\.displayText).joined(separator: "、")
         case .null:
-            return "无"
+            return appLocalized("无")
         }
     }
 }
@@ -131,15 +131,15 @@ enum ReasoningEffort: String, Codable, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .low:
-            return "轻度"
+            return appLocalized("轻度")
         case .medium:
-            return "中"
+            return appLocalized("中")
         case .high:
-            return "高"
+            return appLocalized("高")
         case .xhigh:
-            return "极高"
+            return appLocalized("极高")
         case .max:
-            return "最高"
+            return appLocalized("最高")
         }
     }
 
@@ -270,35 +270,77 @@ struct ModelConfiguration: Codable, Identifiable, Equatable {
     }
 
     var reasoningControlTitle: String {
-        effectiveThinkingProtocol == .qwen ? "思考预算" : "推理强度"
+        appLocalized(
+            effectiveThinkingProtocol == .qwen ? "思考预算" : "推理强度"
+        )
     }
 
     func reasoningDetail(for effort: ReasoningEffort) -> String? {
         switch effectiveThinkingProtocol {
         case .qwen:
-            return "\(effort.qwenThinkingBudget / 1_024)K 思考 Token 上限"
+            let budget = effort.qwenThinkingBudget / 1_024
+            if AppLanguage.current == .english {
+                return "\(budget)K thinking token limit"
+            }
+            return "\(budget)K 思考 Token 上限"
         case .deepSeek:
-            return effort == .max ? "更快消耗使用额度" : nil
+            return effort == .max ? appLocalized("更快消耗使用额度") : nil
         case nil:
             return nil
         }
     }
 
-    static func qwen36Flash(id: UUID = UUID()) -> ModelConfiguration {
+    static func qwen37Flash(id: UUID = UUID()) -> ModelConfiguration {
         ModelConfiguration(
             id: id,
-            displayName: "Qwen 3.6 Flash",
+            displayName: "Qwen 3.7 Flash",
             providerName: "阿里云百炼",
-            modelID: "qwen3.6-flash",
+            modelID: "qwen3.7-flash",
             baseURL:
                 "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
-            inputPricePerMillion: 1.2,
-            cacheCreationPricePerMillion: 1.5,
-            cacheHitPricePerMillion: 0.12,
-            outputPricePerMillion: 7.2,
+            inputPricePerMillion: 0.2,
+            cacheCreationPricePerMillion: 0.25,
+            cacheHitPricePerMillion: 0.02,
+            outputPricePerMillion: 0.8,
             thinkingProtocol: .qwen,
             reasoningEffort: .high,
             inputModalities: [.text, .image],
+            isEnabled: true
+        )
+    }
+
+    static func deepSeekV4Flash(id: UUID = UUID()) -> ModelConfiguration {
+        ModelConfiguration(
+            id: id,
+            displayName: "DeepSeek V4 Flash",
+            providerName: "DeepSeek",
+            modelID: "deepseek-v4-flash",
+            baseURL: "https://api.deepseek.com",
+            inputPricePerMillion: 1,
+            cacheCreationPricePerMillion: 1,
+            cacheHitPricePerMillion: 0.02,
+            outputPricePerMillion: 2,
+            thinkingProtocol: .deepSeek,
+            reasoningEffort: .high,
+            inputModalities: [.text],
+            isEnabled: true
+        )
+    }
+
+    static func deepSeekV4Pro(id: UUID = UUID()) -> ModelConfiguration {
+        ModelConfiguration(
+            id: id,
+            displayName: "DeepSeek V4 Pro",
+            providerName: "DeepSeek",
+            modelID: "deepseek-v4-pro",
+            baseURL: "https://api.deepseek.com",
+            inputPricePerMillion: 3,
+            cacheCreationPricePerMillion: 3,
+            cacheHitPricePerMillion: 0.025,
+            outputPricePerMillion: 6,
+            thinkingProtocol: .deepSeek,
+            reasoningEffort: .high,
+            inputModalities: [.text],
             isEnabled: true
         )
     }
@@ -324,17 +366,17 @@ enum ChatJobStatus: String, Codable {
     var displayName: String {
         switch self {
         case .queued:
-            return "排队中"
+            return appLocalized("排队中")
         case .running:
-            return "运行中"
+            return appLocalized("运行中")
         case .waitingForApproval:
-            return "等待确认"
+            return appLocalized("等待确认")
         case .completed:
-            return "已完成"
+            return appLocalized("已完成")
         case .interrupted:
-            return "已停止"
+            return appLocalized("已停止")
         case .failed:
-            return "失败"
+            return appLocalized("失败")
         }
     }
 
@@ -525,17 +567,17 @@ enum TraceEntityType: String, Codable, CaseIterable {
     var displayName: String {
         switch self {
         case .rollout:
-            return "任务"
+            return appLocalized("任务")
         case .turn:
-            return "轮次"
+            return appLocalized("轮次")
         case .llmCall:
-            return "模型调用"
+            return appLocalized("模型调用")
         case .toolCall:
-            return "工具调用"
+            return appLocalized("工具调用")
         case .compaction:
-            return "上下文压缩"
+            return appLocalized("上下文压缩")
         case .runtimeOperation:
-            return "Runtime 操作"
+            return appLocalized("Runtime 操作")
         }
     }
 }
@@ -550,15 +592,15 @@ enum TraceStatus: String, Codable {
     var displayName: String {
         switch self {
         case .running:
-            return "运行中"
+            return appLocalized("运行中")
         case .completed:
-            return "已完成"
+            return appLocalized("已完成")
         case .failed:
-            return "失败"
+            return appLocalized("失败")
         case .cancelled:
-            return "已取消"
+            return appLocalized("已取消")
         case .aborted:
-            return "已中止"
+            return appLocalized("已中止")
         }
     }
 }
@@ -701,7 +743,7 @@ struct ChatConversation: Identifiable, Equatable {
 
     var title: String {
         guard let request = jobs.first?.spec.request else {
-            return "新会话"
+            return appLocalized("新会话")
         }
         let firstLine = request.split(separator: "\n", maxSplits: 1).first
             .map(String.init) ?? request

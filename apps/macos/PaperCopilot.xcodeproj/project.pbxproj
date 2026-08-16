@@ -23,6 +23,8 @@
 		01000000000000000000000E /* FormulaOCRManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000010 /* FormulaOCRManager.swift */; };
 		01000000000000000000000F /* SwiftMath in Frameworks */ = {isa = PBXBuildFile; productRef = 0E0000000000000000000001 /* SwiftMath */; };
 		010000000000000000000010 /* ClientStressTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000011 /* ClientStressTest.swift */; };
+		010000000000000000000011 /* Localization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 020000000000000000000012 /* Localization.swift */; };
+		010000000000000000000012 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 090000000000000000000001 /* Localizable.strings */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -43,6 +45,9 @@
 		02000000000000000000000F /* MarkdownReportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownReportView.swift; sourceTree = "<group>"; };
 		020000000000000000000010 /* FormulaOCRManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormulaOCRManager.swift; sourceTree = "<group>"; };
 		020000000000000000000011 /* ClientStressTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientStressTest.swift; sourceTree = "<group>"; };
+		020000000000000000000012 /* Localization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Localization.swift; sourceTree = "<group>"; };
+		020000000000000000000013 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
+		020000000000000000000014 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -70,6 +75,8 @@
 			children = (
 				020000000000000000000001 /* PaperCopilotApp.swift */,
 				020000000000000000000002 /* AppModel.swift */,
+				020000000000000000000012 /* Localization.swift */,
+				090000000000000000000001 /* Localizable.strings */,
 				040000000000000000000007 /* API */,
 				040000000000000000000008 /* Diagnostics */,
 				040000000000000000000003 /* Runtime */,
@@ -179,6 +186,7 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				"zh-Hans",
 				Base,
 			);
 			mainGroup = 040000000000000000000001;
@@ -201,6 +209,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				010000000000000000000012 /* Localizable.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -226,10 +235,23 @@
 				01000000000000000000000D /* MarkdownReportView.swift in Sources */,
 				01000000000000000000000E /* FormulaOCRManager.swift in Sources */,
 				010000000000000000000010 /* ClientStressTest.swift in Sources */,
+				010000000000000000000011 /* Localization.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXVariantGroup section */
+		090000000000000000000001 /* Localizable.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				020000000000000000000013 /* en */,
+				020000000000000000000014 /* zh-Hans */,
+			);
+			name = Localizable.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
 		0A0000000000000000000001 /* Debug */ = {

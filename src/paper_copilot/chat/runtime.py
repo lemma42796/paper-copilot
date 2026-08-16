@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -41,8 +41,6 @@ class ChatRunResult:
     events_count: int
     paper_budget: dict[str, object]
     citation_targets: dict[str, str]
-    composer_plan: dict[str, Any] | None
-    proposal_check: dict[str, Any] | None
     conversation_compaction: CompactionSummary | None = None
 
 
@@ -164,17 +162,9 @@ def _persist_chat_result(
         events_count=len(run.events),
         paper_budget=run.termination_summary.paper_budget,
         citation_targets=run.citation_targets,
-        composer_plan=_optional_payload_dict(run.final_payload.get("composer_plan")),
-        proposal_check=_optional_payload_dict(run.final_payload.get("proposal_check")),
         conversation_compaction=run.conversation_compaction,
     )
 
 
 def _read_client(llm: LLMClientProtocol) -> LLMClient | None:
     return llm if isinstance(llm, LLMClient) else None
-
-
-def _optional_payload_dict(value: object) -> dict[str, Any] | None:
-    if not isinstance(value, Mapping):
-        return None
-    return {str(key): item for key, item in value.items()}

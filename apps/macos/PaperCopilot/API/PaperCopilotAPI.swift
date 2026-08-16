@@ -17,10 +17,13 @@ final class PaperCopilotAPI {
         var errorDescription: String? {
             switch self {
             case .invalidURL:
-                return "无法构造本地 Runtime URL。"
+                return appLocalized("无法构造本地 Runtime URL。")
             case .invalidResponse:
-                return "本地 Runtime 返回了无效响应。"
+                return appLocalized("本地 Runtime 返回了无效响应。")
             case .requestFailed(let status, let message):
+                if AppLanguage.current == .english {
+                    return "Local Runtime request failed (\(status)): \(message)"
+                }
                 return "本地 Runtime 请求失败（\(status)）：\(message)"
             }
         }

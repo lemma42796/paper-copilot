@@ -18,13 +18,16 @@ final class AppModel: ObservableObject {
         var errorDescription: String? {
             switch self {
             case .noConfiguredModel:
-                return "请先在设置中配置并启用一个模型。"
+                return appLocalized("请先在设置中配置并启用一个模型。")
             case .missingProviderKey(let provider):
+                if AppLanguage.current == .english {
+                    return "Missing API key for \(provider)."
+                }
                 return "缺少 \(provider) API Key。"
             case .invalidConfiguration:
-                return "模型配置不完整或价格无效。"
+                return appLocalized("模型配置不完整或价格无效。")
             case .configurationLocked:
-                return "任务运行期间不能修改模型配置。"
+                return appLocalized("任务运行期间不能修改模型配置。")
             }
         }
     }
@@ -55,6 +58,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var deletingConversationIDs: Set<String> = []
     @Published private(set) var resolvingApprovalIDs: Set<String> = []
     @Published private(set) var approvalMode: ApprovalMode
+    @Published private(set) var appLanguage: AppLanguage
     @Published var selectedConversationID: String?
 
     private let bookmarkStore = LibraryBookmarkStore()
@@ -77,6 +81,7 @@ final class AppModel: ObservableObject {
 
     init() {
         formulaOCRStatus = .notInstalled
+        appLanguage = AppLanguage.current
         approvalMode = ApprovalMode(
             rawValue: UserDefaults.standard.string(
                 forKey: Self.approvalModeKey
@@ -85,6 +90,17 @@ final class AppModel: ObservableObject {
         formulaOCRStatus = formulaOCRManager.localStatus()
         restoreLibrary()
         initializeModelRuntime()
+    }
+
+    func selectAppLanguage(_ language: AppLanguage) {
+        guard appLanguage != language else {
+            return
+        }
+        AppLanguage.save(language)
+        appLanguage = language
+        if clientStressTestStatus.phase == .idle {
+            clientStressTestStatus = .idle
+        }
     }
 
     private func initializeModelRuntime() {
@@ -201,7 +217,7 @@ final class AppModel: ObservableObject {
             return
         }
         guard !hasActiveJobs, !isSubmitting else {
-            jobError = "任务运行期间不能切换模型。"
+            jobError = appLocalized("任务运行期间不能切换模型。")
             return
         }
         selectedModel = model
@@ -229,7 +245,7 @@ final class AppModel: ObservableObject {
             return
         }
         guard !hasActiveJobs, !isSubmitting else {
-            jobError = "请先等待当前任务结束，再运行客户端压测。"
+            jobError = appLocalized("请先等待当前任务结束，再运行客户端压测。")
             return
         }
 
@@ -307,7 +323,7 @@ final class AppModel: ObservableObject {
             currentCPUPercent: nil,
             residentBytes: nil,
             outputPath: outputDirectory.path,
-            message: "正在准备本地合成事件，模型调用数为 0。"
+            message: appLocalized("正在准备本地合成事件，模型调用数为 0。")
         )
         clientStressTestTask = Task { [weak self] in
             await self?.runClientStressTest(
@@ -330,9 +346,9 @@ final class AppModel: ObservableObject {
             return nil
         }
         if formulaOCRStatus.isInstalled {
-            return "已安装本地公式 OCR"
+            return appLocalized("已安装本地公式 OCR")
         }
-        return "公式 OCR 未安装，可在设置中下载"
+        return appLocalized("公式 OCR 未安装，可在设置中下载")
     }
 
     func selectReasoningEffort(_ effort: ReasoningEffort) {
@@ -344,7 +360,7 @@ final class AppModel: ObservableObject {
             return
         }
         guard !hasActiveJobs, !isSubmitting else {
-            jobError = "任务运行期间不能切换思考设置。"
+            jobError = appLocalized("任务运行期间不能切换思考设置。")
             return
         }
         selectedModel.reasoningEffort = effort
@@ -463,15 +479,15 @@ final class AppModel: ObservableObject {
                 .contains(where: { clientStressTestJobIDs.contains($0.id) })
                 == true
         {
-            jobError = "客户端压测会话不接受真实模型请求。"
+            jobError = appLocalized("客户端压测会话不接受真实模型请求。")
             return false
         }
         guard let api else {
-            jobError = "本地 Runtime 尚未连接。"
+            jobError = appLocalized("本地 Runtime 尚未连接。")
             return false
         }
         guard let libraryURL else {
-            jobError = "请先选择论文目录。"
+            jobError = appLocalized("请先选择论文目录。")
             return false
         }
         guard selectedModel != nil else {
@@ -527,7 +543,7 @@ final class AppModel: ObservableObject {
             return
         }
         guard let api else {
-            jobError = "本地 Runtime 尚未连接。"
+            jobError = appLocalized("本地 Runtime 尚未连接。")
             return
         }
         jobError = nil
@@ -546,7 +562,7 @@ final class AppModel: ObservableObject {
         approved: Bool
     ) {
         guard let api else {
-            jobError = "本地 Runtime 尚未连接。"
+            jobError = appLocalized("本地 Runtime 尚未连接。")
             return
         }
         guard !resolvingApprovalIDs.contains(approvalID) else {
@@ -575,7 +591,7 @@ final class AppModel: ObservableObject {
     func deleteConversation(_ conversation: ChatConversation) {
         let jobIDs = Set(conversation.jobs.map(\.id))
         guard !conversation.jobs.contains(where: { $0.status.isActive }) else {
-            jobError = "请先停止会话中正在运行的任务。"
+            jobError = appLocalized("请先停止会话中正在运行的任务。")
             return
         }
         if !jobIDs.isEmpty, jobIDs.isSubset(of: clientStressTestJobIDs) {
@@ -594,7 +610,7 @@ final class AppModel: ObservableObject {
             return
         }
         guard let api else {
-            jobError = "本地 Runtime 尚未连接。"
+            jobError = appLocalized("本地 Runtime 尚未连接。")
             return
         }
         guard !deletingConversationIDs.contains(conversation.id) else {
@@ -731,9 +747,9 @@ final class AppModel: ObservableObject {
 
     func chooseLibrary() {
         let panel = NSOpenPanel()
-        panel.title = "选择论文目录"
-        panel.prompt = "选择"
-        panel.message = "Paper Copilot 将读取此目录中的本地 PDF。"
+        panel.title = appLocalized("选择论文目录")
+        panel.prompt = appLocalized("选择")
+        panel.message = appLocalized("Paper Copilot 将读取此目录中的本地 PDF。")
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
@@ -829,7 +845,7 @@ final class AppModel: ObservableObject {
         )
         let legacyModelID = defaults.string(forKey: "llmModel")
         if qwenWasEnabled || legacyModelID == "qwen3.6-flash" {
-            var qwen = ModelConfiguration.qwen36Flash()
+            var qwen = ModelConfiguration.qwen37Flash()
             qwen.baseURL =
                 "https://dashscope.aliyuncs.com/compatible-mode/v1"
             try modelStore.save([qwen])
@@ -979,7 +995,7 @@ final class AppModel: ObservableObject {
                         currentCPUPercent: latestCPUPercent,
                         residentBytes: latestResidentBytes,
                         outputPath: outputDirectory.path,
-                        message: "本地回放中；未连接模型或 Runtime。"
+                        message: appLocalized("本地回放中；未连接模型或 Runtime。")
                     )
                 }
                 try await Task.sleep(
@@ -1045,7 +1061,7 @@ final class AppModel: ObservableObject {
                     currentCPUPercent: latestCPUPercent,
                     residentBytes: latestResidentBytes,
                     outputPath: outputDirectory.path,
-                    message: "事件完成，正在观察 CPU 与内存回落。"
+                    message: appLocalized("事件完成，正在观察 CPU 与内存回落。")
                 )
             }
 
@@ -1069,12 +1085,12 @@ final class AppModel: ObservableObject {
                 timestamp: timestamp,
                 status: .interrupted,
                 result: nil,
-                error: "用户停止了客户端压测。"
+                error: appLocalized("用户停止了客户端压测。")
             ))
             do {
                 try finishClientStressTest(
                     outcome: "cancelled",
-                    error: "用户停止",
+                    error: appLocalized("用户停止"),
                     preset: preset,
                     runID: runID,
                     jobID: jobID,
@@ -1230,18 +1246,23 @@ final class AppModel: ObservableObject {
         case "completed":
             phase = passed ? .completed : .failed
             if !contentValid {
-                message = "压测完成，但事件完整性校验失败。"
+                message = appLocalized("压测完成，但事件完整性校验失败。")
             } else if !responsivenessValid {
-                message = String(
-                    format: "事件完整，但主线程最长停顿 %.2f 秒，响应性未通过。",
-                    maximumMainActorGapSeconds
-                )
+                message = AppLanguage.current == .english
+                    ? String(
+                        format: "Events were complete, but the longest main-thread pause was %.2f seconds; responsiveness failed.",
+                        maximumMainActorGapSeconds
+                    )
+                    : String(
+                        format: "事件完整，但主线程最长停顿 %.2f 秒，响应性未通过。",
+                        maximumMainActorGapSeconds
+                    )
             } else {
-                message = "压测通过，事件完整且主线程停顿未超过 1 秒；模型调用数为 0。"
+                message = appLocalized("压测通过，事件完整且主线程停顿未超过 1 秒；模型调用数为 0。")
             }
         case "cancelled":
             phase = .cancelled
-            message = "压测已停止，已保存部分产物。"
+            message = appLocalized("压测已停止，已保存部分产物。")
         default:
             phase = .failed
             message = "压测失败：\(error ?? "未知错误")"
@@ -1274,7 +1295,7 @@ final class AppModel: ObservableObject {
             createdAt: timestamp,
             updatedAt: Self.clientStressTimestamp(),
             spec: ChatJobSpec(
-                request: "客户端本地压测",
+                request: appLocalized("客户端本地压测"),
                 conversationID: conversationID,
                 pdfDir: nil,
                 approvalMode: .ask

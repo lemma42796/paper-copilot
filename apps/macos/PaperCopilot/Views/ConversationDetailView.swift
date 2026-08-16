@@ -21,7 +21,9 @@ struct ConversationDetailView: View {
             }
             composer
         }
-        .navigationTitle(appModel.selectedConversation?.title ?? "新会话")
+        .navigationTitle(
+            appModel.selectedConversation?.title ?? appLocalized("新会话")
+        )
     }
 
     private var emptyState: some View {
@@ -180,12 +182,12 @@ struct ConversationDetailView: View {
                         }
                     }
                 } label: {
-                    HStack {
-                        Text("模型")
-                        Spacer()
-                        Text(appModel.selectedModel?.displayName ?? "未选择")
-                            .foregroundStyle(.secondary)
-                    }
+                    Text(
+                        appLocalized("模型")
+                            + " · "
+                            + (appModel.selectedModel?.displayName
+                                ?? appLocalized("未选择"))
+                    )
                 }
                 if let selectedModel = appModel.selectedModel {
                     Menu {
@@ -213,20 +215,20 @@ struct ConversationDetailView: View {
                             }
                         }
                     } label: {
-                        HStack {
-                            Text(selectedModel.reasoningControlTitle)
-                            Spacer()
-                            Text(
-                                selectedModel.effectiveReasoningEffort.displayName
-                            )
-                            .foregroundStyle(.secondary)
-                        }
+                        Text(
+                            selectedModel.reasoningControlTitle
+                                + " · "
+                                + selectedModel.effectiveReasoningEffort.displayName
+                        )
                     }
                 }
             }
         } label: {
             HStack(spacing: 4) {
-                Text(appModel.selectedModel?.displayName ?? "配置模型")
+                Text(
+                    appModel.selectedModel?.displayName
+                        ?? appLocalized("配置模型")
+                )
                     .lineLimit(1)
                 if let selectedModel = appModel.selectedModel {
                     Text("· \(selectedModel.effectiveReasoningEffort.displayName)")
@@ -244,11 +246,11 @@ struct ConversationDetailView: View {
         .padding(.vertical, 4)
         .fixedSize()
         .disabled(appModel.hasActiveJobs || appModel.isSubmitting)
-        .help(
+        .help(appLocalized(
             appModel.hasActiveJobs
                 ? "任务运行期间不能切换模型或思考设置"
                 : "选择模型与思考设置"
-        )
+        ))
     }
 
     private var approvalModeMenu: some View {
@@ -336,7 +338,7 @@ private struct ContextUsageRing: View {
 
     private var accessibilityValue: String {
         guard let usage else {
-            return "暂无使用记录"
+            return appLocalized("暂无使用记录")
         }
         return "\(usage.contextTokens) / \(usage.contextWindowTokens)"
     }
@@ -350,11 +352,22 @@ private struct ContextUsagePopover: View {
             Text("工作上下文窗口：")
                 .foregroundStyle(.secondary)
             if let usage {
-                Text("\(percentageUsed(usage))% 已用（剩余 \(percentageRemaining(usage))%）")
-                Text(
-                    "已用 \(formattedTokens(usage.contextTokens)) 标记，共 "
-                        + formattedTokens(usage.contextWindowTokens)
-                )
+                if AppLanguage.current == .english {
+                    Text(
+                        "\(percentageUsed(usage))% used "
+                            + "(\(percentageRemaining(usage))% remaining)"
+                    )
+                    Text(
+                        "\(formattedTokens(usage.contextTokens)) tokens used out of "
+                            + formattedTokens(usage.contextWindowTokens)
+                    )
+                } else {
+                    Text("\(percentageUsed(usage))% 已用（剩余 \(percentageRemaining(usage))%）")
+                    Text(
+                        "已用 \(formattedTokens(usage.contextTokens)) 标记，共 "
+                            + formattedTokens(usage.contextWindowTokens)
+                    )
+                }
             } else {
                 Text("暂无 token 使用记录")
                     .foregroundStyle(.secondary)
@@ -704,8 +717,10 @@ private struct JobTurnView: View {
         guard text.count > maximumCharacters else {
             return text
         }
-        return "生成中仅显示最近 \(maximumCharacters) 个字符；完成报告保留全文。\n\n…\n"
-            + String(text.suffix(maximumCharacters))
+        let notice = AppLanguage.current == .english
+            ? "Only the latest \(maximumCharacters) characters are shown while generating; the completed report keeps the full text.\n\n…\n"
+            : "生成中仅显示最近 \(maximumCharacters) 个字符；完成报告保留全文。\n\n…\n"
+        return notice + String(text.suffix(maximumCharacters))
     }
 
     private var formalAnswerHasStarted: Bool {
@@ -904,30 +919,41 @@ private struct JobTurnView: View {
             if let permission = approval.toolInput?["sandbox_permissions"],
                case .string(let value) = permission,
                value == "require_escalated" {
-                return "允许在沙箱外执行这条命令？"
+                return appLocalized("允许在沙箱外执行这条命令？")
             }
-            return "允许扩大这条命令的沙箱权限？"
+            return appLocalized("允许扩大这条命令的沙箱权限？")
         }
         let count = approvalPathCount(approval)
         switch approvalOperation(approval) {
         case "trash":
-            return count == 1
-                ? "将这篇论文移到废纸篓？"
-                : "将 \(count) 篇论文移到废纸篓？"
+            if AppLanguage.current == .english {
+                return count == 1
+                    ? "Move this paper to Trash?"
+                    : "Move \(count) papers to Trash?"
+            }
+            return count == 1 ? "将这篇论文移到废纸篓？" : "将 \(count) 篇论文移到废纸篓？"
         case "restore":
-            return "恢复历史回收区中的论文？"
+            return appLocalized("恢复历史回收区中的论文？")
         case "move":
+            if AppLanguage.current == .english {
+                return count == 1 ? "Allow moving this paper?" : "Allow moving \(count) papers?"
+            }
             return count == 1 ? "允许移动这篇论文？" : "允许移动 \(count) 篇论文？"
         case "copy":
+            if AppLanguage.current == .english {
+                return count == 1 ? "Allow copying this paper?" : "Allow copying \(count) papers?"
+            }
             return count == 1 ? "允许复制这篇论文？" : "允许复制 \(count) 篇论文？"
         case "mkdir":
-            return "允许创建文件夹？"
+            return appLocalized("允许创建文件夹？")
         case "write_document":
-            return "允许更新这条研究笔记？"
+            return appLocalized("允许更新这条研究笔记？")
         default:
-            return approval.requiresExplicitConfirmation
-                ? "确认执行这项高影响操作？"
-                : "允许执行这项操作？"
+            return appLocalized(
+                approval.requiresExplicitConfirmation
+                    ? "确认执行这项高影响操作？"
+                    : "允许执行这项操作？"
+            )
         }
     }
 
@@ -935,25 +961,25 @@ private struct JobTurnView: View {
         _ approval: ToolApprovalRequest
     ) -> String {
         if approval.toolName == "library_exec" {
-            return "允许执行一次"
+            return appLocalized("允许执行一次")
         }
         switch approvalOperation(approval) {
         case "trash":
-            return "移到废纸篓"
+            return appLocalized("移到废纸篓")
         case "restore":
-            return "恢复"
+            return appLocalized("恢复")
         case "move":
-            return "允许移动"
+            return appLocalized("允许移动")
         case "copy":
-            return "允许复制"
+            return appLocalized("允许复制")
         case "mkdir":
-            return "允许创建"
+            return appLocalized("允许创建")
         case "write_document":
-            return "允许写入笔记"
+            return appLocalized("允许写入笔记")
         default:
-            return approval.requiresExplicitConfirmation
-                ? "确认执行一次"
-                : "允许一次"
+            return appLocalized(
+                approval.requiresExplicitConfirmation ? "确认执行一次" : "允许一次"
+            )
         }
     }
 
@@ -1026,35 +1052,35 @@ private struct JobTurnView: View {
     private func approvalInputLabel(_ key: String) -> String {
         switch key {
         case "operation":
-            return "操作"
+            return appLocalized("操作")
         case "paths":
-            return "文件"
+            return appLocalized("文件")
         case "destination":
-            return "目标"
+            return appLocalized("目标")
         case "receipt_id":
-            return "历史回执"
+            return appLocalized("历史回执")
         case "recursive":
-            return "递归"
+            return appLocalized("递归")
         case "path":
-            return "笔记"
+            return appLocalized("笔记")
         case "content":
-            return "内容"
+            return appLocalized("内容")
         case "cmd":
-            return "命令"
+            return appLocalized("命令")
         case "sandbox_permissions":
-            return "沙箱权限"
+            return appLocalized("沙箱权限")
         case "additional_permissions":
-            return "额外权限"
+            return appLocalized("额外权限")
         case "justification":
-            return "申请理由"
+            return appLocalized("申请理由")
         case "administrator_privileges":
-            return "管理员权限"
+            return appLocalized("管理员权限")
         case "timeout_ms":
-            return "超时"
+            return appLocalized("超时")
         case "yield_time_ms":
-            return "返回等待"
+            return appLocalized("返回等待")
         case "max_output_tokens":
-            return "输出上限"
+            return appLocalized("输出上限")
         default:
             return key
         }
@@ -1063,21 +1089,21 @@ private struct JobTurnView: View {
     private func approvalEffectLabel(_ effect: String) -> String {
         switch effect {
         case "write_library":
-            return "修改论文库文件"
+            return appLocalized("修改论文库文件")
         case "write_index":
-            return "更新论文索引"
+            return appLocalized("更新论文索引")
         case "spend_llm_budget":
-            return "使用模型额度"
+            return appLocalized("使用模型额度")
         case "execute_command":
-            return "执行命令"
+            return appLocalized("执行命令")
         case "access_network":
-            return "访问网络"
+            return appLocalized("访问网络")
         case "write_external":
-            return "写入论文库外的文件"
+            return appLocalized("写入论文库外的文件")
         case "execute_unsandboxed":
-            return "在默认沙箱外执行"
+            return appLocalized("在默认沙箱外执行")
         case "use_administrator_privileges":
-            return "请求 macOS 管理员权限"
+            return appLocalized("请求 macOS 管理员权限")
         default:
             return effect
         }
@@ -1427,7 +1453,7 @@ private struct RolloutDiagnosticsView: View {
     ) -> some View {
         if let duration = diagnostics.phaseDurationMS[entityType.rawValue] {
             HStack {
-                Text(label ?? entityType.displayName)
+                Text(appLocalized(label ?? entityType.displayName))
                     .foregroundStyle(.secondary)
                 Spacer()
                 Text(formattedDuration(duration))
@@ -1492,7 +1518,7 @@ private struct RolloutDiagnosticsView: View {
     ) -> some View {
         diagnosticSection(title: title, systemImage: systemImage) {
             if operations.isEmpty {
-                Text(emptyMessage)
+                Text(appLocalized(emptyMessage))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -1523,7 +1549,7 @@ private struct RolloutDiagnosticsView: View {
             .padding(.vertical, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
         } label: {
-            Label(title, systemImage: systemImage)
+            Label(appLocalized(title), systemImage: systemImage)
                 .font(.caption.weight(.semibold))
         }
     }
@@ -1535,7 +1561,7 @@ private struct DiagnosticMetric: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title)
+            Text(appLocalized(title))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             Text(value)
@@ -1738,11 +1764,11 @@ private struct JobActivityAccumulator {
     private func defaultTitle(for kind: JobActivity.Kind) -> String {
         switch kind {
         case .reasoning:
-            return "思考过程"
+            return appLocalized("思考过程")
         case .assistant:
-            return "回答"
+            return appLocalized("回答")
         case .tool:
-            return "工具调用"
+            return appLocalized("工具调用")
         }
     }
 }
@@ -1839,7 +1865,7 @@ private struct ActivityRow: View {
             return activity.title
         }
         if isLiveReasoning {
-            return activity.liveReasoningTitle ?? "正在思考"
+            return activity.liveReasoningTitle ?? appLocalized("正在思考")
         }
         return activity.completedReasoningPresentation?.title
             ?? activity.title

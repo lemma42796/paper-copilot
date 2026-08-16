@@ -75,13 +75,13 @@ final class FormulaOCRManager: @unchecked Sendable {
         var errorDescription: String? {
             switch self {
             case .invalidManifest:
-                return "公式 OCR 下载清单无效。"
+                return appLocalized("公式 OCR 下载清单无效。")
             case .invalidArchiveHash:
-                return "公式 OCR 下载文件校验失败。"
+                return appLocalized("公式 OCR 下载文件校验失败。")
             case .invalidArchiveContents:
-                return "公式 OCR 下载包内容不完整。"
+                return appLocalized("公式 OCR 下载包内容不完整。")
             case .invalidCodeSignature:
-                return "公式 OCR Helper 签名校验失败。"
+                return appLocalized("公式 OCR Helper 签名校验失败。")
             }
         }
     }

@@ -9,6 +9,7 @@ struct PaperCopilotApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appModel)
+                .environment(\.locale, appModel.appLanguage.locale)
                 .frame(minWidth: 760, minHeight: 520)
                 .onReceive(
                     NotificationCenter.default.publisher(
@@ -23,6 +24,7 @@ struct PaperCopilotApp: App {
         Settings {
             SettingsView()
                 .environmentObject(appModel)
+                .environment(\.locale, appModel.appLanguage.locale)
         }
     }
 }

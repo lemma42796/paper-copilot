@@ -20,7 +20,7 @@ struct CredentialStore {
         case applicationSupportUnavailable
 
         var errorDescription: String? {
-            "无法访问用户的 Application Support 目录。"
+            appLocalized("无法访问用户的 Application Support 目录。")
         }
     }
 

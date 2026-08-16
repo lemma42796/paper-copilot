@@ -9,6 +9,8 @@ from paper_copilot.session import Message, SessionStore, ToolUse
 
 
 def test_handle_chat_request_allows_direct_answer_without_index(tmp_path: Path) -> None:
+    library_dir = tmp_path / "papers"
+    library_dir.mkdir()
     llm = MockLLM(
         [
             MockResponse(
@@ -22,6 +24,7 @@ def test_handle_chat_request_allows_direct_answer_without_index(tmp_path: Path) 
     result = asyncio.run(
         handle_chat_request(
             "你好",
+            pdf_dir=library_dir,
             root=tmp_path,
             runs_dir=tmp_path / "runs",
             eval_report_path=tmp_path / "report.html",
